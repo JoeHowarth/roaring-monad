@@ -7,6 +7,7 @@ pub enum BroadQueryPolicy {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub target_entries_per_chunk: u32,
+    pub target_chunk_bytes: usize,
     pub maintenance_seal_seconds: u64,
     pub tail_flush_seconds: u64,
     pub planner_max_or_terms: usize,
@@ -20,6 +21,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             target_entries_per_chunk: 1950,
+            target_chunk_bytes: 32 * 1024,
             maintenance_seal_seconds: 600,
             tail_flush_seconds: 5,
             planner_max_or_terms: 128,

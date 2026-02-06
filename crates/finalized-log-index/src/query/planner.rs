@@ -295,6 +295,7 @@ mod tests {
                 version: 1,
                 last_chunk_seq: 1,
                 approx_count: 100,
+                last_seal_unix_sec: 0,
                 chunk_refs: vec![ChunkRef {
                     chunk_seq: 1,
                     min_local: 0,
@@ -306,6 +307,7 @@ mod tests {
                 version: 1,
                 last_chunk_seq: 1,
                 approx_count: 2,
+                last_seal_unix_sec: 0,
                 chunk_refs: vec![ChunkRef {
                     chunk_seq: 1,
                     min_local: 0,

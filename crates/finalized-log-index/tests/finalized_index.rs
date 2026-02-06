@@ -2,9 +2,10 @@ use std::fs;
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::codec::log::{decode_topic0_mode, encode_topic0_mode};
+use finalized_log_index::codec::manifest::{decode_manifest, encode_manifest};
 use finalized_log_index::config::{BroadQueryPolicy, Config};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
-use finalized_log_index::domain::keys::topic0_mode_key;
+use finalized_log_index::domain::keys::{manifest_key, stream_id, topic0_mode_key};
 use finalized_log_index::domain::types::{Block, Log, Topic0Mode};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
@@ -348,5 +349,99 @@ fn topic0_mode_disables_for_hot_signature() {
             .expect("mode exists");
         let mode = decode_topic0_mode(&rec.value).expect("decode mode");
         assert!(!mode.log_enabled);
+    });
+}
+
+#[test]
+fn seals_by_chunk_bytes_threshold() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                target_entries_per_chunk: 10_000,
+                target_chunk_bytes: 1,
+                maintenance_seal_seconds: 60_000,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(9, 9, 9, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest");
+
+        let sid = stream_id("addr", &[9; 20], 0);
+        let rec = svc
+            .ingest
+            .meta_store
+            .get(&manifest_key(&sid))
+            .await
+            .expect("manifest get")
+            .expect("manifest");
+        let manifest = decode_manifest(&rec.value).expect("decode manifest");
+        assert_eq!(manifest.chunk_refs.len(), 1);
+    });
+}
+
+#[test]
+fn periodic_maintenance_seals_old_tails() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                target_entries_per_chunk: 10_000,
+                target_chunk_bytes: usize::MAX / 2,
+                maintenance_seal_seconds: 1,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(7, 7, 7, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest");
+
+        let sid = stream_id("addr", &[7; 20], 0);
+        let mkey = manifest_key(&sid);
+        let rec = svc
+            .ingest
+            .meta_store
+            .get(&mkey)
+            .await
+            .expect("manifest get")
+            .expect("manifest");
+        let mut manifest = decode_manifest(&rec.value).expect("decode manifest");
+        assert_eq!(manifest.chunk_refs.len(), 0);
+
+        manifest.last_seal_unix_sec = 1;
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                &mkey,
+                encode_manifest(&manifest),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed old seal time");
+
+        let stats = svc
+            .ingest
+            .run_periodic_maintenance(1)
+            .await
+            .expect("maintenance");
+        assert!(stats.flushed_streams >= 1);
+        assert!(stats.sealed_streams >= 1);
+
+        let rec = svc
+            .ingest
+            .meta_store
+            .get(&mkey)
+            .await
+            .expect("manifest get")
+            .expect("manifest");
+        let manifest = decode_manifest(&rec.value).expect("decode manifest");
+        assert_eq!(manifest.chunk_refs.len(), 1);
     });
 }

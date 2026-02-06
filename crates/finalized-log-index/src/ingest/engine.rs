@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use roaring::RoaringBitmap;
 
@@ -98,7 +99,8 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .collect_stream_appends(block, first_log_id, epoch)
             .await?;
         for (stream_id, values) in appends {
-            self.apply_stream_appends(&stream_id, &values, epoch)
+            let _ = self
+                .apply_stream_appends(&stream_id, &values, epoch)
                 .await?;
         }
 
@@ -114,6 +116,24 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             indexed_finalized_head: block.block_num,
             written_logs: block.logs.len(),
         })
+    }
+
+    pub async fn run_periodic_maintenance(&self, epoch: u64) -> Result<MaintenanceStats> {
+        let mut stats = MaintenanceStats::default();
+        let page = self
+            .meta_store
+            .list_prefix(b"tails/", None, usize::MAX)
+            .await?;
+        for key in page.keys {
+            if let Some(stream) = parse_stream_from_tail_key(&key) {
+                let sealed = self.apply_stream_appends(&stream, &[], epoch).await?;
+                if sealed {
+                    stats.sealed_streams = stats.sealed_streams.saturating_add(1);
+                }
+                stats.flushed_streams = stats.flushed_streams.saturating_add(1);
+            }
+        }
+        Ok(stats)
     }
 
     async fn collect_stream_appends(
@@ -175,7 +195,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         Ok(flattened)
     }
 
-    async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<()> {
+    async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<bool> {
         let (mut manifest, manifest_version) = self.load_manifest(stream).await?;
         let mut tail = self.load_tail(stream).await?;
 
@@ -183,7 +203,9 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             tail.insert(*v);
         }
 
-        if tail.len() >= self.config.target_entries_per_chunk as u64 {
+        let now = now_unix_sec();
+        let mut sealed = false;
+        if self.should_seal(&tail, manifest.last_seal_unix_sec, now)? {
             let min_local = tail.min().unwrap_or(0);
             let max_local = tail.max().unwrap_or(0);
             let count = tail.len() as u32;
@@ -203,6 +225,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
 
             manifest.last_chunk_seq = chunk_seq;
             manifest.approx_count += count as u64;
+            manifest.last_seal_unix_sec = now;
             manifest.chunk_refs.push(ChunkRef {
                 chunk_seq,
                 min_local,
@@ -211,12 +234,37 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             });
 
             tail = RoaringBitmap::new();
+            sealed = true;
         }
 
         self.store_manifest(stream, &manifest, manifest_version, epoch)
             .await?;
         self.store_tail(stream, &tail, epoch).await?;
-        Ok(())
+        Ok(sealed)
+    }
+
+    fn should_seal(
+        &self,
+        tail: &RoaringBitmap,
+        last_seal_unix_sec: u64,
+        now_unix_sec: u64,
+    ) -> Result<bool> {
+        if tail.is_empty() {
+            return Ok(false);
+        }
+        if tail.len() >= self.config.target_entries_per_chunk as u64 {
+            return Ok(true);
+        }
+        if encode_tail(tail)?.len() >= self.config.target_chunk_bytes {
+            return Ok(true);
+        }
+        if last_seal_unix_sec > 0
+            && now_unix_sec.saturating_sub(last_seal_unix_sec)
+                >= self.config.maintenance_seal_seconds
+        {
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     async fn load_state(&self) -> Result<(MetaState, Option<u64>)> {
@@ -438,6 +486,19 @@ async fn load_chunk_if_present<B: BlobStore>(
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MaintenanceStats {
+    pub flushed_streams: u64,
+    pub sealed_streams: u64,
+}
+
+fn now_unix_sec() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn apply_window_step(stats: &mut Topic0Stats, block_num: u64, seen: bool) {
     let window = stats.window_len.max(1) as usize;
     let index = (block_num as usize) % window;
@@ -482,4 +543,12 @@ fn from_hex(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(10 + b - b'A'),
         _ => None,
     }
+}
+
+fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {
+    let prefix = b"tails/";
+    if !key.starts_with(prefix) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&key[prefix.len()..]).to_string())
 }

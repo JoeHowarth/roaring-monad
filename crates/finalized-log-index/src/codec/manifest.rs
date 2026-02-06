@@ -16,14 +16,16 @@ pub struct Manifest {
     pub last_chunk_seq: u64,
     pub chunk_refs: Vec<ChunkRef>,
     pub approx_count: u64,
+    pub last_seal_unix_sec: u64,
 }
 
 pub fn encode_manifest(manifest: &Manifest) -> Bytes {
-    let mut out = Vec::with_capacity(32 + manifest.chunk_refs.len() * 20);
-    out.push(1); // codec version
+    let mut out = Vec::with_capacity(40 + manifest.chunk_refs.len() * 20);
+    out.push(2); // codec version
     out.extend_from_slice(&manifest.version.to_be_bytes());
     out.extend_from_slice(&manifest.last_chunk_seq.to_be_bytes());
     out.extend_from_slice(&manifest.approx_count.to_be_bytes());
+    out.extend_from_slice(&manifest.last_seal_unix_sec.to_be_bytes());
     out.extend_from_slice(&(manifest.chunk_refs.len() as u32).to_be_bytes());
     for c in &manifest.chunk_refs {
         out.extend_from_slice(&c.chunk_seq.to_be_bytes());
@@ -38,35 +40,72 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<Manifest> {
     if bytes.len() < 1 + 8 + 8 + 8 + 4 {
         return Err(Error::Decode("manifest too short"));
     }
-    if bytes[0] != 1 {
-        return Err(Error::Decode("unsupported manifest version"));
-    }
 
-    let version = u64::from_be_bytes(
-        bytes[1..9]
-            .try_into()
-            .map_err(|_| Error::Decode("version"))?,
-    );
-    let last_chunk_seq = u64::from_be_bytes(
-        bytes[9..17]
-            .try_into()
-            .map_err(|_| Error::Decode("last_chunk_seq"))?,
-    );
-    let approx_count = u64::from_be_bytes(
-        bytes[17..25]
-            .try_into()
-            .map_err(|_| Error::Decode("approx_count"))?,
-    );
-    let n =
-        u32::from_be_bytes(bytes[25..29].try_into().map_err(|_| Error::Decode("len"))?) as usize;
+    let (version, last_chunk_seq, approx_count, last_seal_unix_sec, n, mut pos) = match bytes[0] {
+        1 => {
+            let version = u64::from_be_bytes(
+                bytes[1..9]
+                    .try_into()
+                    .map_err(|_| Error::Decode("version"))?,
+            );
+            let last_chunk_seq = u64::from_be_bytes(
+                bytes[9..17]
+                    .try_into()
+                    .map_err(|_| Error::Decode("last_chunk_seq"))?,
+            );
+            let approx_count = u64::from_be_bytes(
+                bytes[17..25]
+                    .try_into()
+                    .map_err(|_| Error::Decode("approx_count"))?,
+            );
+            let n = u32::from_be_bytes(bytes[25..29].try_into().map_err(|_| Error::Decode("len"))?)
+                as usize;
+            (version, last_chunk_seq, approx_count, 0, n, 29usize)
+        }
+        2 => {
+            if bytes.len() < 37 {
+                return Err(Error::Decode("manifest v2 too short"));
+            }
+            let version = u64::from_be_bytes(
+                bytes[1..9]
+                    .try_into()
+                    .map_err(|_| Error::Decode("version"))?,
+            );
+            let last_chunk_seq = u64::from_be_bytes(
+                bytes[9..17]
+                    .try_into()
+                    .map_err(|_| Error::Decode("last_chunk_seq"))?,
+            );
+            let approx_count = u64::from_be_bytes(
+                bytes[17..25]
+                    .try_into()
+                    .map_err(|_| Error::Decode("approx_count"))?,
+            );
+            let last_seal_unix_sec = u64::from_be_bytes(
+                bytes[25..33]
+                    .try_into()
+                    .map_err(|_| Error::Decode("last_seal_unix_sec"))?,
+            );
+            let n = u32::from_be_bytes(bytes[33..37].try_into().map_err(|_| Error::Decode("len"))?)
+                as usize;
+            (
+                version,
+                last_chunk_seq,
+                approx_count,
+                last_seal_unix_sec,
+                n,
+                37usize,
+            )
+        }
+        _ => return Err(Error::Decode("unsupported manifest version")),
+    };
 
-    let expected = 29 + n * 20;
+    let expected = pos + n * 20;
     if bytes.len() != expected {
         return Err(Error::Decode("manifest length mismatch"));
     }
 
     let mut chunk_refs = Vec::with_capacity(n);
-    let mut pos = 29usize;
     for _ in 0..n {
         let chunk_seq = u64::from_be_bytes(
             bytes[pos..pos + 8]
@@ -106,6 +145,7 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<Manifest> {
         last_chunk_seq,
         chunk_refs,
         approx_count,
+        last_seal_unix_sec,
     })
 }
 
@@ -141,6 +181,7 @@ mod tests {
             version: 7,
             last_chunk_seq: 11,
             approx_count: 100,
+            last_seal_unix_sec: 1234,
             chunk_refs: vec![ChunkRef {
                 chunk_seq: 11,
                 min_local: 2,
@@ -153,6 +194,7 @@ mod tests {
         assert_eq!(dec.version, m.version);
         assert_eq!(dec.last_chunk_seq, m.last_chunk_seq);
         assert_eq!(dec.approx_count, m.approx_count);
+        assert_eq!(dec.last_seal_unix_sec, m.last_seal_unix_sec);
         assert_eq!(dec.chunk_refs.len(), 1);
     }
 
