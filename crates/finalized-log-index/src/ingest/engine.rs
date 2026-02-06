@@ -15,7 +15,7 @@ use crate::codec::manifest::{
 use crate::config::Config;
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_key, manifest_key,
-    stream_id, tail_key, topic0_mode_key, topic0_stats_key, topic0_stats_prefix,
+    stream_id, tail_key, topic0_mode_key, topic0_stats_key,
 };
 use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState, Topic0Mode, Topic0Stats};
 use crate::error::{Error, Result};
@@ -371,26 +371,9 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         seen_signatures: &BTreeSet<[u8; 32]>,
         epoch: u64,
     ) -> Result<()> {
-        let page = self
-            .meta_store
-            .list_prefix(topic0_stats_prefix(), None, usize::MAX)
-            .await?;
-
-        let mut existing = BTreeSet::<[u8; 32]>::new();
-        for key in &page.keys {
-            if let Some(sig) = parse_topic0_stats_key(key) {
-                existing.insert(sig);
-                let seen = seen_signatures.contains(&sig);
-                self.update_one_topic0_stats(sig, block_num, seen, epoch)
-                    .await?;
-            }
-        }
-
         for sig in seen_signatures {
-            if !existing.contains(sig) {
-                self.update_one_topic0_stats(*sig, block_num, true, epoch)
-                    .await?;
-            }
+            self.update_one_topic0_stats(*sig, block_num, true, epoch)
+                .await?;
         }
         Ok(())
     }
@@ -516,33 +499,6 @@ fn apply_window_step(stats: &mut Topic0Stats, block_num: u64, seen: bool) {
     }
     stats.ring_cursor = ((index + 1) % window) as u32;
     stats.last_updated_block = block_num;
-}
-
-fn parse_topic0_stats_key(key: &[u8]) -> Option<[u8; 32]> {
-    let prefix = topic0_stats_prefix();
-    if !key.starts_with(prefix) {
-        return None;
-    }
-    let hex = &key[prefix.len()..];
-    if hex.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for i in 0..32 {
-        let hi = from_hex(hex[i * 2])?;
-        let lo = from_hex(hex[i * 2 + 1])?;
-        out[i] = (hi << 4) | lo;
-    }
-    Some(out)
-}
-
-fn from_hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(10 + b - b'a'),
-        b'A'..=b'F' => Some(10 + b - b'A'),
-        _ => None,
-    }
 }
 
 fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {

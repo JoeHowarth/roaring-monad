@@ -1,4 +1,6 @@
 use std::fs;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
@@ -24,12 +26,14 @@ impl FsMetaStore {
 
     fn key_path(&self, key: &[u8]) -> PathBuf {
         let mut p = self.root.join("meta");
+        p.push(extract_group(key));
         p.push(hex(key));
         p
     }
 
     fn version_path(&self, key: &[u8]) -> PathBuf {
         let mut p = self.root.join("meta");
+        p.push(extract_group(key));
         p.push(format!("{}.ver", hex(key)));
         p
     }
@@ -50,9 +54,9 @@ impl MetaStore for FsMetaStore {
             return Ok(None);
         }
         let vp = self.version_path(key);
-        let value = fs::read(&kp).map_err(|e| Error::Backend(format!("fs meta read: {e}")))?;
+        let value = read_file_bytes(&kp)?;
         let version = if vp.exists() {
-            let b = fs::read(&vp).map_err(|e| Error::Backend(format!("fs ver read: {e}")))?;
+            let b = read_file_bytes(&vp)?;
             if b.len() != 8 {
                 return Err(Error::Decode("invalid fs version bytes"));
             }
@@ -95,11 +99,14 @@ impl MetaStore for FsMetaStore {
 
         let kp = self.key_path(key);
         let vp = self.version_path(key);
-        fs::write(&kp, &value).map_err(|e| Error::Backend(format!("fs meta write: {e}")))?;
+        if let Some(parent) = kp.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Backend(format!("create fs meta group dir: {e}")))?;
+        }
+        write_file_bytes(&kp, &value)?;
 
         let next_version = current.map_or(1, |c| c.version + 1);
-        fs::write(&vp, next_version.to_be_bytes())
-            .map_err(|e| Error::Backend(format!("fs ver write: {e}")))?;
+        write_file_bytes(&vp, &next_version.to_be_bytes())?;
 
         Ok(PutResult {
             applied: true,
@@ -130,17 +137,24 @@ impl MetaStore for FsMetaStore {
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let dir = self.root.join("meta");
-        for entry in fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))? {
-            let entry = entry.map_err(|e| Error::Backend(format!("fs dir entry: {e}")))?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.ends_with(".ver") {
-                continue;
-            }
-            let key = unhex(&name)?;
-            if key.starts_with(prefix) {
-                all.push(key);
+        let base = self.root.join("meta");
+        if !base.exists() {
+            return Ok(Page {
+                keys: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        if let Some(group) = extract_group_from_prefix(prefix) {
+            collect_keys_from_group_dir(&base.join(group), true, prefix, &mut all)?;
+        } else {
+            for entry in
+                fs::read_dir(&base).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))?
+            {
+                let entry = entry.map_err(|e| Error::Backend(format!("fs dir entry: {e}")))?;
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                collect_keys_from_group_dir(&entry.path(), true, prefix, &mut all)?;
             }
         }
         all.sort();
@@ -178,6 +192,7 @@ impl FsBlobStore {
 
     fn key_path(&self, key: &[u8]) -> PathBuf {
         let mut p = self.root.join("blob");
+        p.push(extract_group(key));
         p.push(hex(key));
         p
     }
@@ -186,9 +201,12 @@ impl FsBlobStore {
 #[async_trait::async_trait]
 impl BlobStore for FsBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        fs::write(self.key_path(key), &value)
-            .map_err(|e| Error::Backend(format!("fs blob write: {e}")))?;
-        Ok(())
+        let path = self.key_path(key);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Backend(format!("create fs blob group dir: {e}")))?;
+        }
+        write_file_bytes(&path, &value)
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
@@ -196,7 +214,7 @@ impl BlobStore for FsBlobStore {
         if !p.exists() {
             return Ok(None);
         }
-        let b = fs::read(p).map_err(|e| Error::Backend(format!("fs blob read: {e}")))?;
+        let b = read_file_bytes(&p)?;
         Ok(Some(Bytes::from(b)))
     }
 
@@ -212,16 +230,24 @@ impl BlobStore for FsBlobStore {
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let dir = self.root.join("blob");
-        for entry in
-            fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs blob read_dir: {e}")))?
-        {
-            let entry = entry.map_err(|e| Error::Backend(format!("fs blob dir entry: {e}")))?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let key = unhex(&name)?;
-            if key.starts_with(prefix) {
-                all.push(key);
+        let base = self.root.join("blob");
+        if !base.exists() {
+            return Ok(Page {
+                keys: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        if let Some(group) = extract_group_from_prefix(prefix) {
+            collect_keys_from_group_dir(&base.join(group), false, prefix, &mut all)?;
+        } else {
+            for entry in
+                fs::read_dir(&base).map_err(|e| Error::Backend(format!("fs blob read_dir: {e}")))?
+            {
+                let entry = entry.map_err(|e| Error::Backend(format!("fs blob dir entry: {e}")))?;
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                collect_keys_from_group_dir(&entry.path(), false, prefix, &mut all)?;
             }
         }
         all.sort();
@@ -241,6 +267,50 @@ impl BlobStore for FsBlobStore {
         }
         Ok(Page { keys, next_cursor })
     }
+}
+
+fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(|e| Error::Backend(format!("fs read open: {e}")))?;
+    set_no_cache(&file)?;
+    let mut out = Vec::new();
+    file.read_to_end(&mut out)
+        .map_err(|e| Error::Backend(format!("fs read: {e}")))?;
+    Ok(out)
+}
+
+fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| Error::Backend(format!("fs write open: {e}")))?;
+    set_no_cache(&file)?;
+    file.write_all(bytes)
+        .map_err(|e| Error::Backend(format!("fs write: {e}")))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn set_no_cache(file: &File) -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1) };
+    if rc == -1 {
+        return Err(Error::Backend(format!(
+            "macos fcntl(F_NOCACHE) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_no_cache(_file: &File) -> Result<()> {
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -283,4 +353,57 @@ fn from_nibble(b: u8) -> Result<u8> {
         b'A'..=b'F' => Ok(10 + b - b'A'),
         _ => Err(Error::Decode("invalid hex char")),
     }
+}
+
+fn extract_group(key: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in key {
+        if b == b'/' {
+            break;
+        }
+        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+            out.push(char::from(b));
+        } else {
+            break;
+        }
+    }
+    if out.is_empty() {
+        "misc".to_string()
+    } else {
+        out
+    }
+}
+
+fn extract_group_from_prefix(prefix: &[u8]) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(extract_group(prefix))
+}
+
+fn collect_keys_from_group_dir(
+    dir: &Path,
+    skip_ver: bool,
+    prefix: &[u8],
+    out: &mut Vec<Vec<u8>>,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))? {
+        let entry = entry.map_err(|e| Error::Backend(format!("fs dir entry: {e}")))?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if skip_ver && name.ends_with(".ver") {
+            continue;
+        }
+        let key = unhex(&name)?;
+        if key.starts_with(prefix) {
+            out.push(key);
+        }
+    }
+    Ok(())
 }

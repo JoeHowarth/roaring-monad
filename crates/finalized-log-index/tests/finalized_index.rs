@@ -290,8 +290,8 @@ fn topic0_mode_enables_for_cold_signature() {
 
         let sig = [0x55; 32];
         let mut parent = [0u8; 32];
-        for b in 1..=1200u64 {
-            let logs = if b == 1 {
+        for b in 1..=3001u64 {
+            let logs = if b == 1 || b == 3001 {
                 vec![mk_log(1, sig[0], 20, b, 0, 0)]
             } else {
                 Vec::new()
@@ -311,7 +311,7 @@ fn topic0_mode_enables_for_cold_signature() {
             .expect("mode exists");
         let mode = decode_topic0_mode(&rec.value).expect("decode mode");
         assert!(mode.log_enabled);
-        assert!(mode.enabled_from_block >= 1000);
+        assert_eq!(mode.enabled_from_block, 3001);
     });
 }
 
