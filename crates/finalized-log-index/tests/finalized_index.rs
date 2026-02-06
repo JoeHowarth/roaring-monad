@@ -1,13 +1,16 @@
 use std::fs;
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::codec::log::{decode_topic0_mode, encode_topic0_mode};
 use finalized_log_index::config::{BroadQueryPolicy, Config};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
-use finalized_log_index::domain::types::{Block, Log};
+use finalized_log_index::domain::keys::topic0_mode_key;
+use finalized_log_index::domain::types::{Block, Log, Topic0Mode};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_log_index::store::meta::InMemoryMetaStore;
+use finalized_log_index::store::traits::{FenceToken, MetaStore, PutCond};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -267,5 +270,83 @@ fn fs_store_adapter_roundtrip() {
         assert_eq!(got.len(), 1);
 
         let _ = fs::remove_dir_all(root);
+    });
+}
+
+#[test]
+fn topic0_mode_enables_for_cold_signature() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let sig = [0x55; 32];
+        let mut parent = [0u8; 32];
+        for b in 1..=1200u64 {
+            let logs = if b == 1 {
+                vec![mk_log(1, sig[0], 20, b, 0, 0)]
+            } else {
+                Vec::new()
+            };
+            let block = mk_block(b, parent, logs);
+            parent = block.block_hash;
+            svc.ingest_finalized_block(block).await.expect("ingest");
+        }
+
+        let mode_key = topic0_mode_key(&sig);
+        let rec = svc
+            .ingest
+            .meta_store
+            .get(&mode_key)
+            .await
+            .expect("mode get")
+            .expect("mode exists");
+        let mode = decode_topic0_mode(&rec.value).expect("decode mode");
+        assert!(mode.log_enabled);
+        assert!(mode.enabled_from_block >= 1000);
+    });
+}
+
+#[test]
+fn topic0_mode_disables_for_hot_signature() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let sig = [0x44; 32];
+        let mode_key = topic0_mode_key(&sig);
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                &mode_key,
+                encode_topic0_mode(&Topic0Mode {
+                    log_enabled: true,
+                    enabled_from_block: 0,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed mode");
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, sig[0], 20, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest");
+
+        let rec = svc
+            .ingest
+            .meta_store
+            .get(&mode_key)
+            .await
+            .expect("mode get")
+            .expect("mode exists");
+        let mode = decode_topic0_mode(&rec.value).expect("decode mode");
+        assert!(!mode.log_enabled);
     });
 }

@@ -62,5 +62,6 @@ pub struct Topic0Stats {
     pub window_len: u32,
     pub blocks_seen_in_window: u32,
     pub ring_cursor: u32,
+    pub last_updated_block: u64,
     pub ring_bits: Vec<u8>,
 }

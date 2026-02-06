@@ -14,7 +14,7 @@ use crate::codec::manifest::{
 use crate::config::Config;
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_key, manifest_key,
-    stream_id, tail_key, topic0_mode_key, topic0_stats_key,
+    stream_id, tail_key, topic0_mode_key, topic0_stats_key, topic0_stats_prefix,
 };
 use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState, Topic0Mode, Topic0Stats};
 use crate::error::{Error, Result};
@@ -165,9 +165,8 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         // update basic topic0 rolling stats for signatures seen in this block
-        for sig in topic0_seen {
-            self.update_topic0_stats(&sig, epoch).await?;
-        }
+        self.update_topic0_modes_for_block(block.block_num, &topic0_seen, epoch)
+            .await?;
 
         let mut flattened = BTreeMap::new();
         for (k, set) in out {
@@ -318,8 +317,44 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         Ok(mode.log_enabled && block_num >= mode.enabled_from_block)
     }
 
-    async fn update_topic0_stats(&self, topic0: &[u8; 32], epoch: u64) -> Result<()> {
-        let key = topic0_stats_key(topic0);
+    async fn update_topic0_modes_for_block(
+        &self,
+        block_num: u64,
+        seen_signatures: &BTreeSet<[u8; 32]>,
+        epoch: u64,
+    ) -> Result<()> {
+        let page = self
+            .meta_store
+            .list_prefix(topic0_stats_prefix(), None, usize::MAX)
+            .await?;
+
+        let mut existing = BTreeSet::<[u8; 32]>::new();
+        for key in &page.keys {
+            if let Some(sig) = parse_topic0_stats_key(key) {
+                existing.insert(sig);
+                let seen = seen_signatures.contains(&sig);
+                self.update_one_topic0_stats(sig, block_num, seen, epoch)
+                    .await?;
+            }
+        }
+
+        for sig in seen_signatures {
+            if !existing.contains(sig) {
+                self.update_one_topic0_stats(*sig, block_num, true, epoch)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn update_one_topic0_stats(
+        &self,
+        topic0: [u8; 32],
+        block_num: u64,
+        seen_in_block: bool,
+        epoch: u64,
+    ) -> Result<()> {
+        let key = topic0_stats_key(&topic0);
         let (mut stats, version): (Topic0Stats, Option<u64>) =
             match self.meta_store.get(&key).await? {
                 Some(Record { value, version }) => (decode_topic0_stats(&value)?, Some(version)),
@@ -328,21 +363,22 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                         window_len: 50_000,
                         blocks_seen_in_window: 0,
                         ring_cursor: 0,
+                        last_updated_block: block_num.saturating_sub(1),
                         ring_bits: vec![0u8; (50_000usize).div_ceil(8)],
                     },
                     None,
                 ),
             };
 
-        let bit_index = stats.ring_cursor as usize % stats.window_len as usize;
-        let byte_idx = bit_index / 8;
-        let mask = 1u8 << (bit_index % 8);
-        let currently_set = (stats.ring_bits[byte_idx] & mask) != 0;
-        if !currently_set {
-            stats.ring_bits[byte_idx] |= mask;
-            stats.blocks_seen_in_window = stats.blocks_seen_in_window.saturating_add(1);
+        if block_num <= stats.last_updated_block {
+            return Ok(());
         }
-        stats.ring_cursor = (stats.ring_cursor + 1) % stats.window_len.max(1);
+
+        let start = stats.last_updated_block.saturating_add(1);
+        for b in start..=block_num {
+            let seen = b == block_num && seen_in_block;
+            apply_window_step(&mut stats, b, seen);
+        }
 
         let cond = version.map(PutCond::IfVersion).unwrap_or(PutCond::IfAbsent);
         let result = self
@@ -350,27 +386,41 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .put(&key, encode_topic0_stats(&stats), cond, FenceToken(epoch))
             .await?;
         if !result.applied {
-            // benign race; caller can proceed and stats will converge on next block
             return Ok(());
         }
 
-        let mode_key = topic0_mode_key(topic0);
-        if self.meta_store.get(&mode_key).await?.is_none() {
-            let mode = Topic0Mode {
+        let mode_key = topic0_mode_key(&topic0);
+        let mut mode = match self.meta_store.get(&mode_key).await? {
+            Some(rec) => decode_topic0_mode(&rec.value)?,
+            None => Topic0Mode {
                 log_enabled: false,
                 enabled_from_block: 0,
-            };
+            },
+        };
+
+        let denom = u64::min(stats.window_len as u64, block_num.saturating_add(1)).max(1);
+        let ratio = stats.blocks_seen_in_window as f64 / denom as f64;
+        let mut changed = false;
+        if !mode.log_enabled && ratio < 0.001 {
+            mode.log_enabled = true;
+            mode.enabled_from_block = block_num;
+            changed = true;
+        } else if mode.log_enabled && ratio > 0.01 {
+            mode.log_enabled = false;
+            changed = true;
+        }
+
+        if changed || self.meta_store.get(&mode_key).await?.is_none() {
             let _ = self
                 .meta_store
                 .put(
                     &mode_key,
                     encode_topic0_mode(&mode),
-                    PutCond::IfAbsent,
+                    PutCond::Any,
                     FenceToken(epoch),
                 )
                 .await?;
         }
-
         Ok(())
     }
 }
@@ -385,5 +435,51 @@ async fn load_chunk_if_present<B: BlobStore>(
     match bytes {
         Some(v) => Ok(Some(decode_chunk(&v)?)),
         None => Ok(None),
+    }
+}
+
+fn apply_window_step(stats: &mut Topic0Stats, block_num: u64, seen: bool) {
+    let window = stats.window_len.max(1) as usize;
+    let index = (block_num as usize) % window;
+    let byte_idx = index / 8;
+    let mask = 1u8 << (index % 8);
+    let currently_set = (stats.ring_bits[byte_idx] & mask) != 0;
+
+    if currently_set {
+        stats.blocks_seen_in_window = stats.blocks_seen_in_window.saturating_sub(1);
+        stats.ring_bits[byte_idx] &= !mask;
+    }
+    if seen {
+        stats.ring_bits[byte_idx] |= mask;
+        stats.blocks_seen_in_window = stats.blocks_seen_in_window.saturating_add(1);
+    }
+    stats.ring_cursor = ((index + 1) % window) as u32;
+    stats.last_updated_block = block_num;
+}
+
+fn parse_topic0_stats_key(key: &[u8]) -> Option<[u8; 32]> {
+    let prefix = topic0_stats_prefix();
+    if !key.starts_with(prefix) {
+        return None;
+    }
+    let hex = &key[prefix.len()..];
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        let hi = from_hex(hex[i * 2])?;
+        let lo = from_hex(hex[i * 2 + 1])?;
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + b - b'a'),
+        b'A'..=b'F' => Some(10 + b - b'A'),
+        _ => None,
     }
 }

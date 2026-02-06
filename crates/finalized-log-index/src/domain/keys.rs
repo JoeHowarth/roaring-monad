@@ -63,6 +63,10 @@ pub fn topic0_stats_key(topic0: &Topic32) -> Vec<u8> {
     k
 }
 
+pub fn topic0_stats_prefix() -> &'static [u8] {
+    b"topic0_stats/"
+}
+
 pub fn stream_id(index_kind: &str, value: &[u8], shard_hi32: u32) -> String {
     let mut s = String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + 8);
     s.push_str(index_kind);
