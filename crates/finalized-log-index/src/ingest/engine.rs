@@ -49,7 +49,9 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             let expected_parent = if state.indexed_finalized_head == 0 {
                 [0u8; 32]
             } else {
-                self.load_block_meta(state.indexed_finalized_head).await?.block_hash
+                self.load_block_meta(state.indexed_finalized_head)
+                    .await?
+                    .block_hash
             };
             if block.parent_hash != expected_parent {
                 return Err(Error::InvalidParent);

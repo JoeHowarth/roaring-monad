@@ -1,5 +1,5 @@
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
-use finalized_log_index::codec::chunk::{encode_chunk, ChunkBlob};
+use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::manifest::encode_tail;
 use finalized_log_index::config::Config;
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
@@ -43,7 +43,9 @@ fn naive_query(blocks: &[Block], filter: &LogFilter, max_results: Option<usize>)
         if b.block_num < from || b.block_num > to {
             continue;
         }
-        if let Some(h) = filter.block_hash && h != b.block_hash {
+        if let Some(h) = filter.block_hash
+            && h != b.block_hash
+        {
             continue;
         }
 
@@ -57,7 +59,9 @@ fn naive_query(blocks: &[Block], filter: &LogFilter, max_results: Option<usize>)
                 continue;
             }
             out.push(l.clone());
-            if let Some(limit) = max_results && out.len() >= limit {
+            if let Some(limit) = max_results
+                && out.len() >= limit
+            {
                 return out;
             }
         }
@@ -81,7 +85,10 @@ fn matches_topic(topic: Option<[u8; 32]>, clause: &Option<Clause<[u8; 32]>>) -> 
         None => true,
         Some(Clause::Any) => true,
         Some(Clause::One(v)) => topic.as_ref() == Some(v),
-        Some(Clause::Or(vs)) => topic.as_ref().map(|t| vs.iter().any(|v| v == t)).unwrap_or(false),
+        Some(Clause::Or(vs)) => topic
+            .as_ref()
+            .map(|t| vs.iter().any(|v| v == t))
+            .unwrap_or(false),
     }
 }
 
@@ -211,7 +218,9 @@ fn recovery_and_gc_cleanup() {
         assert_eq!(stats.deleted_stale_tails, 1);
         assert_eq!(stats.deleted_orphan_chunks, 1);
 
-        let rec = startup_plan(&worker.meta_store, 0).await.expect("startup plan");
+        let rec = startup_plan(&worker.meta_store, 0)
+            .await
+            .expect("startup plan");
         assert_eq!(rec.state.indexed_finalized_head, 0);
     });
 }

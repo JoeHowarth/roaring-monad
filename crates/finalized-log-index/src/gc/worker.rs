@@ -35,8 +35,14 @@ impl<M: MetaStore, B: BlobStore> GcWorker<M, B> {
         let mut stats = GcStats::default();
 
         let mut referenced_chunks = BTreeSet::<Vec<u8>>::new();
-        let manifest_page = self.meta_store.list_prefix(b"manifests/", None, usize::MAX).await?;
-        let tail_page = self.meta_store.list_prefix(b"tails/", None, usize::MAX).await?;
+        let manifest_page = self
+            .meta_store
+            .list_prefix(b"manifests/", None, usize::MAX)
+            .await?;
+        let tail_page = self
+            .meta_store
+            .list_prefix(b"tails/", None, usize::MAX)
+            .await?;
 
         let mut manifest_streams = BTreeSet::<String>::new();
         for mk in &manifest_page.keys {
@@ -51,11 +57,15 @@ impl<M: MetaStore, B: BlobStore> GcWorker<M, B> {
             }
         }
 
-        let blob_page = self.blob_store.list_prefix(b"chunks/", None, usize::MAX).await?;
+        let blob_page = self
+            .blob_store
+            .list_prefix(b"chunks/", None, usize::MAX)
+            .await?;
         for ck in &blob_page.keys {
             if !referenced_chunks.contains(ck) {
                 if let Some(blob) = self.blob_store.get_blob(ck).await? {
-                    stats.orphan_chunk_bytes = stats.orphan_chunk_bytes.saturating_add(blob.len() as u64);
+                    stats.orphan_chunk_bytes =
+                        stats.orphan_chunk_bytes.saturating_add(blob.len() as u64);
                 }
                 self.blob_store.delete_blob(ck).await?;
                 stats.deleted_orphan_chunks = stats.deleted_orphan_chunks.saturating_add(1);

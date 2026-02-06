@@ -39,7 +39,12 @@ impl BlobStore for InMemoryBlobStore {
         Ok(())
     }
 
-    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page> {
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page> {
         let guard = self
             .inner
             .read()
