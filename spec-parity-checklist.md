@@ -17,29 +17,32 @@ Implementation target: `crates/finalized-log-index`
 ## 2. Data Model and Persistence
 
 - `Done` Canonical keys: `logs/*`, `block_meta/*`, `block_hash_to_num/*`, `meta/state`.
-- `Done` `MetaState`/`BlockMeta`/`Log` binary codec and decode validation.
+- `Done` Binary codecs with decode validation: `MetaState`, `BlockMeta`, `Log`, `Manifest`, `ChunkBlob`, tails.
 - `Done` Stream identity includes shard dimension.
 - `Done` `ChunkRef` includes `{chunk_seq,min_local,max_local,count}`.
-- `Partial` `topic0_stats/*` persistence exists, but rolling-window semantics are incomplete.
+- `Done` `topic0_mode/*` + `topic0_stats/*` persisted with versioned codecs.
 
 ## 3. Chunking and Tail Lifecycle
 
-- `Done` Tail persistence and reload.
+- `Done` Tail persistence/reload and append idempotency.
 - `Done` Seal-on-entry-count threshold.
-- `Partial` Seal-on-bytes threshold not implemented.
-- `Partial` Maintenance-seal interval not implemented.
-- `Partial` Periodic tail flush timer not implemented as background task.
+- `Done` Seal-on-bytes threshold.
+- `Done` Maintenance seal based on elapsed time.
+- `Done` Periodic maintenance pass that flushes tails and seals eligible streams.
+- `Partial` No autonomous scheduler thread in crate; maintenance is invoked via service method.
 
 ## 4. Query Semantics
 
 - `Done` Address/topic OR/null matching and exact post-filter.
-- `Done` `blockHash` mode with exclusivity validation.
+- `Done` `blockHash` mode validation and lookup path.
 - `Done` Finalized range clipping to indexed finalized head.
 - `Done` Shard fan-out for log-level and block-level streams.
+- `Done` Overlap-aware clause estimation from manifest chunk refs + tail overlap.
+- `Done` Clause intersection ordering by estimated selectivity.
 - `Done` `max_results` early stop.
-- `Done` OR-term guardrail via `planner_max_or_terms`.
-- `Partial` Cardinality estimation exists only implicitly; no explicit overlap-aware planner heuristic before materialization.
-- `Partial` `query too broad` fallback policy to block-driven scan is not implemented (returns error only).
+- `Done` OR-term guardrail with configurable behavior:
+  - `Error`
+  - `BlockScan` fallback.
 
 ## 5. Ingest Correctness and Idempotency
 
@@ -47,48 +50,52 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Parent linkage verification.
 - `Done` State CAS barrier and deterministic keying.
 - `Done` Tail re-append idempotency via roaring set semantics.
-- `Partial` Lease/fencing enforcement is present in in-memory/fs stores, but no distributed lease backend integration.
+- `Partial` Lease/fencing semantics are enforced by in-memory/fs adapters but not by a distributed lease service.
 
 ## 6. Topic0 Hybrid Strategy
 
 - `Done` Always-on `topic0_block` append path.
 - `Done` Optional `topic0_log` path controlled by mode record.
-- `Missing` Automatic hot/cold hysteresis transitions (`<0.1%` enable, `>1.0%` disable over 50k blocks).
+- `Done` Rolling-window hysteresis transitions implemented and tested (`<0.1%` enable, `>1.0%` disable).
 
 ## 7. Recovery and Degraded Mode
 
-- `Done` Startup state recovery API.
-- `Partial` Degraded mode currently surfaced as errors; no explicit service state machine with mode transitions.
-- `Missing` Operator-runbook hooks/events for finality violation pathways.
+- `Done` Startup recovery plan API from persisted state.
+- `Done` Service degraded mode state + fail-closed behavior for finality-parent violations.
+- `Done` Service throttle mode state for guardrail-triggered backpressure.
+- `Partial` Operator-runbook integration hooks are represented as state/messages; no external notifier integration.
 
 ## 8. GC and Guardrails
 
 - `Done` Orphan chunk cleanup.
 - `Done` Stale tail cleanup.
-- `Partial` Guardrail metrics computed, but no automatic throttle/fail-closed wiring to ingest path.
-- `Missing` `block_hash_to_num/*` pruning policy wiring when history pruning is enabled.
+- `Done` Guardrail exceedance detection.
+- `Done` Configurable guardrail action (`Throttle`/`FailClosed`) wired into service state.
+- `Done` `block_hash_to_num/*` pruning hook (`prune_block_hash_index_below`).
+- `Partial` No background GC scheduler in crate; GC is invoked via service method.
 
 ## 9. Backend-Agnostic Store Support
 
 - `Done` Abstract `MetaStore` and `BlobStore` async traits.
 - `Done` In-memory adapters.
 - `Done` Filesystem adapters.
-- `Missing` Production-grade distributed adapters (e.g., object store + CAS metadata service).
+- `Missing` Distributed production adapters (e.g., object store + external CAS metadata service).
 
 ## 10. Testing Coverage
 
-- `Done` Codec roundtrips.
-- `Done` End-to-end ingest/query tests.
+- `Done` Codec roundtrips and version compatibility paths.
+- `Done` End-to-end ingest/query tests (blockHash, limits, OR-guardrail, fallback scan).
 - `Done` Differential-style query tests vs naive scanner.
 - `Done` Filesystem adapter integration test.
-- `Done` GC/recovery behavior tests.
-- `Missing` High-scale performance and contention tests.
-- `Missing` Crash-injection tests at every ingest phase boundary.
+- `Done` Topic0 hysteresis enable/disable tests.
+- `Done` Maintenance sealing tests (bytes + periodic time-based pass).
+- `Done` Degraded/throttle and GC guardrail tests.
+- `Done` Pruning hook test.
+- `Partial` Fine-grained crash-injection matrix at every ingest phase boundary is not exhaustive.
 
-## 11. Priority Next Steps
+## 11. Priority Remaining Work
 
-1. Implement full topic0 rolling-window hysteresis mode switching.
-2. Add background tasks for periodic tail flush and maintenance seal.
-3. Add explicit planner cardinality estimation based on overlap-aware `ChunkRef.count` before full set materialization.
-4. Wire guardrail actions (throttle/fail-closed) into runtime control path.
-5. Add benchmark suite and stress harness (ingest throughput, query latency p50/p95/p99, OR-list stress).
+1. Add distributed backend adapters with externalized lease/CAS semantics.
+2. Add autonomous scheduler integration for maintenance + GC loops (optional feature flag).
+3. Expand crash-injection tests for every write/CAS boundary.
+4. Add larger-scale perf stress harness and flamegraph-based hotspot tracking.
