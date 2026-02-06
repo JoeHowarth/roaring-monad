@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::codec::chunk::decode_chunk;
-use crate::codec::log::{decode_block_meta, decode_log};
+use crate::codec::log::{decode_block_meta, decode_log, decode_log_locator};
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::domain::filter::{Clause, LogFilter};
 use crate::domain::keys::{
-    block_meta_key, chunk_blob_key, log_key, manifest_key, stream_id, tail_key,
+    block_meta_key, chunk_blob_key, log_locator_key, manifest_key, stream_id, tail_key,
 };
 use crate::domain::types::{Log, Topic32};
 use crate::error::{Error, Result};
@@ -17,8 +17,9 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     plan: QueryPlan,
 ) -> Result<Vec<Log>> {
+    let mut log_pack_cache: HashMap<Vec<u8>, bytes::Bytes> = HashMap::new();
     if plan.force_block_scan {
-        return execute_block_scan(meta_store, &plan).await;
+        return execute_block_scan(meta_store, blob_store, &plan, &mut log_pack_cache).await;
     }
 
     let mut clause_sets: Vec<BTreeSet<u64>> = Vec::new();
@@ -128,11 +129,10 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
 
     let mut out = Vec::new();
     for id in candidates {
-        let rec = match meta_store.get(&log_key(id)).await? {
-            Some(r) => r,
-            None => continue,
+        let Some(log) = load_log_by_id(meta_store, blob_store, id, &mut log_pack_cache).await?
+        else {
+            continue;
         };
-        let log = decode_log(&rec.value)?;
 
         if log.block_num < plan.clipped_from_block || log.block_num > plan.clipped_to_block {
             continue;
@@ -158,7 +158,12 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     Ok(out)
 }
 
-async fn execute_block_scan<M: MetaStore>(meta_store: &M, plan: &QueryPlan) -> Result<Vec<Log>> {
+async fn execute_block_scan<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    plan: &QueryPlan,
+    log_pack_cache: &mut HashMap<Vec<u8>, bytes::Bytes>,
+) -> Result<Vec<Log>> {
     let mut out = Vec::new();
 
     for b in plan.clipped_from_block..=plan.clipped_to_block {
@@ -170,10 +175,10 @@ async fn execute_block_scan<M: MetaStore>(meta_store: &M, plan: &QueryPlan) -> R
         let end = start + meta.count as u64;
 
         for id in start..end {
-            let Some(lr) = meta_store.get(&log_key(id)).await? else {
+            let Some(log) = load_log_by_id(meta_store, blob_store, id, log_pack_cache).await?
+            else {
                 continue;
             };
-            let log = decode_log(&lr.value)?;
             if exact_match(&log, &plan.filter) {
                 out.push(log);
                 if let Some(max) = plan.options.max_results
@@ -188,6 +193,35 @@ async fn execute_block_scan<M: MetaStore>(meta_store: &M, plan: &QueryPlan) -> R
 
     out.sort_by_key(|l| (l.block_num, l.tx_idx, l.log_idx));
     Ok(out)
+}
+
+async fn load_log_by_id<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    log_id: u64,
+    log_pack_cache: &mut HashMap<Vec<u8>, bytes::Bytes>,
+) -> Result<Option<Log>> {
+    let locator_rec = match meta_store.get(&log_locator_key(log_id)).await? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let locator = decode_log_locator(&locator_rec.value)?;
+    if !log_pack_cache.contains_key(&locator.blob_key) {
+        let Some(blob) = blob_store.get_blob(&locator.blob_key).await? else {
+            return Ok(None);
+        };
+        log_pack_cache.insert(locator.blob_key.clone(), blob);
+    }
+    let Some(blob) = log_pack_cache.get(&locator.blob_key) else {
+        return Ok(None);
+    };
+    let start = locator.byte_offset as usize;
+    let end = start.saturating_add(locator.byte_len as usize);
+    if end > blob.len() || start > end {
+        return Err(Error::Decode("invalid log locator span"));
+    }
+    let log = decode_log(&blob[start..end])?;
+    Ok(Some(log))
 }
 
 fn intersect_sets(sets: Vec<BTreeSet<u64>>, from: u64, to_inclusive: u64) -> BTreeSet<u64> {

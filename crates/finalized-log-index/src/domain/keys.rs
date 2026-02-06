@@ -15,14 +15,20 @@ pub fn read_u64_be(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(out))
 }
 
-pub fn log_key(global_log_id: u64) -> Vec<u8> {
-    let mut k = b"logs/".to_vec();
+pub fn log_locator_key(global_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_locators/".to_vec();
     k.extend_from_slice(&u64_be(global_log_id));
     k
 }
 
-pub fn logs_prefix() -> &'static [u8] {
-    b"logs/"
+pub fn log_locators_prefix() -> &'static [u8] {
+    b"log_locators/"
+}
+
+pub fn log_pack_blob_key(first_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_packs/".to_vec();
+    k.extend_from_slice(&u64_be(first_log_id));
+    k
 }
 
 pub fn block_meta_key(block_num: u64) -> Vec<u8> {

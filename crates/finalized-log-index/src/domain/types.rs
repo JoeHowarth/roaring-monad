@@ -16,6 +16,13 @@ pub struct Log {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LogLocator {
+    pub blob_key: Vec<u8>,
+    pub byte_offset: u32,
+    pub byte_len: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockMeta {
     pub block_hash: Hash32,
     pub parent_hash: Hash32,

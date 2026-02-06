@@ -6,18 +6,20 @@ use roaring::RoaringBitmap;
 use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 use crate::codec::log::{
     decode_block_meta, decode_meta_state, decode_topic0_mode, decode_topic0_stats,
-    encode_block_meta, encode_log, encode_meta_state, encode_topic0_mode, encode_topic0_stats,
-    encode_u64,
+    encode_block_meta, encode_log, encode_log_locator, encode_meta_state, encode_topic0_mode,
+    encode_topic0_stats, encode_u64,
 };
 use crate::codec::manifest::{
     ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
 };
 use crate::config::Config;
 use crate::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_key, manifest_key,
-    stream_id, tail_key, topic0_mode_key, topic0_stats_key,
+    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_key,
+    log_pack_blob_key, manifest_key, stream_id, tail_key, topic0_mode_key, topic0_stats_key,
 };
-use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState, Topic0Mode, Topic0Stats};
+use crate::domain::types::{
+    Block, BlockMeta, IngestOutcome, LogLocator, MetaState, Topic0Mode, Topic0Stats,
+};
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond, Record};
 
@@ -60,13 +62,28 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         let first_log_id = state.next_log_id;
-        for (i, log) in block.logs.iter().enumerate() {
-            let global_log_id = first_log_id + i as u64;
-            let key = log_key(global_log_id);
-            let _ = self
-                .meta_store
-                .put(&key, encode_log(log), PutCond::Any, FenceToken(epoch))
-                .await?;
+        if !block.logs.is_empty() {
+            let (log_pack, spans) = encode_log_pack(&block.logs);
+            let pack_key = log_pack_blob_key(first_log_id);
+            self.blob_store.put_blob(&pack_key, log_pack).await?;
+
+            for (i, (_off, _len)) in spans.iter().enumerate() {
+                let global_log_id = first_log_id + i as u64;
+                let locator = LogLocator {
+                    blob_key: pack_key.clone(),
+                    byte_offset: *_off,
+                    byte_len: *_len,
+                };
+                let _ = self
+                    .meta_store
+                    .put(
+                        &log_locator_key(global_log_id),
+                        encode_log_locator(&locator),
+                        PutCond::Any,
+                        FenceToken(epoch),
+                    )
+                    .await?;
+            }
         }
 
         let block_meta = BlockMeta {
@@ -507,4 +524,18 @@ fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&key[prefix.len()..]).to_string())
+}
+
+fn encode_log_pack(logs: &[crate::domain::types::Log]) -> (bytes::Bytes, Vec<(u32, u32)>) {
+    let mut out = Vec::<u8>::new();
+    let mut spans = Vec::with_capacity(logs.len());
+    for log in logs {
+        let encoded = encode_log(log);
+        let len = encoded.len() as u32;
+        let offset = out.len() as u32;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&encoded);
+        spans.push((offset + 4, len));
+    }
+    (bytes::Bytes::from(out), spans)
 }

@@ -1,6 +1,8 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockMeta, Log, MetaState, Topic0Mode, Topic0Stats, Topic32};
+use crate::domain::types::{
+    BlockMeta, Log, LogLocator, MetaState, Topic0Mode, Topic0Stats, Topic32,
+};
 use crate::error::{Error, Result};
 
 pub fn validate_log(log: &Log) -> bool {
@@ -278,6 +280,52 @@ pub fn decode_log(bytes: &[u8]) -> Result<Log> {
     })
 }
 
+pub fn encode_log_locator(locator: &LogLocator) -> Bytes {
+    let key_len = locator.blob_key.len().min(u16::MAX as usize) as u16;
+    let mut out = Vec::with_capacity(1 + 2 + key_len as usize + 4 + 4);
+    out.push(1);
+    out.extend_from_slice(&key_len.to_be_bytes());
+    out.extend_from_slice(&locator.blob_key[..key_len as usize]);
+    out.extend_from_slice(&locator.byte_offset.to_be_bytes());
+    out.extend_from_slice(&locator.byte_len.to_be_bytes());
+    Bytes::from(out)
+}
+
+pub fn decode_log_locator(bytes: &[u8]) -> Result<LogLocator> {
+    if bytes.len() < 1 + 2 + 4 + 4 {
+        return Err(Error::Decode("log locator too short"));
+    }
+    if bytes[0] != 1 {
+        return Err(Error::Decode("unsupported log locator version"));
+    }
+    let key_len = u16::from_be_bytes(
+        bytes[1..3]
+            .try_into()
+            .map_err(|_| Error::Decode("log locator key_len"))?,
+    ) as usize;
+    let min_len = 1 + 2 + key_len + 4 + 4;
+    if bytes.len() != min_len {
+        return Err(Error::Decode("invalid log locator length"));
+    }
+    let blob_key = bytes[3..3 + key_len].to_vec();
+    let off_idx = 3 + key_len;
+    let byte_offset = u32::from_be_bytes(
+        bytes[off_idx..off_idx + 4]
+            .try_into()
+            .map_err(|_| Error::Decode("log locator offset"))?,
+    );
+    let byte_len = u32::from_be_bytes(
+        bytes[off_idx + 4..off_idx + 8]
+            .try_into()
+            .map_err(|_| Error::Decode("log locator len"))?,
+    );
+    Ok(LogLocator {
+        blob_key,
+        byte_offset,
+        byte_len,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +390,17 @@ mod tests {
         };
         let dec_stats = decode_topic0_stats(&encode_topic0_stats(&stats)).expect("decode stats");
         assert_eq!(dec_stats, stats);
+    }
+
+    #[test]
+    fn roundtrip_log_locator() {
+        let locator = LogLocator {
+            blob_key: b"log_packs/abc".to_vec(),
+            byte_offset: 12,
+            byte_len: 48,
+        };
+        let enc = encode_log_locator(&locator);
+        let dec = decode_log_locator(&enc).expect("decode locator");
+        assert_eq!(dec, locator);
     }
 }

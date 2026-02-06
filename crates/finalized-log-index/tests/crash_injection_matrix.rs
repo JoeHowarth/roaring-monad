@@ -194,7 +194,18 @@ fn mk_service(
 fn ingest_retry_survives_faults_at_phase_boundaries() {
     block_on(async {
         let cases = vec![
-            ("logs_put", FaultOp::MetaPut, b"logs/".as_slice(), 1usize),
+            (
+                "log_locator_put",
+                FaultOp::MetaPut,
+                b"log_locators/".as_slice(),
+                1usize,
+            ),
+            (
+                "log_pack_put",
+                FaultOp::BlobPut,
+                b"log_packs/".as_slice(),
+                1usize,
+            ),
             (
                 "block_meta_put",
                 FaultOp::MetaPut,
@@ -292,7 +303,7 @@ fn ingest_retry_survives_faults_at_phase_boundaries() {
             assert_eq!(seen.len(), 4, "case={name}");
 
             let log_page = meta
-                .list_prefix(b"logs/", None, usize::MAX)
+                .list_prefix(b"log_locators/", None, usize::MAX)
                 .await
                 .expect("list logs");
             assert_eq!(log_page.keys.len(), 4, "case={name}");
@@ -315,7 +326,8 @@ fn crash_loop_eventually_commits_without_corrupting_state() {
 
         // Simulate repeated crashes across different write boundaries before a successful run.
         let staged_faults = vec![
-            (FaultOp::MetaPut, b"logs/".as_slice(), 2usize),
+            (FaultOp::MetaPut, b"log_locators/".as_slice(), 2usize),
+            (FaultOp::BlobPut, b"log_packs/".as_slice(), 1usize),
             (FaultOp::MetaPut, b"manifests/".as_slice(), 1usize),
             (FaultOp::BlobPut, b"chunks/".as_slice(), 1usize),
             (FaultOp::MetaPut, b"meta/state".as_slice(), 1usize),
@@ -358,7 +370,7 @@ fn crash_loop_eventually_commits_without_corrupting_state() {
         assert_eq!(logs.len(), 2);
 
         let log_page = meta
-            .list_prefix(b"logs/", None, usize::MAX)
+            .list_prefix(b"log_locators/", None, usize::MAX)
             .await
             .expect("list logs");
         assert_eq!(log_page.keys.len(), 2);
