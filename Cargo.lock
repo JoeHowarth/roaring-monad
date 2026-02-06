@@ -209,6 +209,7 @@ dependencies = [
  "bytes",
  "criterion",
  "futures",
+ "libc",
  "roaring",
  "serde",
  "thiserror",
