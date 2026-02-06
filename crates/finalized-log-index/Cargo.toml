@@ -13,3 +13,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "finalized_index_bench"
+harness = false
