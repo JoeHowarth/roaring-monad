@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
-use crate::store::traits::{
-    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
-};
+use crate::store::traits::{BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
@@ -17,8 +15,7 @@ pub struct FsMetaStore {
 impl FsMetaStore {
     pub fn new(root: impl AsRef<Path>, min_epoch: u64) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(root.join("meta"))
-            .map_err(|e| Error::Backend(format!("create fs meta dir: {e}")))?;
+        fs::create_dir_all(root.join("meta")).map_err(|e| Error::Backend(format!("create fs meta dir: {e}")))?;
         Ok(Self { root, min_epoch })
     }
 
@@ -69,13 +66,7 @@ impl MetaStore for FsMetaStore {
         }))
     }
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult> {
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond, fence: FenceToken) -> Result<PutResult> {
         self.validate_fence(fence)?;
         let current = self.get(key).await?;
 
@@ -98,8 +89,7 @@ impl MetaStore for FsMetaStore {
         fs::write(&kp, &value).map_err(|e| Error::Backend(format!("fs meta write: {e}")))?;
 
         let next_version = current.map_or(1, |c| c.version + 1);
-        fs::write(&vp, next_version.to_be_bytes())
-            .map_err(|e| Error::Backend(format!("fs ver write: {e}")))?;
+        fs::write(&vp, next_version.to_be_bytes()).map_err(|e| Error::Backend(format!("fs ver write: {e}")))?;
 
         Ok(PutResult {
             applied: true,
@@ -123,12 +113,7 @@ impl MetaStore for FsMetaStore {
         Ok(())
     }
 
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-    ) -> Result<Page> {
+    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
         let dir = self.root.join("meta");
         for entry in fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))? {
@@ -171,8 +156,7 @@ pub struct FsBlobStore {
 impl FsBlobStore {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(root.join("blob"))
-            .map_err(|e| Error::Backend(format!("create fs blob dir: {e}")))?;
+        fs::create_dir_all(root.join("blob")).map_err(|e| Error::Backend(format!("create fs blob dir: {e}")))?;
         Ok(Self { root })
     }
 
@@ -186,8 +170,7 @@ impl FsBlobStore {
 #[async_trait::async_trait]
 impl BlobStore for FsBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        fs::write(self.key_path(key), &value)
-            .map_err(|e| Error::Backend(format!("fs blob write: {e}")))?;
+        fs::write(self.key_path(key), &value).map_err(|e| Error::Backend(format!("fs blob write: {e}")))?;
         Ok(())
     }
 
@@ -203,6 +186,36 @@ impl BlobStore for FsBlobStore {
     async fn delete_blob(&self, key: &[u8]) -> Result<()> {
         let _ = fs::remove_file(self.key_path(key));
         Ok(())
+    }
+
+    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page> {
+        let mut all = Vec::<Vec<u8>>::new();
+        let dir = self.root.join("blob");
+        for entry in fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs blob read_dir: {e}")))? {
+            let entry = entry.map_err(|e| Error::Backend(format!("fs blob dir entry: {e}")))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let key = unhex(&name)?;
+            if key.starts_with(prefix) {
+                all.push(key);
+            }
+        }
+        all.sort();
+
+        let start = cursor.unwrap_or_default();
+        let mut keys = Vec::new();
+        let mut next_cursor = None;
+        for k in all {
+            if k < start {
+                continue;
+            }
+            keys.push(k);
+            if keys.len() == limit {
+                next_cursor = keys.last().cloned();
+                break;
+            }
+        }
+        Ok(Page { keys, next_cursor })
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::RwLock;
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
-use crate::store::traits::BlobStore;
+use crate::store::traits::{BlobStore, Page};
 
 #[derive(Default)]
 pub struct InMemoryBlobStore {
@@ -37,5 +37,33 @@ impl BlobStore for InMemoryBlobStore {
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
         guard.remove(key);
         Ok(())
+    }
+
+    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+
+        let start = cursor.unwrap_or_default();
+        let mut keys = Vec::new();
+        let mut all_keys: Vec<Vec<u8>> = guard.keys().cloned().collect();
+        all_keys.sort();
+        let mut next_cursor = None;
+        for k in all_keys {
+            if k < start {
+                continue;
+            }
+            if !k.starts_with(prefix) {
+                continue;
+            }
+            keys.push(k);
+            if keys.len() == limit {
+                next_cursor = keys.last().cloned();
+                break;
+            }
+        }
+
+        Ok(Page { keys, next_cursor })
     }
 }

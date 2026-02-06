@@ -60,4 +60,5 @@ pub trait BlobStore: Send + Sync {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
     async fn delete_blob(&self, key: &[u8]) -> Result<()>;
+    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page>;
 }
