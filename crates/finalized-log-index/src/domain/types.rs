@@ -31,21 +31,11 @@ pub struct Block {
     pub logs: Vec<Log>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct MetaState {
     pub indexed_finalized_head: u64,
     pub next_log_id: u64,
     pub writer_epoch: u64,
-}
-
-impl Default for MetaState {
-    fn default() -> Self {
-        Self {
-            indexed_finalized_head: 0,
-            next_log_id: 0,
-            writer_epoch: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::config::Config;
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
@@ -28,7 +28,9 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
     }
 }
 
-fn build_service(target_entries_per_chunk: u32) -> FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore> {
+fn build_service(
+    target_entries_per_chunk: u32,
+) -> FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore> {
     FinalizedIndexService::new(
         Config {
             target_entries_per_chunk,
@@ -41,7 +43,11 @@ fn build_service(target_entries_per_chunk: u32) -> FinalizedIndexService<InMemor
     )
 }
 
-fn seed_blocks(svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>, blocks: u64, logs_per_block: u32) {
+fn seed_blocks(
+    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    blocks: u64,
+    logs_per_block: u32,
+) {
     block_on(async {
         let mut parent = [0u8; 32];
         for b in 1..=blocks {
@@ -54,7 +60,9 @@ fn seed_blocks(svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>
             }
             let block = mk_block(b, parent, logs);
             parent = block.block_hash;
-            svc.ingest_finalized_block(block).await.expect("seed ingest");
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("seed ingest");
         }
     });
 }
@@ -62,26 +70,37 @@ fn seed_blocks(svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>
 fn bench_ingest(c: &mut Criterion) {
     let mut group = c.benchmark_group("ingest");
     for logs_per_block in [10u32, 100u32] {
-        group.bench_with_input(BenchmarkId::from_parameter(logs_per_block), &logs_per_block, |b, &lpb| {
-            b.iter_batched(
-                || build_service(64),
-                |svc| {
-                    block_on(async {
-                        let mut parent = [0u8; 32];
-                        for n in 1..=20u64 {
-                            let mut logs = Vec::with_capacity(lpb as usize);
-                            for i in 0..lpb {
-                                logs.push(mk_log((i % 16) as u8, (i % 8) as u8, (i % 32) as u8, n, 0, i));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(logs_per_block),
+            &logs_per_block,
+            |b, &lpb| {
+                b.iter_batched(
+                    || build_service(64),
+                    |svc| {
+                        block_on(async {
+                            let mut parent = [0u8; 32];
+                            for n in 1..=20u64 {
+                                let mut logs = Vec::with_capacity(lpb as usize);
+                                for i in 0..lpb {
+                                    logs.push(mk_log(
+                                        (i % 16) as u8,
+                                        (i % 8) as u8,
+                                        (i % 32) as u8,
+                                        n,
+                                        0,
+                                        i,
+                                    ));
+                                }
+                                let block = mk_block(n, parent, logs);
+                                parent = block.block_hash;
+                                svc.ingest_finalized_block(block).await.expect("ingest");
                             }
-                            let block = mk_block(n, parent, logs);
-                            parent = block.block_hash;
-                            svc.ingest_finalized_block(block).await.expect("ingest");
-                        }
-                    });
-                },
-                BatchSize::SmallInput,
-            )
-        });
+                        });
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
     }
     group.finish();
 }
@@ -152,5 +171,10 @@ fn bench_query_or_list(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_ingest, bench_query_filtered, bench_query_or_list);
+criterion_group!(
+    benches,
+    bench_ingest,
+    bench_query_filtered,
+    bench_query_or_list
+);
 criterion_main!(benches);

@@ -1,26 +1,33 @@
 use crate::codec::log::{decode_block_meta, decode_meta_state, decode_u64};
-use crate::config::Config;
+use crate::config::{BroadQueryPolicy, Config};
 use crate::domain::filter::{LogFilter, QueryOptions};
 use crate::domain::keys::{META_STATE_KEY, block_hash_to_num_key, block_meta_key};
 use crate::domain::types::Log;
 use crate::error::{Error, Result};
 use crate::query::executor::execute_plan;
-use crate::query::planner::QueryPlan;
+use crate::query::planner::{
+    QueryPlan, build_clause_order, should_error_too_broad, should_force_block_scan,
+};
 use crate::store::traits::{BlobStore, MetaStore};
 
 #[derive(Debug, Clone)]
 pub struct QueryEngine {
     pub max_or_terms: usize,
+    pub broad_query_policy: BroadQueryPolicy,
 }
 
 impl QueryEngine {
     pub fn new(max_or_terms: usize) -> Self {
-        Self { max_or_terms }
+        Self {
+            max_or_terms,
+            broad_query_policy: BroadQueryPolicy::Error,
+        }
     }
 
     pub fn from_config(config: &Config) -> Self {
         Self {
             max_or_terms: config.planner_max_or_terms,
+            broad_query_policy: config.planner_broad_query_policy,
         }
     }
 
@@ -31,8 +38,8 @@ impl QueryEngine {
         filter: LogFilter,
         options: QueryOptions,
     ) -> Result<Vec<Log>> {
-        let max_terms = filter.max_or_terms();
-        if max_terms > self.max_or_terms {
+        if should_error_too_broad(&filter, self.max_or_terms, self.broad_query_policy) {
+            let max_terms = filter.max_or_terms();
             return Err(Error::QueryTooBroad {
                 actual: max_terms,
                 max: self.max_or_terms,
@@ -81,6 +88,8 @@ impl QueryEngine {
                 clipped_to_block: num,
                 from_log_id: meta.first_log_id,
                 to_log_id_inclusive: meta.first_log_id + (meta.count as u64).saturating_sub(1),
+                clause_order: Vec::new(),
+                force_block_scan: false,
             };
             return execute_plan(meta_store, blob_store, plan).await;
         }
@@ -111,6 +120,14 @@ impl QueryEngine {
             return Ok(Vec::new());
         }
 
+        let force_block_scan =
+            should_force_block_scan(&filter, self.max_or_terms, self.broad_query_policy);
+        let clause_order = if force_block_scan {
+            Vec::new()
+        } else {
+            build_clause_order(meta_store, &filter, from_log_id, to_log_id_inclusive).await?
+        };
+
         let plan = QueryPlan {
             filter,
             options,
@@ -118,6 +135,8 @@ impl QueryEngine {
             clipped_to_block: clipped_to,
             from_log_id,
             to_log_id_inclusive,
+            clause_order,
+            force_block_scan,
         };
 
         execute_plan(meta_store, blob_store, plan).await
@@ -126,6 +145,9 @@ impl QueryEngine {
 
 impl Default for QueryEngine {
     fn default() -> Self {
-        Self { max_or_terms: 128 }
+        Self {
+            max_or_terms: 128,
+            broad_query_policy: BroadQueryPolicy::Error,
+        }
     }
 }

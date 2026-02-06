@@ -26,11 +26,11 @@ impl ChunkManager {
         meta_store: &M,
         blob_store: &B,
         stream_id: &str,
-        mut manifest: Manifest,
-        manifest_version: Option<u64>,
+        state: (Manifest, Option<u64>),
         tail: &mut RoaringBitmap,
         epoch: u64,
     ) -> Result<(Manifest, Option<u64>)> {
+        let (mut manifest, manifest_version) = state;
         if !self.should_seal(tail) {
             return Ok((manifest, manifest_version));
         }

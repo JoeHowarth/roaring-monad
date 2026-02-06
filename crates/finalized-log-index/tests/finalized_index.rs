@@ -1,7 +1,7 @@
 use std::fs;
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
-use finalized_log_index::config::Config;
+use finalized_log_index::config::{BroadQueryPolicy, Config};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::error::Error;
@@ -178,6 +178,50 @@ fn or_guardrail_is_enforced() {
             .expect_err("too broad");
 
         assert!(matches!(err, Error::QueryTooBroad { actual: 3, max: 2 }));
+    });
+}
+
+#[test]
+fn broad_query_can_fallback_to_block_scan() {
+    block_on(async {
+        let config = Config {
+            planner_max_or_terms: 1,
+            planner_broad_query_policy: BroadQueryPolicy::BlockScan,
+            ..Config::default()
+        };
+        let svc = FinalizedIndexService::new(
+            config,
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(
+            1,
+            [0; 32],
+            vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 10, 21, 1, 0, 1)],
+        );
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+
+        // Two OR terms exceed max_or_terms=1, but policy says block-scan fallback.
+        let got = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    block_hash: None,
+                    address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
+                    topic0: Some(Clause::One([10; 32])),
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect("fallback block scan query");
+
+        assert_eq!(got.len(), 2);
     });
 }
 

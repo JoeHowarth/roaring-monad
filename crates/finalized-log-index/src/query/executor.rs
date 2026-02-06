@@ -1,13 +1,15 @@
 use std::collections::BTreeSet;
 
 use crate::codec::chunk::decode_chunk;
-use crate::codec::log::decode_log;
+use crate::codec::log::{decode_block_meta, decode_log};
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::domain::filter::{Clause, LogFilter};
-use crate::domain::keys::{chunk_blob_key, log_key, manifest_key, stream_id, tail_key};
+use crate::domain::keys::{
+    block_meta_key, chunk_blob_key, log_key, manifest_key, stream_id, tail_key,
+};
 use crate::domain::types::{Log, Topic32};
 use crate::error::{Error, Result};
-use crate::query::planner::QueryPlan;
+use crate::query::planner::{ClauseKind, QueryPlan, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
 
 pub async fn execute_plan<M: MetaStore, B: BlobStore>(
@@ -15,12 +17,18 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     plan: QueryPlan,
 ) -> Result<Vec<Log>> {
-    let mut clause_sets: Vec<BTreeSet<u64>> = Vec::new();
+    if plan.force_block_scan {
+        return execute_block_scan(meta_store, &plan).await;
+    }
 
-    if let Some(address_clause) = &plan.filter.address {
-        let values = clause_values_20(address_clause);
-        if !values.is_empty() {
-            clause_sets.push(
+    let mut clause_sets: Vec<BTreeSet<u64>> = Vec::new();
+    for kind in &plan.clause_order {
+        let set = match kind {
+            ClauseKind::Address => {
+                let Some(clause) = &plan.filter.address else {
+                    continue;
+                };
+                let values = clause_values_20(clause);
                 fetch_union_log_level(
                     meta_store,
                     blob_store,
@@ -29,15 +37,13 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                     plan.from_log_id,
                     plan.to_log_id_inclusive,
                 )
-                .await?,
-            );
-        }
-    }
-
-    if let Some(topic_clause) = &plan.filter.topic1 {
-        let values = clause_values_32(topic_clause);
-        if !values.is_empty() {
-            clause_sets.push(
+                .await?
+            }
+            ClauseKind::Topic1 => {
+                let Some(clause) = &plan.filter.topic1 else {
+                    continue;
+                };
+                let values = clause_values_32(clause);
                 fetch_union_log_level(
                     meta_store,
                     blob_store,
@@ -46,15 +52,13 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                     plan.from_log_id,
                     plan.to_log_id_inclusive,
                 )
-                .await?,
-            );
-        }
-    }
-
-    if let Some(topic_clause) = &plan.filter.topic2 {
-        let values = clause_values_32(topic_clause);
-        if !values.is_empty() {
-            clause_sets.push(
+                .await?
+            }
+            ClauseKind::Topic2 => {
+                let Some(clause) = &plan.filter.topic2 else {
+                    continue;
+                };
+                let values = clause_values_32(clause);
                 fetch_union_log_level(
                     meta_store,
                     blob_store,
@@ -63,15 +67,13 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                     plan.from_log_id,
                     plan.to_log_id_inclusive,
                 )
-                .await?,
-            );
-        }
-    }
-
-    if let Some(topic_clause) = &plan.filter.topic3 {
-        let values = clause_values_32(topic_clause);
-        if !values.is_empty() {
-            clause_sets.push(
+                .await?
+            }
+            ClauseKind::Topic3 => {
+                let Some(clause) = &plan.filter.topic3 else {
+                    continue;
+                };
+                let values = clause_values_32(clause);
                 fetch_union_log_level(
                     meta_store,
                     blob_store,
@@ -80,32 +82,27 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                     plan.from_log_id,
                     plan.to_log_id_inclusive,
                 )
-                .await?,
-            );
-        }
-    }
-
-    if let Some(topic_clause) = &plan.filter.topic0 {
-        let values = clause_values_32(topic_clause);
-        if !values.is_empty() {
-            // Optional topic0_log acceleration when available.
-            let topic0_log_set = fetch_union_log_level(
-                meta_store,
-                blob_store,
-                "topic0_log",
-                &values,
-                plan.from_log_id,
-                plan.to_log_id_inclusive,
-            )
-            .await?;
-            if !topic0_log_set.is_empty() {
-                clause_sets.push(topic0_log_set);
+                .await?
             }
-        }
+            ClauseKind::Topic0Log => {
+                let Some(clause) = &plan.filter.topic0 else {
+                    continue;
+                };
+                let values = clause_values_32(clause);
+                fetch_union_log_level(
+                    meta_store,
+                    blob_store,
+                    "topic0_log",
+                    &values,
+                    plan.from_log_id,
+                    plan.to_log_id_inclusive,
+                )
+                .await?
+            }
+        };
+        clause_sets.push(set);
     }
 
-    // Intersect in ascending cardinality.
-    clause_sets.sort_by_key(BTreeSet::len);
     let candidates = intersect_sets(clause_sets, plan.from_log_id, plan.to_log_id_inclusive);
 
     let topic0_blocks = if let Some(topic_clause) = &plan.filter.topic0 {
@@ -141,17 +138,49 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
             continue;
         }
 
-        if let Some(blocks) = &topic0_blocks {
-            if !blocks.contains(&(log.block_num as u32)) {
-                continue;
-            }
+        if let Some(blocks) = &topic0_blocks
+            && !blocks.contains(&(log.block_num as u32))
+        {
+            continue;
         }
 
         if exact_match(&log, &plan.filter) {
             out.push(log);
-            if let Some(max) = plan.options.max_results {
-                if out.len() >= max {
-                    break;
+            if let Some(max) = plan.options.max_results
+                && out.len() >= max
+            {
+                break;
+            }
+        }
+    }
+
+    out.sort_by_key(|l| (l.block_num, l.tx_idx, l.log_idx));
+    Ok(out)
+}
+
+async fn execute_block_scan<M: MetaStore>(meta_store: &M, plan: &QueryPlan) -> Result<Vec<Log>> {
+    let mut out = Vec::new();
+
+    for b in plan.clipped_from_block..=plan.clipped_to_block {
+        let Some(m) = meta_store.get(&block_meta_key(b)).await? else {
+            continue;
+        };
+        let meta = decode_block_meta(&m.value)?;
+        let start = meta.first_log_id;
+        let end = start + meta.count as u64;
+
+        for id in start..end {
+            let Some(lr) = meta_store.get(&log_key(id)).await? else {
+                continue;
+            };
+            let log = decode_log(&lr.value)?;
+            if exact_match(&log, &plan.filter) {
+                out.push(log);
+                if let Some(max) = plan.options.max_results
+                    && out.len() >= max
+                {
+                    out.sort_by_key(|l| (l.block_num, l.tx_idx, l.log_idx));
+                    return Ok(out);
                 }
             }
         }
@@ -161,13 +190,14 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     Ok(out)
 }
 
-fn intersect_sets(mut sets: Vec<BTreeSet<u64>>, from: u64, to_inclusive: u64) -> BTreeSet<u64> {
+fn intersect_sets(sets: Vec<BTreeSet<u64>>, from: u64, to_inclusive: u64) -> BTreeSet<u64> {
     if sets.is_empty() {
         return (from..=to_inclusive).collect();
     }
 
-    let mut acc = sets.remove(0);
-    for s in sets {
+    let mut it = sets.into_iter();
+    let mut acc = it.next().unwrap_or_default();
+    for s in it {
         acc = acc.intersection(&s).copied().collect();
         if acc.is_empty() {
             break;
@@ -215,22 +245,6 @@ fn match_topic(topic: Option<Topic32>, clause: &Option<Clause<Topic32>>) -> bool
             .as_ref()
             .map(|t| vs.iter().any(|v| v == t))
             .unwrap_or(false),
-    }
-}
-
-fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
-    match clause {
-        Clause::Any => Vec::new(),
-        Clause::One(v) => vec![v.to_vec()],
-        Clause::Or(vs) => vs.iter().map(|v| v.to_vec()).collect(),
-    }
-}
-
-fn clause_values_32(clause: &Clause<[u8; 32]>) -> Vec<Vec<u8>> {
-    match clause {
-        Clause::Any => Vec::new(),
-        Clause::One(v) => vec![v.to_vec()],
-        Clause::Or(vs) => vs.iter().map(|v| v.to_vec()).collect(),
     }
 }
 
@@ -314,13 +328,13 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     if let Some(mrec) = manifest {
         let m = decode_manifest(&mrec.value)?;
         for cref in m.chunk_refs {
-            maybe_merge_chunk(meta_store, blob_store, stream, &cref, &mut out).await?;
+            maybe_merge_chunk(blob_store, stream, &cref, &mut out).await?;
         }
     }
 
     if let Some(trec) = meta_store.get(&tail_key(stream)).await? {
         let tail = decode_tail(&trec.value)?;
-        for v in tail {
+        for v in &tail {
             out.insert(v);
         }
     }
@@ -328,8 +342,7 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     Ok(out)
 }
 
-async fn maybe_merge_chunk<M: MetaStore, B: BlobStore>(
-    _meta_store: &M,
+async fn maybe_merge_chunk<B: BlobStore>(
     blob_store: &B,
     stream: &str,
     cref: &ChunkRef,
