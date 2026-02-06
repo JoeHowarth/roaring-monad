@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::codec::log::decode_u64;
 use crate::codec::manifest::decode_manifest;
 use crate::config::Config;
 use crate::domain::keys::{chunk_blob_key, manifest_key};
@@ -16,14 +17,14 @@ pub struct GcStats {
     pub exceeded_guardrail: bool,
 }
 
-pub struct GcWorker<M: MetaStore, B: BlobStore> {
-    pub meta_store: M,
-    pub blob_store: B,
-    pub config: Config,
+pub struct GcWorker<'a, M: MetaStore, B: BlobStore> {
+    pub meta_store: &'a M,
+    pub blob_store: &'a B,
+    pub config: &'a Config,
 }
 
-impl<M: MetaStore, B: BlobStore> GcWorker<M, B> {
-    pub fn new(meta_store: M, blob_store: B, config: Config) -> Self {
+impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
+    pub fn new(meta_store: &'a M, blob_store: &'a B, config: &'a Config) -> Self {
         Self {
             meta_store,
             blob_store,
@@ -90,6 +91,31 @@ impl<M: MetaStore, B: BlobStore> GcWorker<M, B> {
             || stats.stale_tail_keys > self.config.max_stale_tail_keys;
 
         Ok(stats)
+    }
+
+    pub async fn prune_block_hash_index_below(
+        &self,
+        min_block_num: u64,
+        fence_epoch: u64,
+    ) -> Result<u64> {
+        let mut removed = 0u64;
+        let page = self
+            .meta_store
+            .list_prefix(b"block_hash_to_num/", None, usize::MAX)
+            .await?;
+        for key in page.keys {
+            let Some(rec) = self.meta_store.get(&key).await? else {
+                continue;
+            };
+            let num = decode_u64(&rec.value)?;
+            if num < min_block_num {
+                self.meta_store
+                    .delete(&key, DelCond::Any, FenceToken(fence_epoch))
+                    .await?;
+                removed = removed.saturating_add(1);
+            }
+        }
+        Ok(removed)
     }
 }
 

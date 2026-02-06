@@ -212,15 +212,14 @@ fn recovery_and_gc_cleanup() {
             .await
             .expect("put orphan blob");
 
-        let worker = GcWorker::new(meta, blob, Config::default());
+        let cfg = Config::default();
+        let worker = GcWorker::new(&meta, &blob, &cfg);
         let stats = worker.run_once().await.expect("gc run");
 
         assert_eq!(stats.deleted_stale_tails, 1);
         assert_eq!(stats.deleted_orphan_chunks, 1);
 
-        let rec = startup_plan(&worker.meta_store, 0)
-            .await
-            .expect("startup plan");
+        let rec = startup_plan(&meta, 0).await.expect("startup plan");
         assert_eq!(rec.state.indexed_finalized_head, 0);
     });
 }

@@ -1,18 +1,22 @@
 use std::fs;
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::log::{decode_topic0_mode, encode_topic0_mode};
 use finalized_log_index::codec::manifest::{decode_manifest, encode_manifest};
-use finalized_log_index::config::{BroadQueryPolicy, Config};
+use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
-use finalized_log_index::domain::keys::{manifest_key, stream_id, topic0_mode_key};
+use finalized_log_index::domain::keys::{
+    block_hash_to_num_key, manifest_key, stream_id, topic0_mode_key,
+};
 use finalized_log_index::domain::types::{Block, Log, Topic0Mode};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{FenceToken, MetaStore, PutCond};
+use finalized_log_index::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use futures::executor::block_on;
+use roaring::RoaringBitmap;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -443,5 +447,168 @@ fn periodic_maintenance_seals_old_tails() {
             .expect("manifest");
         let manifest = decode_manifest(&rec.value).expect("decode manifest");
         assert_eq!(manifest.chunk_refs.len(), 1);
+    });
+}
+
+#[test]
+fn invalid_parent_puts_service_in_degraded_mode() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 1, 1, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+
+        let bad_b2 = mk_block(2, [9; 32], vec![mk_log(1, 1, 1, 2, 0, 0)]);
+        let err = svc
+            .ingest_finalized_block(bad_b2)
+            .await
+            .expect_err("invalid parent");
+        assert!(matches!(err, Error::InvalidParent));
+
+        let health = svc.health().await;
+        assert!(health.degraded);
+        assert!(health.message.contains("degraded"));
+
+        let qerr = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    block_hash: None,
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect_err("degraded query");
+        assert!(matches!(qerr, Error::Degraded(_)));
+    });
+}
+
+#[test]
+fn gc_guardrail_fail_closed_sets_degraded() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                max_orphan_chunk_bytes: 1,
+                gc_guardrail_action: GuardrailAction::FailClosed,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let mut bm = RoaringBitmap::new();
+        bm.insert(1);
+        let orphan = ChunkBlob {
+            min_local: 1,
+            max_local: 1,
+            count: 1,
+            crc32: 0,
+            bitmap: bm,
+        };
+        svc.ingest
+            .blob_store
+            .put_blob(
+                b"chunks/orphan/0000000000000001",
+                encode_chunk(&orphan).expect("encode chunk"),
+            )
+            .await
+            .expect("put orphan");
+
+        let stats = svc.run_gc_once().await.expect("gc");
+        assert!(stats.exceeded_guardrail);
+        assert!(svc.health().await.degraded);
+    });
+}
+
+#[test]
+fn gc_guardrail_throttle_blocks_ingest() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                max_orphan_chunk_bytes: 1,
+                gc_guardrail_action: GuardrailAction::Throttle,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let mut bm = RoaringBitmap::new();
+        bm.insert(2);
+        let orphan = ChunkBlob {
+            min_local: 2,
+            max_local: 2,
+            count: 1,
+            crc32: 0,
+            bitmap: bm,
+        };
+        svc.ingest
+            .blob_store
+            .put_blob(
+                b"chunks/orphan/0000000000000002",
+                encode_chunk(&orphan).expect("encode chunk"),
+            )
+            .await
+            .expect("put orphan");
+
+        let _ = svc.run_gc_once().await.expect("gc");
+        let err = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 1, 1, 1, 0, 0)]))
+            .await
+            .expect_err("throttled ingest");
+        assert!(matches!(err, Error::Throttled(_)));
+        assert!(!svc.health().await.degraded);
+    });
+}
+
+#[test]
+fn prune_block_hash_index_hook() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 1, 1, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 2, 2, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1.clone())
+            .await
+            .expect("ingest b1");
+        svc.ingest_finalized_block(b2.clone())
+            .await
+            .expect("ingest b2");
+
+        let removed = svc.prune_block_hash_index_below(2).await.expect("prune");
+        assert!(removed >= 1);
+        assert!(
+            svc.ingest
+                .meta_store
+                .get(&block_hash_to_num_key(&b1.block_hash))
+                .await
+                .expect("get b1 map")
+                .is_none()
+        );
+        assert!(
+            svc.ingest
+                .meta_store
+                .get(&block_hash_to_num_key(&b2.block_hash))
+                .await
+                .expect("get b2 map")
+                .is_some()
+        );
     });
 }
