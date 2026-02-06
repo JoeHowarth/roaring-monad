@@ -281,7 +281,8 @@ pub fn decode_log(bytes: &[u8]) -> Result<Log> {
 }
 
 pub fn encode_log_locator(locator: &LogLocator) -> Bytes {
-    let key_len = locator.blob_key.len().min(u16::MAX as usize) as u16;
+    assert!(locator.blob_key.len() <= u16::MAX as usize);
+    let key_len = locator.blob_key.len() as u16;
     let mut out = Vec::with_capacity(1 + 2 + key_len as usize + 4 + 4);
     out.push(1);
     out.extend_from_slice(&key_len.to_be_bytes());
