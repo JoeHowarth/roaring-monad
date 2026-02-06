@@ -92,6 +92,21 @@ Responsibilities:
 2. Chunk reads.
 3. Best-effort blob deletion for GC.
 
+### 4.4 Distributed Adapter Pair
+
+Current crate includes feature-gated production-oriented adapters under `distributed-stores`:
+
+1. `store::scylla::ScyllaMetaStore`
+   - metadata, CAS-conditioned updates, and fencing validation.
+2. `store::minio::MinioBlobStore`
+   - immutable blob objects for chunks/log packs.
+
+Recommended deployment pattern:
+
+1. Keep all mutable/index/state records in Scylla.
+2. Keep immutable payload blobs in MinIO.
+3. Use Scylla CAS as the publish/visibility barrier.
+
 ### 4.3 Required Semantics
 
 1. `MetaStore` must provide compare-and-swap via record version.

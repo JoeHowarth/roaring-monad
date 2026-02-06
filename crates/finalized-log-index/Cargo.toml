@@ -4,12 +4,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+distributed-stores = [
+    "dep:tokio",
+    "dep:scylla",
+    "dep:aws-config",
+    "dep:aws-sdk-s3",
+    "dep:aws-credential-types",
+]
+
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
 roaring.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+scylla = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures.workspace = true

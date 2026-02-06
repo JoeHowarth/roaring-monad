@@ -79,7 +79,9 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Abstract `MetaStore` and `BlobStore` async traits.
 - `Done` In-memory adapters.
 - `Done` Filesystem adapters.
-- `Missing` Distributed production adapters (e.g., object store + external CAS metadata service).
+- `Done` Feature-gated distributed adapters:
+  - `ScyllaMetaStore` (`distributed-stores` feature) for metadata + CAS/fencing.
+  - `MinioBlobStore` (`distributed-stores` feature) for blob storage.
 
 ## 10. Testing Coverage
 
@@ -94,6 +96,7 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Crash-injection matrix covering ingest write/CAS boundaries with restart-and-retry validation.
 - `Done` Repeated staged crash-loop test confirms eventual commit and no duplicate/corrupt state.
 - `Done` Larger-scale benchmark expansion (`ingest/1000`, `query_mixed_large`) and standalone stress harness example (`examples/perf_stress.rs`).
+- `Partial` Distributed adapter integration tests against live Scylla/MinIO are not yet automated in CI.
 
 ## 11. Priority Remaining Work
 
