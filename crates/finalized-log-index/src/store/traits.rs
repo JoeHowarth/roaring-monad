@@ -39,9 +39,20 @@ pub struct Page {
 #[async_trait::async_trait]
 pub trait MetaStore: Send + Sync {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond, fence: FenceToken) -> Result<PutResult>;
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> Result<PutResult>;
     async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()>;
-    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page>;
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page>;
 }
 
 #[async_trait::async_trait]

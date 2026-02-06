@@ -12,6 +12,10 @@ pub enum Error {
     InvalidParent,
     #[error("finality violation")]
     FinalityViolation,
+    #[error("invalid params: {0}")]
+    InvalidParams(&'static str),
+    #[error("decode error: {0}")]
+    Decode(&'static str),
     #[error("backend error: {0}")]
     Backend(String),
     #[error("unsupported: {0}")]

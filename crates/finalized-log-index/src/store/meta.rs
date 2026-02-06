@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 
@@ -9,6 +10,28 @@ use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutRes
 #[derive(Default)]
 pub struct InMemoryMetaStore {
     inner: RwLock<BTreeMap<Vec<u8>, Record>>,
+    min_epoch: AtomicU64,
+}
+
+impl InMemoryMetaStore {
+    pub fn with_min_epoch(min_epoch: u64) -> Self {
+        Self {
+            inner: RwLock::new(BTreeMap::new()),
+            min_epoch: AtomicU64::new(min_epoch),
+        }
+    }
+
+    pub fn set_min_epoch(&self, min_epoch: u64) {
+        self.min_epoch.store(min_epoch, Ordering::Relaxed);
+    }
+
+    fn validate_fence(&self, fence: FenceToken) -> Result<()> {
+        let required = self.min_epoch.load(Ordering::Relaxed);
+        if fence.0 < required {
+            return Err(Error::LeaseLost);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -21,7 +44,14 @@ impl MetaStore for InMemoryMetaStore {
         Ok(guard.get(key).cloned())
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond, _fence: FenceToken) -> Result<PutResult> {
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> Result<PutResult> {
+        self.validate_fence(fence)?;
         let mut guard = self
             .inner
             .write()
@@ -57,7 +87,8 @@ impl MetaStore for InMemoryMetaStore {
         })
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond, _fence: FenceToken) -> Result<()> {
+    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
+        self.validate_fence(fence)?;
         let mut guard = self
             .inner
             .write()
@@ -76,7 +107,12 @@ impl MetaStore for InMemoryMetaStore {
         Ok(())
     }
 
-    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page> {
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page> {
         let guard = self
             .inner
             .read()

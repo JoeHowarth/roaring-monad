@@ -4,7 +4,7 @@ pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Log {
     pub address: Address20,
     pub topics: Vec<Topic32>,
@@ -15,7 +15,7 @@ pub struct Log {
     pub block_hash: Hash32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockMeta {
     pub block_hash: Hash32,
     pub parent_hash: Hash32,
@@ -23,7 +23,7 @@ pub struct BlockMeta {
     pub count: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Block {
     pub block_num: u64,
     pub block_hash: Hash32,
@@ -59,4 +59,18 @@ pub struct HealthReport {
     pub healthy: bool,
     pub degraded: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Topic0Mode {
+    pub log_enabled: bool,
+    pub enabled_from_block: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Topic0Stats {
+    pub window_len: u32,
+    pub blocks_seen_in_window: u32,
+    pub ring_cursor: u32,
+    pub ring_bits: Vec<u8>,
 }

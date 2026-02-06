@@ -10,3 +10,6 @@ bytes.workspace = true
 roaring.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
