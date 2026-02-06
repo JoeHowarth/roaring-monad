@@ -69,7 +69,7 @@ fn seed_blocks(
 
 fn bench_ingest(c: &mut Criterion) {
     let mut group = c.benchmark_group("ingest");
-    for logs_per_block in [10u32, 100u32] {
+    for logs_per_block in [10u32, 100u32, 1_000u32] {
         group.bench_with_input(
             BenchmarkId::from_parameter(logs_per_block),
             &logs_per_block,
@@ -171,10 +171,79 @@ fn bench_query_or_list(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_query_mixed_large(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_mixed_large");
+    let svc = build_service(512);
+    seed_blocks(&svc, 1_000, 200);
+
+    let filters = [
+        LogFilter {
+            from_block: Some(300),
+            to_block: Some(1_000),
+            block_hash: None,
+            address: Some(Clause::One([11; 20])),
+            topic0: Some(Clause::One([3; 32])),
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        },
+        LogFilter {
+            from_block: Some(200),
+            to_block: Some(1_000),
+            block_hash: None,
+            address: None,
+            topic0: Some(Clause::One([2; 32])),
+            topic1: Some(Clause::One([2; 32])),
+            topic2: None,
+            topic3: None,
+        },
+        LogFilter {
+            from_block: Some(1),
+            to_block: Some(1_000),
+            block_hash: None,
+            address: Some(Clause::Or(
+                (0..48usize).map(|i| [(i % 64) as u8; 20]).collect(),
+            )),
+            topic0: None,
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        },
+        LogFilter {
+            from_block: Some(800),
+            to_block: Some(1_000),
+            block_hash: None,
+            address: None,
+            topic0: None,
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        },
+    ];
+
+    group.bench_function("mixed_workload_4way", |b| {
+        let mut idx = 0usize;
+        b.iter(|| {
+            let filter = filters[idx % filters.len()].clone();
+            idx = idx.wrapping_add(1);
+            let res = block_on(svc.query_finalized(
+                black_box(filter),
+                QueryOptions {
+                    max_results: Some(20_000),
+                },
+            ))
+            .expect("query");
+            black_box(res.len())
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_ingest,
     bench_query_filtered,
-    bench_query_or_list
+    bench_query_or_list,
+    bench_query_mixed_large
 );
 criterion_main!(benches);

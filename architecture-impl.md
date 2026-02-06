@@ -425,16 +425,37 @@ Structured logs with:
 ### 14.2 Integration Tests
 
 1. Sequential finalized ingest and queries.
-2. Crash injection between each ingest phase.
+2. Crash injection across ingest phase boundaries:
+   - `logs/*`, `block_meta/*`, `block_hash_to_num/*`
+   - `manifests/*`, `tails/*`, `chunks/*`
+   - final `meta/state` CAS visibility barrier
 3. Restart recovery with lazy load.
 4. Lease loss fencing behavior.
 5. Finality violation detection and degraded mode.
+
+Current implementation includes restart-and-retry crash matrix tests plus repeated staged crash-loop tests proving:
+
+1. Eventual successful commit after transient boundary failures.
+2. No duplicate logical logs after retry.
+3. No state/head corruption across retries.
 
 ### 14.3 Differential Tests
 
 1. Compare query output against reference node for finalized ranges.
 2. Include address OR and topic OR/null combinations.
 3. Include blockHash queries.
+
+### 14.4 Performance and Profiling Harness
+
+1. Criterion micro/mid-scale suites:
+   - ingest: `10`, `100`, `1000` logs/block variants
+   - query: filtered, OR-list, and mixed workload
+2. Standalone stress runner:
+   - `cargo run --release -p finalized-log-index --example perf_stress -- ...`
+   - configurable `blocks`, `logs-per-block`, `queries`, `chunk-size`, `max-results`
+3. Profiling workflow:
+   - run stress example under system profiler (`perf`, `dtrace`, `Instruments`) for flamegraphs
+   - use query latency percentiles and ingest logs/sec emitted by the harness as baseline signals
 
 ---
 

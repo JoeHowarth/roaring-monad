@@ -91,11 +91,12 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Maintenance sealing tests (bytes + periodic time-based pass).
 - `Done` Degraded/throttle and GC guardrail tests.
 - `Done` Pruning hook test.
-- `Partial` Fine-grained crash-injection matrix at every ingest phase boundary is not exhaustive.
+- `Done` Crash-injection matrix covering ingest write/CAS boundaries with restart-and-retry validation.
+- `Done` Repeated staged crash-loop test confirms eventual commit and no duplicate/corrupt state.
+- `Done` Larger-scale benchmark expansion (`ingest/1000`, `query_mixed_large`) and standalone stress harness example (`examples/perf_stress.rs`).
 
 ## 11. Priority Remaining Work
 
 1. Add distributed backend adapters with externalized lease/CAS semantics.
 2. Add autonomous scheduler integration for maintenance + GC loops (optional feature flag).
-3. Expand crash-injection tests for every write/CAS boundary.
-4. Add larger-scale perf stress harness and flamegraph-based hotspot tracking.
+3. Add flamegraph/profiler automation and CI artifact retention for hotspot tracking.
