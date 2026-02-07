@@ -98,9 +98,10 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Repeated staged crash-loop test confirms eventual commit and no duplicate/corrupt state.
 - `Done` Larger-scale benchmark expansion (`ingest/1000`, `query_mixed_large`) and standalone stress harness example (`examples/perf_stress.rs`).
 - `Partial` Distributed adapter integration tests against live Scylla/MinIO are not yet automated in CI.
+- `Done` Distributed chaos test for MinIO outage validates retry-budget exhaustion and deterministic fail-closed degraded transition.
 
 ## 11. Priority Remaining Work
 
 1. Add autonomous scheduler integration for maintenance + GC loops (optional feature flag).
 2. Add flamegraph/profiler automation and CI artifact retention for hotspot tracking.
-3. Expand dependency chaos tests (network partitions, long outage, retry-budget exhaustion).
+3. Expand dependency chaos tests to include Scylla outage/partition cases and prolonged partial-failure patterns.
