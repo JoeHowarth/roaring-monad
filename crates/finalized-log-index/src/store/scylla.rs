@@ -179,41 +179,27 @@ impl MetaStore for ScyllaMetaStore {
                     .map_err(|e| Error::Backend(format!("scylla put any: {e}")))?;
                 true
             }
-            PutCond::IfAbsent => {
-                let res = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
-                            self.table
-                        ),
-                        (grp.as_str(), key.to_vec(), value.to_vec(), 1_i64),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))?;
-                lwt_applied(res).unwrap_or(false)
-            }
-            PutCond::IfVersion(v) => {
-                let res = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND k = ? IF version = ?",
-                            self.table
-                        ),
-                        (
-                            value.to_vec(),
-                            next_version as i64,
-                            grp.as_str(),
-                            key.to_vec(),
-                            v as i64,
-                        ),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla put if version: {e}")))?;
-                lwt_applied(res).unwrap_or(false)
-            }
+            PutCond::IfAbsent => current.is_none(),
+            PutCond::IfVersion(v) => current.as_ref().map(|r| r.version == v).unwrap_or(false),
         };
+
+        if applied && !matches!(cond, PutCond::Any) {
+            self.session
+                .query_unpaged(
+                    format!(
+                        "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?)",
+                        self.table
+                    ),
+                    (
+                        grp.as_str(),
+                        key.to_vec(),
+                        value.to_vec(),
+                        next_version as i64,
+                    ),
+                )
+                .await
+                .map_err(|e| Error::Backend(format!("scylla conditional put write: {e}")))?;
+        }
 
         let version = self.get(key).await?.map(|r| r.version);
         Ok(PutResult { applied, version })
@@ -234,17 +220,16 @@ impl MetaStore for ScyllaMetaStore {
                     .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
             }
             DelCond::IfVersion(v) => {
-                let _ = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "DELETE FROM {} WHERE grp = ? AND k = ? IF version = ?",
-                            self.table
-                        ),
-                        (grp.as_str(), key.to_vec(), v as i64),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))?;
+                let current = self.get(key).await?;
+                if current.as_ref().map(|r| r.version == v).unwrap_or(false) {
+                    self.session
+                        .query_unpaged(
+                            format!("DELETE FROM {} WHERE grp = ? AND k = ?", self.table),
+                            (grp.as_str(), key.to_vec()),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))?;
+                }
             }
         }
         Ok(())
@@ -302,12 +287,6 @@ impl MetaStore for ScyllaMetaStore {
         };
         Ok(Page { keys, next_cursor })
     }
-}
-
-fn lwt_applied(res: scylla::QueryResult) -> Option<bool> {
-    let rows_result = res.into_rows_result().ok()?;
-    let mut it = rows_result.rows::<(bool,)>().ok()?;
-    it.next().and_then(|r| r.ok()).map(|x| x.0)
 }
 
 fn first_col_i64(res: scylla::QueryResult) -> Option<i64> {
