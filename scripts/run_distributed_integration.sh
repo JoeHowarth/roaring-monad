@@ -66,6 +66,6 @@ wait_healthy "finalized-index-minio" 120
 
 echo "Running distributed integration test..."
 cd "$ROOT"
-RUST_BACKTRACE=1 cargo test -p finalized-log-index --features distributed-stores --test distributed_stores_integration -- --nocapture
+RUST_BACKTRACE=1 cargo test -p finalized-log-index --features distributed-stores --test distributed_stores_integration --test distributed_meta_cas -- --nocapture
 
 echo "Distributed integration test passed"
