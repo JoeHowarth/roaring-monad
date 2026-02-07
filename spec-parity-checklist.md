@@ -63,6 +63,7 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Startup recovery plan API from persisted state.
 - `Done` Service degraded mode state + fail-closed behavior for finality-parent violations.
 - `Done` Service throttle mode state for guardrail-triggered backpressure.
+- `Done` Backend error circuit behavior: consecutive backend failures trigger throttle/degrade transitions.
 - `Partial` Operator-runbook integration hooks are represented as state/messages; no external notifier integration.
 
 ## 8. GC and Guardrails
@@ -100,6 +101,6 @@ Implementation target: `crates/finalized-log-index`
 
 ## 11. Priority Remaining Work
 
-1. Add distributed backend adapters with externalized lease/CAS semantics.
-2. Add autonomous scheduler integration for maintenance + GC loops (optional feature flag).
-3. Add flamegraph/profiler automation and CI artifact retention for hotspot tracking.
+1. Add autonomous scheduler integration for maintenance + GC loops (optional feature flag).
+2. Add flamegraph/profiler automation and CI artifact retention for hotspot tracking.
+3. Expand dependency chaos tests (network partitions, long outage, retry-budget exhaustion).

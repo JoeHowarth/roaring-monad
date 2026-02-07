@@ -3,6 +3,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Region};
 use bytes::Bytes;
+use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, Page};
@@ -12,6 +13,9 @@ pub struct MinioBlobStore {
     client: Client,
     bucket: String,
     object_prefix: String,
+    max_retries: u32,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
 }
 
 impl MinioBlobStore {
@@ -46,7 +50,22 @@ impl MinioBlobStore {
             client,
             bucket: bucket.to_string(),
             object_prefix: normalize_prefix(object_prefix),
+            max_retries: 4,
+            base_delay_ms: 25,
+            max_delay_ms: 1000,
         })
+    }
+
+    pub fn with_retry_policy(
+        mut self,
+        max_retries: u32,
+        base_delay_ms: u64,
+        max_delay_ms: u64,
+    ) -> Self {
+        self.max_retries = max_retries;
+        self.base_delay_ms = base_delay_ms;
+        self.max_delay_ms = max_delay_ms;
+        self
     }
 
     fn object_key(&self, key: &[u8]) -> String {
@@ -65,46 +84,55 @@ impl MinioBlobStore {
 #[async_trait::async_trait]
 impl BlobStore for MinioBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(self.object_key(key))
-            .body(value.into())
-            .send()
-            .await
-            .map_err(|e| Error::Backend(format!("minio put_blob: {e}")))?;
-        Ok(())
+        let object_key = self.object_key(key);
+        let payload = value.to_vec();
+        self.with_retry("put_blob", || async {
+            self.client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&object_key)
+                .body(payload.clone().into())
+                .send()
+                .await
+                .map_err(|e| Error::Backend(format!("minio put_blob: {e}")))?;
+            Ok(())
+        })
+        .await
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let res = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(self.object_key(key))
-            .send()
-            .await;
+        let object_key = self.object_key(key);
+        self.with_retry("get_blob", || async {
+            let res = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&object_key)
+                .send()
+                .await;
 
-        let out = match res {
-            Ok(resp) => {
-                let aggregated = resp
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|e| Error::Backend(format!("minio read body: {e}")))?;
-                Some(aggregated.into_bytes())
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("NoSuchKey") || msg.contains("not found") {
-                    None
-                } else {
-                    return Err(Error::Backend(format!("minio get_blob: {err}")));
+            let out = match res {
+                Ok(resp) => {
+                    let aggregated = resp
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|e| Error::Backend(format!("minio read body: {e}")))?;
+                    Some(aggregated.into_bytes())
                 }
-            }
-        };
+                Err(err) => {
+                    let msg = err.to_string();
+                    if msg.contains("NoSuchKey") || msg.contains("not found") {
+                        None
+                    } else {
+                        return Err(Error::Backend(format!("minio get_blob: {err}")));
+                    }
+                }
+            };
 
-        Ok(out)
+            Ok(out)
+        })
+        .await
     }
 
     async fn delete_blob(&self, key: &[u8]) -> Result<()> {
@@ -138,10 +166,14 @@ impl BlobStore for MinioBlobStore {
             req = req.continuation_token(token);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| Error::Backend(format!("minio list_prefix: {e}")))?;
+        let resp = self
+            .with_retry("list_prefix", || async {
+                req.clone()
+                    .send()
+                    .await
+                    .map_err(|e| Error::Backend(format!("minio list_prefix: {e}")))
+            })
+            .await?;
 
         let mut keys = Vec::new();
         for obj in resp.contents() {
@@ -162,6 +194,51 @@ impl BlobStore for MinioBlobStore {
                 .map(|t| t.as_bytes().to_vec()),
         })
     }
+}
+
+impl MinioBlobStore {
+    async fn with_retry<T, F, Fut>(&self, _op: &str, mut f: F) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: core::future::Future<Output = Result<T>>,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            match f().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if attempt >= self.max_retries || !is_retryable_backend_error(&e) {
+                        return Err(e);
+                    }
+                    let backoff =
+                        compute_backoff_ms(attempt, self.base_delay_ms, self.max_delay_ms);
+                    sleep(Duration::from_millis(backoff)).await;
+                    attempt = attempt.saturating_add(1);
+                }
+            }
+        }
+    }
+}
+
+fn compute_backoff_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {
+    let factor = 1u64 << core::cmp::min(attempt, 8);
+    core::cmp::min(base_ms.saturating_mul(factor), max_ms)
+}
+
+fn is_retryable_backend_error(err: &Error) -> bool {
+    let Error::Backend(msg) = err else {
+        return false;
+    };
+    let s = msg.to_ascii_lowercase();
+    s.contains("timeout")
+        || s.contains("temporar")
+        || s.contains("connection")
+        || s.contains("reset")
+        || s.contains("refused")
+        || s.contains("unavailable")
+        || s.contains("throttl")
+        || s.contains("503")
+        || s.contains("500")
 }
 
 fn normalize_prefix(p: &str) -> String {

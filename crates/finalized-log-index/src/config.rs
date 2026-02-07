@@ -22,6 +22,8 @@ pub struct Config {
     pub max_orphan_chunk_bytes: u64,
     pub max_orphan_manifest_segments: u64,
     pub max_stale_tail_keys: u64,
+    pub backend_error_throttle_after: u64,
+    pub backend_error_degraded_after: u64,
 }
 
 impl Default for Config {
@@ -37,6 +39,8 @@ impl Default for Config {
             max_orphan_chunk_bytes: 32 * 1024 * 1024 * 1024,
             max_orphan_manifest_segments: 500_000,
             max_stale_tail_keys: 1_000_000,
+            backend_error_throttle_after: 3,
+            backend_error_degraded_after: 10,
         }
     }
 }

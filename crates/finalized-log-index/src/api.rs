@@ -22,6 +22,7 @@ pub trait FinalizedLogIndex: Send + Sync {
 struct RuntimeState {
     degraded: AtomicBool,
     throttled: AtomicBool,
+    consecutive_backend_errors: std::sync::atomic::AtomicU64,
     reason: Mutex<String>,
 }
 
@@ -47,6 +48,29 @@ impl RuntimeState {
             && let Ok(mut r) = self.reason.lock()
         {
             r.clear();
+        }
+    }
+
+    fn on_backend_success(&self) {
+        self.consecutive_backend_errors.store(0, Ordering::Relaxed);
+        if self.throttled.load(Ordering::Relaxed) && !self.degraded.load(Ordering::Relaxed) {
+            self.clear_throttle();
+        }
+    }
+
+    fn on_backend_error(&self, reason: String, throttle_after: u64, degraded_after: u64) {
+        let count = self
+            .consecutive_backend_errors
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if count >= degraded_after {
+            self.set_degraded(format!(
+                "backend failure threshold exceeded ({count}/{degraded_after}): {reason}"
+            ));
+        } else if count >= throttle_after {
+            self.set_throttled(format!(
+                "backend failures throttling ({count}/{throttle_after}): {reason}"
+            ));
         }
     }
 
@@ -83,9 +107,12 @@ impl<M: MetaStore, B: BlobStore> FinalizedIndexService<M, B> {
         if self.state.degraded.load(Ordering::Relaxed) {
             return Err(Error::Degraded(self.state.reason()));
         }
-        self.ingest
+        let res = self
+            .ingest
             .run_periodic_maintenance(self.writer_epoch)
-            .await
+            .await;
+        self.update_backend_state(&res);
+        res
     }
 
     pub async fn run_gc_once(&self) -> Result<GcStats> {
@@ -98,7 +125,19 @@ impl<M: MetaStore, B: BlobStore> FinalizedIndexService<M, B> {
             &self.ingest.blob_store,
             &self.config,
         );
-        let stats = worker.run_once().await?;
+        let stats = match worker.run_once().await {
+            Ok(v) => v,
+            Err(e) => {
+                if let Error::Backend(msg) = &e {
+                    self.state.on_backend_error(
+                        msg.clone(),
+                        self.config.backend_error_throttle_after,
+                        self.config.backend_error_degraded_after,
+                    );
+                }
+                return Err(e);
+            }
+        };
 
         if stats.exceeded_guardrail {
             match self.config.gc_guardrail_action {
@@ -127,9 +166,23 @@ impl<M: MetaStore, B: BlobStore> FinalizedIndexService<M, B> {
             &self.ingest.blob_store,
             &self.config,
         );
-        worker
+        let res = worker
             .prune_block_hash_index_below(min_block_num, self.writer_epoch)
-            .await
+            .await;
+        self.update_backend_state(&res);
+        res
+    }
+
+    fn update_backend_state<T>(&self, res: &Result<T>) {
+        match res {
+            Ok(_) => self.state.on_backend_success(),
+            Err(Error::Backend(msg)) => self.state.on_backend_error(
+                msg.clone(),
+                self.config.backend_error_throttle_after,
+                self.config.backend_error_degraded_after,
+            ),
+            _ => {}
+        }
     }
 }
 
@@ -147,6 +200,7 @@ impl<M: MetaStore, B: BlobStore> FinalizedLogIndex for FinalizedIndexService<M, 
             .ingest
             .ingest_finalized_block(&block, self.writer_epoch)
             .await;
+        self.update_backend_state(&res);
         if let Err(Error::InvalidParent | Error::FinalityViolation) = &res {
             self.state
                 .set_degraded("finality violation or parent mismatch".to_string());
@@ -158,14 +212,17 @@ impl<M: MetaStore, B: BlobStore> FinalizedLogIndex for FinalizedIndexService<M, 
         if self.state.degraded.load(Ordering::Relaxed) {
             return Err(Error::Degraded(self.state.reason()));
         }
-        self.query
+        let res = self
+            .query
             .query_finalized(
                 &self.ingest.meta_store,
                 &self.ingest.blob_store,
                 filter,
                 options,
             )
-            .await
+            .await;
+        self.update_backend_state(&res);
+        res
     }
 
     async fn indexed_finalized_head(&self) -> Result<u64> {
@@ -173,10 +230,12 @@ impl<M: MetaStore, B: BlobStore> FinalizedLogIndex for FinalizedIndexService<M, 
         use crate::domain::keys::META_STATE_KEY;
 
         let state = self.ingest.meta_store.get(META_STATE_KEY).await?;
-        match state {
+        let res = match state {
             Some(r) => Ok(decode_meta_state(&r.value)?.indexed_finalized_head),
             None => Ok(0),
-        }
+        };
+        self.update_backend_state(&res);
+        res
     }
 
     async fn health(&self) -> HealthReport {

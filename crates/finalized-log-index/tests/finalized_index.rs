@@ -1,4 +1,6 @@
 use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
@@ -36,6 +38,54 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
         block_hash: [block_num as u8; 32],
         parent_hash,
         logs,
+    }
+}
+
+struct FlakyMetaStore {
+    inner: InMemoryMetaStore,
+    fail_get_remaining: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl MetaStore for FlakyMetaStore {
+    async fn get(
+        &self,
+        key: &[u8],
+    ) -> finalized_log_index::error::Result<Option<finalized_log_index::store::traits::Record>>
+    {
+        if self.fail_get_remaining.load(Ordering::Relaxed) > 0 {
+            self.fail_get_remaining.fetch_sub(1, Ordering::Relaxed);
+            return Err(Error::Backend("injected backend get failure".to_string()));
+        }
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: bytes::Bytes,
+        cond: finalized_log_index::store::traits::PutCond,
+        fence: FenceToken,
+    ) -> finalized_log_index::error::Result<finalized_log_index::store::traits::PutResult> {
+        self.inner.put(key, value, cond, fence).await
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: finalized_log_index::store::traits::DelCond,
+        fence: FenceToken,
+    ) -> finalized_log_index::error::Result<()> {
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_log_index::error::Result<finalized_log_index::store::traits::Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
 
@@ -610,5 +660,103 @@ fn prune_block_hash_index_hook() {
                 .expect("get b2 map")
                 .is_some()
         );
+    });
+}
+
+#[test]
+fn backend_failures_throttle_then_degrade() {
+    block_on(async {
+        let fail_counter = Arc::new(AtomicUsize::new(3));
+        let svc = FinalizedIndexService::new(
+            Config {
+                backend_error_throttle_after: 2,
+                backend_error_degraded_after: 3,
+                ..Config::default()
+            },
+            FlakyMetaStore {
+                inner: InMemoryMetaStore::default(),
+                fail_get_remaining: fail_counter,
+            },
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 1, 1, 1, 0, 0)]);
+
+        let e1 = svc
+            .ingest_finalized_block(b1.clone())
+            .await
+            .expect_err("err1");
+        assert!(matches!(e1, Error::Backend(_)));
+        assert!(!svc.health().await.degraded);
+
+        let e2 = svc
+            .ingest_finalized_block(b1.clone())
+            .await
+            .expect_err("err2");
+        assert!(matches!(e2, Error::Backend(_)));
+        let h2 = svc.health().await;
+        assert!(!h2.degraded);
+        assert!(h2.message.contains("throttled"));
+
+        let e3 = svc.ingest_finalized_block(b1).await.expect_err("err3");
+        assert!(matches!(e3, Error::Throttled(_)));
+
+        let qerr = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    block_hash: None,
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect_err("backend query error");
+        assert!(matches!(qerr, Error::Backend(_)));
+        assert!(svc.health().await.degraded);
+    });
+}
+
+#[test]
+fn backend_success_clears_throttle() {
+    block_on(async {
+        let fail_counter = Arc::new(AtomicUsize::new(2));
+        let svc = FinalizedIndexService::new(
+            Config {
+                backend_error_throttle_after: 2,
+                backend_error_degraded_after: 10,
+                ..Config::default()
+            },
+            FlakyMetaStore {
+                inner: InMemoryMetaStore::default(),
+                fail_get_remaining: fail_counter,
+            },
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 1, 1, 1, 0, 0)]);
+
+        let _ = svc
+            .ingest_finalized_block(b1.clone())
+            .await
+            .expect_err("err1");
+        let _ = svc
+            .ingest_finalized_block(b1.clone())
+            .await
+            .expect_err("err2");
+        assert!(svc.health().await.message.contains("throttled"));
+
+        let _ = svc.indexed_finalized_head().await.expect("head probe");
+        svc.ingest_finalized_block(b1)
+            .await
+            .expect("eventual success");
+        let health = svc.health().await;
+        assert!(!health.degraded);
+        assert_eq!(health.message, "ok");
     });
 }

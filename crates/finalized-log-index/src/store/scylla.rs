@@ -2,6 +2,7 @@ use bytes::Bytes;
 use scylla::frame::response::result::CqlValue;
 use scylla::{Session, SessionBuilder};
 use std::sync::Arc;
+use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
@@ -24,6 +25,9 @@ pub struct ScyllaMetaStore {
     table: String,
     fence_table: String,
     fence_key: String,
+    max_retries: u32,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
 }
 
 impl ScyllaMetaStore {
@@ -90,32 +94,54 @@ impl ScyllaMetaStore {
             table,
             fence_table,
             fence_key: DEFAULT_FENCE_KEY.to_string(),
+            max_retries: 4,
+            base_delay_ms: 25,
+            max_delay_ms: 1000,
         })
     }
 
+    pub fn with_retry_policy(
+        mut self,
+        max_retries: u32,
+        base_delay_ms: u64,
+        max_delay_ms: u64,
+    ) -> Self {
+        self.max_retries = max_retries;
+        self.base_delay_ms = base_delay_ms;
+        self.max_delay_ms = max_delay_ms;
+        self
+    }
+
     pub async fn set_min_epoch(&self, min_epoch: u64) -> Result<()> {
-        self.session
-            .query_unpaged(
-                format!(
-                    "INSERT INTO {} (id, min_epoch) VALUES (?, ?)",
-                    self.fence_table
-                ),
-                (self.fence_key.as_str(), min_epoch as i64),
-            )
-            .await
-            .map_err(|e| Error::Backend(format!("set min epoch: {e}")))?;
+        self.with_retry("set_min_epoch", || async {
+            self.session
+                .query_unpaged(
+                    format!(
+                        "INSERT INTO {} (id, min_epoch) VALUES (?, ?)",
+                        self.fence_table
+                    ),
+                    (self.fence_key.as_str(), min_epoch as i64),
+                )
+                .await
+                .map_err(|e| Error::Backend(format!("set min epoch: {e}")))?;
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
 
     async fn validate_fence(&self, fence: FenceToken) -> Result<()> {
         let res = self
-            .session
-            .query_unpaged(
-                format!("SELECT min_epoch FROM {} WHERE id = ?", self.fence_table),
-                (self.fence_key.as_str(),),
-            )
-            .await
-            .map_err(|e| Error::Backend(format!("get min epoch: {e}")))?;
+            .with_retry("validate_fence", || async {
+                self.session
+                    .query_unpaged(
+                        format!("SELECT min_epoch FROM {} WHERE id = ?", self.fence_table),
+                        (self.fence_key.as_str(),),
+                    )
+                    .await
+                    .map_err(|e| Error::Backend(format!("get min epoch: {e}")))
+            })
+            .await?;
 
         let min_epoch = first_col_i64(res).map(|v| v as u64).unwrap_or(0);
         if fence.0 < min_epoch {
@@ -129,17 +155,21 @@ impl ScyllaMetaStore {
 impl MetaStore for ScyllaMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         let grp = extract_group(key);
+        let key_vec = key.to_vec();
         let res = self
-            .session
-            .query_unpaged(
-                format!(
-                    "SELECT v, version FROM {} WHERE grp = ? AND k = ?",
-                    self.table
-                ),
-                (grp.as_str(), key.to_vec()),
-            )
-            .await
-            .map_err(|e| Error::Backend(format!("scylla get: {e}")))?;
+            .with_retry("get", || async {
+                self.session
+                    .query_unpaged(
+                        format!(
+                            "SELECT v, version FROM {} WHERE grp = ? AND k = ?",
+                            self.table
+                        ),
+                        (grp.as_str(), key_vec.clone()),
+                    )
+                    .await
+                    .map_err(|e| Error::Backend(format!("scylla get: {e}")))
+            })
+            .await?;
 
         let row = first_row_v_version(res);
         Ok(row.map(|(v, version)| Record {
@@ -163,55 +193,65 @@ impl MetaStore for ScyllaMetaStore {
 
         let applied = match cond {
             PutCond::Any => {
-                self.session
-                    .query_unpaged(
-                        format!(
-                            "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?)",
-                            self.table
-                        ),
-                        (
-                            grp.as_str(),
-                            key.to_vec(),
-                            value.to_vec(),
-                            next_version as i64,
-                        ),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla put any: {e}")))?;
+                self.with_retry("put_any", || async {
+                    self.session
+                        .query_unpaged(
+                            format!(
+                                "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?)",
+                                self.table
+                            ),
+                            (
+                                grp.as_str(),
+                                key.to_vec(),
+                                value.to_vec(),
+                                next_version as i64,
+                            ),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla put any: {e}")))?;
+                    Ok(())
+                })
+                .await?;
                 true
             }
             PutCond::IfAbsent => {
                 let res = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
-                            self.table
-                        ),
-                        (grp.as_str(), key.to_vec(), value.to_vec(), 1_i64),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))?;
+                    .with_retry("put_if_absent", || async {
+                        self.session
+                            .query_unpaged(
+                                format!(
+                                    "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+                                    self.table
+                                ),
+                                (grp.as_str(), key.to_vec(), value.to_vec(), 1_i64),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))
+                    })
+                    .await?;
                 lwt_applied(res)?
             }
             PutCond::IfVersion(v) => {
                 let res = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND k = ? IF version = ?",
-                            self.table
-                        ),
-                        (
-                            value.to_vec(),
-                            next_version as i64,
-                            grp.as_str(),
-                            key.to_vec(),
-                            v as i64,
-                        ),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla put if version: {e}")))?;
+                    .with_retry("put_if_version", || async {
+                        self.session
+                            .query_unpaged(
+                                format!(
+                                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND k = ? IF version = ?",
+                                    self.table
+                                ),
+                                (
+                                    value.to_vec(),
+                                    next_version as i64,
+                                    grp.as_str(),
+                                    key.to_vec(),
+                                    v as i64,
+                                ),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla put if version: {e}")))
+                    })
+                    .await?;
                 lwt_applied(res)?
             }
         };
@@ -226,26 +266,33 @@ impl MetaStore for ScyllaMetaStore {
         let grp = extract_group(key);
         match cond {
             DelCond::Any => {
-                self.session
-                    .query_unpaged(
-                        format!("DELETE FROM {} WHERE grp = ? AND k = ?", self.table),
-                        (grp.as_str(), key.to_vec()),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
+                self.with_retry("delete_any", || async {
+                    self.session
+                        .query_unpaged(
+                            format!("DELETE FROM {} WHERE grp = ? AND k = ?", self.table),
+                            (grp.as_str(), key.to_vec()),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
+                    Ok(())
+                })
+                .await?;
             }
             DelCond::IfVersion(v) => {
                 let _ = self
-                    .session
-                    .query_unpaged(
-                        format!(
-                            "DELETE FROM {} WHERE grp = ? AND k = ? IF version = ?",
-                            self.table
-                        ),
-                        (grp.as_str(), key.to_vec(), v as i64),
-                    )
-                    .await
-                    .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))?;
+                    .with_retry("delete_if_version", || async {
+                        self.session
+                            .query_unpaged(
+                                format!(
+                                    "DELETE FROM {} WHERE grp = ? AND k = ? IF version = ?",
+                                    self.table
+                                ),
+                                (grp.as_str(), key.to_vec(), v as i64),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))
+                    })
+                    .await?;
             }
         }
         Ok(())
@@ -271,13 +318,16 @@ impl MetaStore for ScyllaMetaStore {
                 break;
             }
             let res = self
-                .session
-                .query_unpaged(
-                    format!("SELECT k FROM {} WHERE grp = ?", self.table),
-                    (grp.as_str(),),
-                )
-                .await
-                .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))?;
+                .with_retry("list_prefix", || async {
+                    self.session
+                        .query_unpaged(
+                            format!("SELECT k FROM {} WHERE grp = ?", self.table),
+                            (grp.as_str(),),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))
+                })
+                .await?;
 
             if let Ok(rows_result) = res.into_rows_result()
                 && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
@@ -302,6 +352,30 @@ impl MetaStore for ScyllaMetaStore {
             None
         };
         Ok(Page { keys, next_cursor })
+    }
+}
+
+impl ScyllaMetaStore {
+    async fn with_retry<T, F, Fut>(&self, _op: &str, mut f: F) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: core::future::Future<Output = Result<T>>,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            match f().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if attempt >= self.max_retries || !is_retryable_backend_error(&e) {
+                        return Err(e);
+                    }
+                    let backoff =
+                        compute_backoff_ms(attempt, self.base_delay_ms, self.max_delay_ms);
+                    sleep(Duration::from_millis(backoff)).await;
+                    attempt = attempt.saturating_add(1);
+                }
+            }
+        }
     }
 }
 
@@ -354,4 +428,24 @@ fn extract_group(key: &[u8]) -> String {
     } else {
         out
     }
+}
+
+fn compute_backoff_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {
+    let factor = 1u64 << core::cmp::min(attempt, 8);
+    core::cmp::min(base_ms.saturating_mul(factor), max_ms)
+}
+
+fn is_retryable_backend_error(err: &Error) -> bool {
+    let Error::Backend(msg) = err else {
+        return false;
+    };
+    let s = msg.to_ascii_lowercase();
+    s.contains("timeout")
+        || s.contains("temporar")
+        || s.contains("connection")
+        || s.contains("reset")
+        || s.contains("refused")
+        || s.contains("unavailable")
+        || s.contains("overloaded")
+        || s.contains("failed to perform a connection setup request")
 }
