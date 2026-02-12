@@ -1,5 +1,6 @@
 use crate::artifact::{
-    read_dataset_manifest, read_parquet_stats, write_dataset_artifacts, write_trace_jsonl,
+    read_dataset_manifest, read_parquet_stats, write_dataset_artifacts, write_dataset_manifest,
+    write_trace_jsonl,
 };
 use crate::config::GeneratorConfig;
 use crate::error::Error;
@@ -48,6 +49,7 @@ pub async fn run_offline_generate(
     let mut manifest = read_dataset_manifest(dataset_path)?;
     let stats = read_parquet_stats(dataset_path)?;
     manifest.seed = Some(seed);
+    write_dataset_manifest(dataset_path, &manifest)?;
 
     let generated = generate_traces(&config, &manifest, &stats, seed)?;
 

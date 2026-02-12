@@ -1,5 +1,5 @@
 use log_workload_gen::artifact::ParquetStats;
-use log_workload_gen::config::GeneratorConfig;
+use log_workload_gen::config::{GeneratorConfig, MaxThreads};
 use log_workload_gen::generate::generate_traces;
 use log_workload_gen::stats::{KeyStatsRow, KeyType};
 use log_workload_gen::types::DatasetManifest;
@@ -61,6 +61,29 @@ fn generation_respects_sizes_ids_and_block_bounds() {
             assert!((0.0..=1.0).contains(&entry.observed_block_coverage_ratio));
         }
     }
+}
+
+#[test]
+fn generation_is_invariant_to_max_threads_setting() {
+    let cfg_1 = GeneratorConfig {
+        trace_size_per_profile: 32,
+        scale_factor: 1.0,
+        max_threads: MaxThreads::Value(1),
+        ..GeneratorConfig::default()
+    };
+    let cfg_n = GeneratorConfig {
+        trace_size_per_profile: 32,
+        scale_factor: 1.0,
+        max_threads: MaxThreads::NumCpus,
+        ..GeneratorConfig::default()
+    };
+    let manifest = manifest();
+    let stats = stats();
+
+    let a = generate_traces(&cfg_1, &manifest, &stats, 42).expect("generate traces");
+    let b = generate_traces(&cfg_n, &manifest, &stats, 42).expect("generate traces");
+
+    assert_eq!(a, b);
 }
 
 fn manifest() -> DatasetManifest {

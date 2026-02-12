@@ -37,6 +37,10 @@ pub fn read_dataset_manifest(dataset_dir: &Path) -> Result<DatasetManifest, Erro
     manifest::read_manifest(&dataset_dir.join("dataset_manifest.json"))
 }
 
+pub fn write_dataset_manifest(dataset_dir: &Path, manifest: &DatasetManifest) -> Result<(), Error> {
+    manifest::write_manifest(&dataset_dir.join("dataset_manifest.json"), manifest)
+}
+
 pub fn read_parquet_stats(dataset_dir: &Path) -> Result<ParquetStats, Error> {
     Ok(ParquetStats {
         key_stats: parquet::read_key_stats_parquet(&dataset_dir.join("key_stats.parquet"))?,

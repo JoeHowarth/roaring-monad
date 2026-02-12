@@ -1,3 +1,4 @@
+use log_workload_gen::artifact::read_dataset_manifest;
 use log_workload_gen::config::GeneratorConfig;
 use log_workload_gen::pipeline::{run_collect, run_collect_and_generate, run_offline_generate};
 use log_workload_gen::types::{ChainEvent, LogEntry, Message};
@@ -88,6 +89,8 @@ async fn run_collect_and_generate_writes_trace_files() {
     assert!(dataset_dir.join("trace_expected.jsonl").exists());
     assert!(dataset_dir.join("trace_stress.jsonl").exists());
     assert!(dataset_dir.join("trace_adversarial.jsonl").exists());
+    let manifest = read_dataset_manifest(&dataset_dir).expect("manifest");
+    assert_eq!(manifest.seed, Some(7));
 }
 
 #[tokio::test]
@@ -121,4 +124,6 @@ async fn run_offline_generate_uses_existing_dataset() {
     assert_eq!(out.stress, 4);
     assert_eq!(out.adversarial, 4);
     assert!(dataset_dir.join("trace_expected.jsonl").exists());
+    let manifest = read_dataset_manifest(&dataset_dir).expect("manifest");
+    assert_eq!(manifest.seed, Some(99));
 }
