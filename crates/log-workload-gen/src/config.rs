@@ -10,6 +10,8 @@ pub struct GeneratorConfig {
     pub trace_size_per_profile: u64,
     pub scale_factor: f64,
     pub max_threads: MaxThreads,
+    pub event_queue_capacity: u64,
+    pub task_queue_capacity: u64,
     pub cooccurrence_top_k_per_type: u64,
     pub logs_per_window_size_blocks: u64,
     pub profiles: ProfilesConfig,
@@ -81,6 +83,8 @@ impl Default for GeneratorConfig {
             trace_size_per_profile: 100_000,
             scale_factor: 1.0,
             max_threads: MaxThreads::NumCpus,
+            event_queue_capacity: 8_192,
+            task_queue_capacity: 4_096,
             cooccurrence_top_k_per_type: 10_000,
             logs_per_window_size_blocks: 1_000,
             profiles: ProfilesConfig {
@@ -163,6 +167,16 @@ impl GeneratorConfig {
         if self.cooccurrence_top_k_per_type < 1 {
             return Err(Error::ConfigInvalid(
                 "cooccurrence_top_k_per_type must be >= 1".to_string(),
+            ));
+        }
+        if self.event_queue_capacity < 1 {
+            return Err(Error::ConfigInvalid(
+                "event_queue_capacity must be >= 1".to_string(),
+            ));
+        }
+        if self.task_queue_capacity < 1 {
+            return Err(Error::ConfigInvalid(
+                "task_queue_capacity must be >= 1".to_string(),
             ));
         }
         if self.logs_per_window_size_blocks < 1 {

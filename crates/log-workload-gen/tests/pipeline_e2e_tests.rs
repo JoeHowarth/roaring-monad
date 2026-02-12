@@ -61,6 +61,32 @@ async fn run_collect_writes_required_artifacts() {
 }
 
 #[tokio::test]
+async fn run_collect_respects_small_event_queue_capacity() {
+    let temp = tempdir().expect("tempdir");
+    let dataset_dir = temp.path().join("dataset_small_queue");
+    let cfg = GeneratorConfig {
+        trace_size_per_profile: 5,
+        event_queue_capacity: 1,
+        ..GeneratorConfig::default()
+    };
+
+    let rx = feed(vec![
+        ev(100, 0x10, 0xa1, 0xb1),
+        ev(101, 0x11, 0xa2, 0xb2),
+        ev(102, 0x12, 0xa3, 0xb3),
+        Message::EndOfStream {
+            expected_end_block: 102,
+        },
+    ])
+    .await;
+
+    let out = run_collect(cfg, rx, &dataset_dir)
+        .await
+        .expect("run_collect");
+    assert!(out.valid);
+}
+
+#[tokio::test]
 async fn run_collect_and_generate_writes_trace_files() {
     let temp = tempdir().expect("tempdir");
     let dataset_dir = temp.path().join("dataset_collect_generate");

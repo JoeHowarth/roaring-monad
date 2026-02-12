@@ -6,6 +6,7 @@ use crate::config::GeneratorConfig;
 use crate::error::Error;
 use crate::generate::generate_traces;
 use crate::ingest::consume_messages_with_events;
+use crate::runtime::bounded_queue::bounded;
 use crate::stats::{CooccurrenceAccumulator, KeyStatsAccumulator, RangeStatsAccumulator};
 use crate::types::{DatasetManifest, DatasetSummary, TraceSummary};
 use std::path::Path;
@@ -18,7 +19,8 @@ pub async fn run_collect(
     dataset_path: &Path,
 ) -> Result<DatasetSummary, Error> {
     config.validate()?;
-    let (summary, key_rows, co_rows, range_rows) = collect_and_build_stats(&config, receiver).await;
+    let (summary, key_rows, co_rows, range_rows) =
+        collect_and_build_stats(&config, receiver).await?;
 
     let manifest = build_manifest(&config, &summary, None)?;
     write_dataset_artifacts(dataset_path, &manifest, &key_rows, &co_rows, &range_rows)?;
@@ -72,17 +74,33 @@ pub async fn run_offline_generate(
 
 async fn collect_and_build_stats(
     config: &GeneratorConfig,
-    mut receiver: Receiver<crate::types::Message>,
-) -> (
-    DatasetSummary,
-    Vec<crate::stats::KeyStatsRow>,
-    Vec<crate::stats::CooccurrenceRow>,
-    Vec<crate::stats::RangeStatsRow>,
-) {
+    receiver: Receiver<crate::types::Message>,
+) -> Result<
+    (
+        DatasetSummary,
+        Vec<crate::stats::KeyStatsRow>,
+        Vec<crate::stats::CooccurrenceRow>,
+        Vec<crate::stats::RangeStatsRow>,
+    ),
+    Error,
+> {
+    let (qtx, mut qrx, _) = bounded(config.event_queue_capacity as usize)?;
+    let producer = tokio::spawn(async move {
+        let mut receiver = receiver;
+        while let Some(msg) = receiver.recv().await {
+            if qtx.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
     let mut messages = Vec::new();
-    while let Some(msg) = receiver.recv().await {
+    while let Some(msg) = qrx.recv().await {
         messages.push(msg);
     }
+    producer
+        .await
+        .map_err(|e| Error::InternalInvariant(format!("message producer join error: {e}")))?;
 
     let (summary, events) = consume_messages_with_events(messages);
 
@@ -105,7 +123,7 @@ async fn collect_and_build_stats(
     } else {
         Vec::new()
     };
-    (summary, key_rows, co_rows, range_rows)
+    Ok((summary, key_rows, co_rows, range_rows))
 }
 
 fn build_manifest(

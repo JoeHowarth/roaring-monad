@@ -8,6 +8,8 @@ fn default_config_matches_spec_shape_basics() {
     assert_eq!(cfg.trace_size_per_profile, 100_000);
     assert_eq!(cfg.scale_factor, 1.0);
     assert_eq!(cfg.max_threads, MaxThreads::NumCpus);
+    assert_eq!(cfg.event_queue_capacity, 8_192);
+    assert_eq!(cfg.task_queue_capacity, 4_096);
     assert_eq!(cfg.cooccurrence_top_k_per_type, 10_000);
     assert_eq!(cfg.logs_per_window_size_blocks, 1_000);
     assert_eq!(cfg.profiles.expected.address_or_width.min, 1);
@@ -23,6 +25,19 @@ fn default_config_matches_spec_shape_basics() {
             .get(&QueryTemplate::SingleAddress),
         Some(&0.30)
     );
+}
+
+#[test]
+fn validate_rejects_invalid_queue_capacity() {
+    let cfg = GeneratorConfig {
+        event_queue_capacity: 0,
+        ..GeneratorConfig::default()
+    };
+
+    let err = cfg
+        .validate()
+        .expect_err("event_queue_capacity must be rejected");
+    assert!(err.to_string().contains("event_queue_capacity"));
 }
 
 #[test]
