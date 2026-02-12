@@ -1,7 +1,9 @@
 use crate::Error;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GeneratorConfig {
@@ -13,10 +15,9 @@ pub struct GeneratorConfig {
     pub profiles: ProfilesConfig,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MaxThreads {
-    NumCpus(String),
+    NumCpus,
     Value(u32),
 }
 
@@ -68,10 +69,9 @@ pub enum BlockRangeSource {
     HeavyNearFullRange,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum BlockRangeMax {
-    FullRange(String),
+    FullRange,
     Value(u64),
 }
 
@@ -80,7 +80,7 @@ impl Default for GeneratorConfig {
         Self {
             trace_size_per_profile: 100_000,
             scale_factor: 1.0,
-            max_threads: MaxThreads::NumCpus("num_cpus".to_string()),
+            max_threads: MaxThreads::NumCpus,
             cooccurrence_top_k_per_type: 10_000,
             logs_per_window_size_blocks: 1_000,
             profiles: ProfilesConfig {
@@ -134,7 +134,7 @@ impl Default for GeneratorConfig {
                     BlockRangeConfig {
                         source: BlockRangeSource::HeavyNearFullRange,
                         min: 10_000,
-                        max: BlockRangeMax::FullRange("full_range".to_string()),
+                        max: BlockRangeMax::FullRange,
                     },
                     0.10,
                 ),
@@ -154,12 +154,7 @@ impl GeneratorConfig {
             return Err(Error::ConfigInvalid("scale_factor must be > 0".to_string()));
         }
         match &self.max_threads {
-            MaxThreads::NumCpus(v) if v == "num_cpus" => {}
-            MaxThreads::NumCpus(_) => {
-                return Err(Error::ConfigInvalid(
-                    "max_threads string form must be \"num_cpus\"".to_string(),
-                ));
-            }
+            MaxThreads::NumCpus => {}
             MaxThreads::Value(v) if *v >= 1 => {}
             MaxThreads::Value(_) => {
                 return Err(Error::ConfigInvalid("max_threads must be >= 1".to_string()));
@@ -246,13 +241,7 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), Error> {
                 )));
             }
         }
-        BlockRangeMax::FullRange(v) => {
-            if v != "full_range" {
-                return Err(Error::ConfigInvalid(format!(
-                    "profiles.{name}.block_range_blocks.max string form must be \"full_range\""
-                )));
-            }
-        }
+        BlockRangeMax::FullRange => {}
     }
     if !(0.0..=1.0).contains(&profile.empty_result_target_share) {
         return Err(Error::ConfigInvalid(format!(
@@ -260,4 +249,98 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), Error> {
         )));
     }
     Ok(())
+}
+
+impl Serialize for MaxThreads {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::NumCpus => serializer.serialize_str("num_cpus"),
+            Self::Value(v) => serializer.serialize_u32(*v),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MaxThreads {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MaxThreadsVisitor;
+        impl<'de> Visitor<'de> for MaxThreadsVisitor {
+            type Value = MaxThreads;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "\"num_cpus\" or positive integer")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v == "num_cpus" {
+                    Ok(MaxThreads::NumCpus)
+                } else {
+                    Err(E::custom("max_threads string form must be \"num_cpus\""))
+                }
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v > u32::MAX as u64 {
+                    Err(E::custom("max_threads exceeds u32"))
+                } else {
+                    Ok(MaxThreads::Value(v as u32))
+                }
+            }
+        }
+        deserializer.deserialize_any(MaxThreadsVisitor)
+    }
+}
+
+impl Serialize for BlockRangeMax {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::FullRange => serializer.serialize_str("full_range"),
+            Self::Value(v) => serializer.serialize_u64(*v),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BlockRangeMax {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BlockRangeMaxVisitor;
+        impl<'de> Visitor<'de> for BlockRangeMaxVisitor {
+            type Value = BlockRangeMax;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "\"full_range\" or integer")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v == "full_range" {
+                    Ok(BlockRangeMax::FullRange)
+                } else {
+                    Err(E::custom(
+                        "block_range_blocks.max string form must be \"full_range\"",
+                    ))
+                }
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(BlockRangeMax::Value(v))
+            }
+        }
+        deserializer.deserialize_any(BlockRangeMaxVisitor)
+    }
 }

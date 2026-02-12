@@ -7,7 +7,7 @@ fn default_config_matches_spec_shape_basics() {
 
     assert_eq!(cfg.trace_size_per_profile, 100_000);
     assert_eq!(cfg.scale_factor, 1.0);
-    assert_eq!(cfg.max_threads, MaxThreads::NumCpus("num_cpus".to_string()));
+    assert_eq!(cfg.max_threads, MaxThreads::NumCpus);
     assert_eq!(cfg.cooccurrence_top_k_per_type, 10_000);
     assert_eq!(cfg.logs_per_window_size_blocks, 1_000);
     assert_eq!(cfg.profiles.expected.address_or_width.min, 1);

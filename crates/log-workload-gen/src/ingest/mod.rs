@@ -1,4 +1,6 @@
+mod block_sequence;
 mod consumer;
+mod gap_tracker;
 mod validator;
 
 pub use consumer::consume_messages;

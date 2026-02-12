@@ -13,37 +13,11 @@ use tokio::sync::mpsc::Receiver;
 
 pub async fn run_collect(
     config: GeneratorConfig,
-    mut receiver: Receiver<crate::types::Message>,
+    receiver: Receiver<crate::types::Message>,
     dataset_path: &Path,
 ) -> Result<DatasetSummary, Error> {
     config.validate()?;
-
-    let mut messages = Vec::new();
-    while let Some(msg) = receiver.recv().await {
-        messages.push(msg);
-    }
-
-    let (summary, events) = consume_messages_with_events(messages);
-
-    let mut key_stats = KeyStatsAccumulator::new();
-    let mut cooccurrence = CooccurrenceAccumulator::new(config.cooccurrence_top_k_per_type);
-    let mut range_stats = RangeStatsAccumulator::new(config.logs_per_window_size_blocks);
-
-    for event in &events {
-        for log in &event.logs {
-            key_stats.observe_log(event.block_number, log);
-            cooccurrence.observe_log(event.block_number, log);
-        }
-        range_stats.observe_block(event.block_number, event.logs.len() as u64, event.timestamp);
-    }
-
-    let key_rows = key_stats.finalize();
-    let co_rows = cooccurrence.finalize();
-    let range_rows = if let (Some(start), Some(end)) = (summary.start_block, summary.end_block) {
-        range_stats.finalize(start, end)
-    } else {
-        Vec::new()
-    };
+    let (summary, key_rows, co_rows, range_rows) = collect_and_build_stats(&config, receiver).await;
 
     let manifest = build_manifest(&config, &summary, None)?;
     write_dataset_artifacts(dataset_path, &manifest, &key_rows, &co_rows, &range_rows)?;
@@ -92,6 +66,44 @@ pub async fn run_offline_generate(
         stress: generated.stress.len() as u64,
         adversarial: generated.adversarial.len() as u64,
     })
+}
+
+async fn collect_and_build_stats(
+    config: &GeneratorConfig,
+    mut receiver: Receiver<crate::types::Message>,
+) -> (
+    DatasetSummary,
+    Vec<crate::stats::KeyStatsRow>,
+    Vec<crate::stats::CooccurrenceRow>,
+    Vec<crate::stats::RangeStatsRow>,
+) {
+    let mut messages = Vec::new();
+    while let Some(msg) = receiver.recv().await {
+        messages.push(msg);
+    }
+
+    let (summary, events) = consume_messages_with_events(messages);
+
+    let mut key_stats = KeyStatsAccumulator::new();
+    let mut cooccurrence = CooccurrenceAccumulator::new(config.cooccurrence_top_k_per_type);
+    let mut range_stats = RangeStatsAccumulator::new(config.logs_per_window_size_blocks);
+
+    for event in &events {
+        for log in &event.logs {
+            key_stats.observe_log(event.block_number, log);
+            cooccurrence.observe_log(event.block_number, log);
+        }
+        range_stats.observe_block(event.block_number, event.logs.len() as u64, event.timestamp);
+    }
+
+    let key_rows = key_stats.finalize();
+    let co_rows = cooccurrence.finalize();
+    let range_rows = if let (Some(start), Some(end)) = (summary.start_block, summary.end_block) {
+        range_stats.finalize(start, end)
+    } else {
+        Vec::new()
+    };
+    (summary, key_rows, co_rows, range_rows)
 }
 
 fn build_manifest(
