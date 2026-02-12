@@ -81,6 +81,19 @@ pub struct TraceSummary {
     pub adversarial: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub blocks_seen: u64,
+    pub logs_seen: u64,
+    pub artifact_write_seconds: f64,
+    pub trace_generate_seconds: f64,
+    pub trace_queries_generated: TraceSummary,
+    pub max_threads_used: u32,
+    pub max_queue_depth: u64,
+    pub dataset_valid: bool,
+    pub invalid_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainEvent {
     pub chain_id: u64,

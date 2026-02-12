@@ -8,9 +8,10 @@ use crate::generate::generate_traces;
 use crate::ingest::consume_messages_with_events;
 use crate::runtime::bounded_queue::bounded;
 use crate::stats::{CooccurrenceAccumulator, KeyStatsAccumulator, RangeStatsAccumulator};
-use crate::types::{DatasetManifest, DatasetSummary, TraceSummary};
+use crate::types::{DatasetManifest, DatasetSummary, RunSummary, TraceSummary};
+use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Receiver;
 
 pub async fn run_collect(
@@ -19,11 +20,32 @@ pub async fn run_collect(
     dataset_path: &Path,
 ) -> Result<DatasetSummary, Error> {
     config.validate()?;
-    let (summary, key_rows, co_rows, range_rows) =
+    let collect_started = Instant::now();
+    let (summary, key_rows, co_rows, range_rows, max_queue_depth) =
         collect_and_build_stats(&config, receiver).await?;
 
+    let artifact_started = Instant::now();
     let manifest = build_manifest(&config, &summary, None)?;
     write_dataset_artifacts(dataset_path, &manifest, &key_rows, &co_rows, &range_rows)?;
+    write_run_summary(
+        dataset_path,
+        &RunSummary {
+            blocks_seen: summary.blocks_observed,
+            logs_seen: summary.log_count,
+            artifact_write_seconds: artifact_started.elapsed().as_secs_f64(),
+            trace_generate_seconds: 0.0,
+            trace_queries_generated: TraceSummary {
+                expected: 0,
+                stress: 0,
+                adversarial: 0,
+            },
+            max_threads_used: resolve_max_threads(&config),
+            max_queue_depth,
+            dataset_valid: summary.valid,
+            invalid_reason: summary.invalid_reason.clone(),
+        },
+    )?;
+    let _ = collect_started;
     Ok(summary)
 }
 
@@ -39,7 +61,8 @@ pub async fn run_collect_and_generate(
             "cannot generate traces from invalid dataset".to_string(),
         ));
     }
-    run_offline_generate(config, dataset_path, seed).await
+    let trace_summary = run_offline_generate(config, dataset_path, seed).await?;
+    Ok(trace_summary)
 }
 
 pub async fn run_offline_generate(
@@ -48,6 +71,7 @@ pub async fn run_offline_generate(
     seed: u64,
 ) -> Result<TraceSummary, Error> {
     config.validate()?;
+    let generate_started = Instant::now();
     let mut manifest = read_dataset_manifest(dataset_path)?;
     let stats = read_parquet_stats(dataset_path)?;
     manifest.seed = Some(seed);
@@ -65,11 +89,37 @@ pub async fn run_offline_generate(
         &generated.adversarial,
     )?;
 
-    Ok(TraceSummary {
+    let trace_summary = TraceSummary {
         expected: generated.expected.len() as u64,
         stress: generated.stress.len() as u64,
         adversarial: generated.adversarial.len() as u64,
-    })
+    };
+
+    let existing = read_run_summary(dataset_path).unwrap_or(RunSummary {
+        blocks_seen: manifest.blocks_observed,
+        logs_seen: manifest.log_count,
+        artifact_write_seconds: 0.0,
+        trace_generate_seconds: 0.0,
+        trace_queries_generated: TraceSummary {
+            expected: 0,
+            stress: 0,
+            adversarial: 0,
+        },
+        max_threads_used: resolve_max_threads(&config),
+        max_queue_depth: 0,
+        dataset_valid: manifest.valid,
+        invalid_reason: manifest.invalid_reason.clone(),
+    });
+    write_run_summary(
+        dataset_path,
+        &RunSummary {
+            trace_generate_seconds: generate_started.elapsed().as_secs_f64(),
+            trace_queries_generated: trace_summary.clone(),
+            ..existing
+        },
+    )?;
+
+    Ok(trace_summary)
 }
 
 async fn collect_and_build_stats(
@@ -81,10 +131,11 @@ async fn collect_and_build_stats(
         Vec<crate::stats::KeyStatsRow>,
         Vec<crate::stats::CooccurrenceRow>,
         Vec<crate::stats::RangeStatsRow>,
+        u64,
     ),
     Error,
 > {
-    let (qtx, mut qrx, _) = bounded(config.event_queue_capacity as usize)?;
+    let (qtx, mut qrx, depth) = bounded(config.event_queue_capacity as usize)?;
     let producer = tokio::spawn(async move {
         let mut receiver = receiver;
         while let Some(msg) = receiver.recv().await {
@@ -123,7 +174,7 @@ async fn collect_and_build_stats(
     } else {
         Vec::new()
     };
-    Ok((summary, key_rows, co_rows, range_rows))
+    Ok((summary, key_rows, co_rows, range_rows, depth.max() as u64))
 }
 
 fn build_manifest(
@@ -154,4 +205,27 @@ fn build_manifest(
         valid: summary.valid,
         invalid_reason: summary.invalid_reason.clone(),
     })
+}
+
+fn resolve_max_threads(config: &GeneratorConfig) -> u32 {
+    match config.max_threads {
+        crate::config::MaxThreads::NumCpus => std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1),
+        crate::config::MaxThreads::Value(v) => v,
+    }
+}
+
+fn write_run_summary(dataset_path: &Path, run_summary: &RunSummary) -> Result<(), Error> {
+    let bytes = serde_json::to_vec_pretty(run_summary)
+        .map_err(|e| Error::Serialization(format!("serialize run summary: {e}")))?;
+    fs::write(dataset_path.join("run_summary.json"), bytes)
+        .map_err(|e| Error::Io(format!("write run summary: {e}")))
+}
+
+fn read_run_summary(dataset_path: &Path) -> Result<RunSummary, Error> {
+    let bytes = fs::read(dataset_path.join("run_summary.json"))
+        .map_err(|e| Error::Io(format!("read run summary: {e}")))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| Error::Serialization(format!("deserialize run summary: {e}")))
 }
