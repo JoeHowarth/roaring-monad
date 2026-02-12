@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod config;
 pub mod error;
+pub mod generate;
 pub mod ingest;
 pub mod stats;
 pub mod types;

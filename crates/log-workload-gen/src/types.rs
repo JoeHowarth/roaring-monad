@@ -39,6 +39,42 @@ pub struct DatasetManifest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceProfile {
+    Expected,
+    Stress,
+    Adversarial,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectivityBucket {
+    Empty,
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Huge,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TraceEntry {
+    pub id: u64,
+    pub profile: TraceProfile,
+    pub template: crate::config::QueryTemplate,
+    pub from_block: u64,
+    pub to_block: u64,
+    pub address_or: Vec<String>,
+    pub topic0_or: Vec<String>,
+    pub topic1_or: Vec<String>,
+    pub topic2_or: Vec<String>,
+    pub topic3_or: Vec<String>,
+    pub expected_selectivity_bucket: SelectivityBucket,
+    pub observed_block_coverage_ratio: f64,
+    pub notes: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainEvent {
     pub chain_id: u64,
     pub block_number: u64,

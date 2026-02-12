@@ -13,6 +13,8 @@ serde_json_canonicalizer.workspace = true
 arrow.workspace = true
 parquet.workspace = true
 hex.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
