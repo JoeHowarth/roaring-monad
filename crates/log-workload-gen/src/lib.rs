@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod generate;
 pub mod ingest;
+pub mod pipeline;
 pub mod stats;
 pub mod types;
 

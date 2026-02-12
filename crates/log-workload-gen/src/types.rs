@@ -75,6 +75,13 @@ pub struct TraceEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceSummary {
+    pub expected: u64,
+    pub stress: u64,
+    pub adversarial: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainEvent {
     pub chain_id: u64,
     pub block_number: u64,

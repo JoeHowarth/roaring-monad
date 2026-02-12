@@ -1,12 +1,13 @@
 use crate::error::Error;
 use crate::stats::{CooccurrenceRow, KeyStatsRow, KeyType, PairType, RangeMetric, RangeStatsRow};
-use crate::types::DatasetManifest;
+use crate::types::{DatasetManifest, TraceEntry};
 use arrow::array::{Array, Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -51,6 +52,19 @@ pub fn read_parquet_stats(dataset_dir: &Path) -> Result<ParquetStats, Error> {
         cooccurrence: read_cooccurrence_parquet(&dataset_dir.join("cooccurrence.parquet"))?,
         range_stats: read_range_stats_parquet(&dataset_dir.join("range_stats.parquet"))?,
     })
+}
+
+pub fn write_trace_jsonl(path: &Path, entries: &[TraceEntry]) -> Result<(), Error> {
+    let mut file = File::create(path).map_err(|e| Error::Io(format!("create trace file: {e}")))?;
+    for entry in entries {
+        let line = serde_json::to_string(entry)
+            .map_err(|e| Error::Serialization(format!("serialize trace entry: {e}")))?;
+        file.write_all(line.as_bytes())
+            .map_err(|e| Error::Io(format!("write trace line: {e}")))?;
+        file.write_all(b"\n")
+            .map_err(|e| Error::Io(format!("write trace newline: {e}")))?;
+    }
+    Ok(())
 }
 
 fn write_manifest(path: &Path, manifest: &DatasetManifest) -> Result<(), Error> {

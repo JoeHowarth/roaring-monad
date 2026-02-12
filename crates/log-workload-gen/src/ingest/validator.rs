@@ -1,6 +1,11 @@
 use crate::types::{ChainEvent, DatasetSummary};
 use std::collections::HashMap;
 
+pub(crate) enum AcceptOutcome {
+    New,
+    Duplicate,
+}
+
 pub(crate) struct Validator {
     chain_id: Option<u64>,
     start_block: Option<u64>,
@@ -28,7 +33,7 @@ impl Validator {
         }
     }
 
-    pub(crate) fn accept(&mut self, event: &ChainEvent) -> Result<(), String> {
+    pub(crate) fn accept(&mut self, event: &ChainEvent) -> Result<AcceptOutcome, String> {
         if let Some(existing_chain_id) = self.chain_id {
             if existing_chain_id != event.chain_id {
                 return Err("chain_id_mismatch".to_string());
@@ -39,7 +44,7 @@ impl Validator {
 
         if let Some(existing_hash) = self.seen_blocks.get(&event.block_number) {
             if existing_hash == &event.block_hash {
-                return Ok(());
+                return Ok(AcceptOutcome::Duplicate);
             }
             return Err("block_hash_mismatch".to_string());
         }
@@ -62,7 +67,7 @@ impl Validator {
         self.log_count += event.logs.len() as u64;
         self.seen_blocks
             .insert(event.block_number, event.block_hash);
-        Ok(())
+        Ok(AcceptOutcome::New)
     }
 
     pub(crate) fn summary_with_validity(
