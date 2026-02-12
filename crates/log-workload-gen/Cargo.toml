@@ -1,0 +1,21 @@
+[package]
+name = "log-workload-gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+serde_json_canonicalizer.workspace = true
+arrow.workspace = true
+parquet.workspace = true
+hex.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
