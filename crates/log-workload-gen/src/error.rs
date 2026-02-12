@@ -6,6 +6,10 @@ pub enum Error {
     InputInvalid(String),
     #[error("config invalid: {0}")]
     ConfigInvalid(String),
+    #[error("io error: {0}")]
+    Io(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("internal invariant: {0}")]
+    InternalInvariant(String),
 }

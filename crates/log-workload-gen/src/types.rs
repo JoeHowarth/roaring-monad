@@ -20,6 +20,25 @@ pub struct DatasetSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatasetManifest {
+    pub schema_version: String,
+    pub crate_version: String,
+    pub chain_id: u64,
+    pub start_block: u64,
+    pub end_block: u64,
+    pub blocks_observed: u64,
+    pub gap_count: u64,
+    pub missing_block_ranges: Option<Vec<[u64; 2]>>,
+    pub event_count: u64,
+    pub log_count: u64,
+    pub created_at: String,
+    pub config_hash: String,
+    pub seed: Option<u64>,
+    pub valid: bool,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainEvent {
     pub chain_id: u64,
     pub block_number: u64,
