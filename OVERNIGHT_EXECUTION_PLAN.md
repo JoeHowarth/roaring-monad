@@ -166,8 +166,8 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
   - ingest CLI supports `--skip-final-maintenance`.
   - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
 - Last completed geometry row:
-  - `iter=21` (`57233457..57233485`, span `65536`) at `6.84 blocks/s`, `241.92 logs/s`, total backend `7.26 GiB`.
-- Current size baseline: `infra/data/distributed` ~`7.3G`.
+  - `iter=23` (`57212000..57233795`, span `65536`) at `11.74 blocks/s`, `334.45 logs/s`, total backend `7.81 GiB`.
+- Current size baseline: `infra/data/distributed` ~`7.8G`.
 - Active unattended scale loop:
 
 ```bash
@@ -182,11 +182,11 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=23`
-  - `CUR_START_BLOCK=57212000`
+  - `ITER=24`
+  - `CUR_START_BLOCK=57233796`
   - `CUR_SPAN=65536`
 - Current active range:
-  - `iter=23` ingesting wrapped historical span `57212000..57233795` after source-head low-headroom detection.
+  - `iter=24` near-head span around `57233796..57238833` (will wrap to dense start when headroom drops below threshold).
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
 - Headroom recovery behavior added:
@@ -228,11 +228,13 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
   - early sample (`iter=5`): `mapped_block=486`, `elapsed=48.63s`, `blocks_per_sec=9.99`, `logs_per_sec=323.36`.
   - completed row (`iter=5`): `blocks_per_sec=11.24`, `logs_per_sec=331.97`, `ingest_seconds=713.03`.
   - post-optimization sample (`iter=23`): `mapped_block=251`, `elapsed=20.22s`, `blocks_per_sec=12.42`, `logs_per_sec=289.88`.
+  - `iter=23` completed: `21896` blocks range attempt resolved to `21796` blocks ingested at `11.74 blocks/s`, `334.45 logs/s`.
 
 - Recent committed reliability/perf changes:
   - `65394a0` wrap to `START_BLOCK` when near source head.
   - `43e6d69` optimize topic0 stats updates during ingest.
   - `a39b157` parallelize ingest writes with bounded concurrency.
+  - `ebfa2f8` parallelize query stream loading for OR/multi-stream query paths.
   - `de898c9` + `85d2081` add optional prebuilt benchmarking binary mode, but keep default scaler path on `cargo run` for shared-lib safety.
   - `4bea665` add watchdog script (`scripts/watch_scale_loop.sh`) for unattended auto-restart.
   - `2127d33` retarget scaler defaults to denser historical block window.

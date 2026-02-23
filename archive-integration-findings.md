@@ -291,6 +291,7 @@ Observed in live scale run after relaunch (`iter=5`, span `8016`):
 - completed ingest for the full span finished at `11.24 blocks/s` and `331.97 logs/s` (`8016` blocks, `236702` logs, `713.03s`).
 - prior comparable progress points in the previous iteration (`iter=4`) were around `~6.8-7.2 blocks/s` and `~175-182 logs/s`.
 - current long-span run (`iter=23`, `57212000..57233795`) is sustaining roughly `12-13 blocks/s` and `~333-350 logs/s` in-progress samples.
+  - completed at `11.74 blocks/s`, `334.45 logs/s`, total backend `7.81 GiB`.
 
 Live perf-stat sample on active ingest process (10s window):
 
@@ -298,6 +299,11 @@ Live perf-stat sample on active ingest process (10s window):
 - instructions per cycle: `~0.67`
 - branch miss rate: `~10.1%`
 - interpretation: ingest remains primarily I/O / remote-call limited (not CPU-saturated), so bounded write concurrency is the right next optimization direction.
+
+Query-path trial optimization:
+
+- executor now parallelizes per-stream postings loads for clause unions (bounded concurrency) to target OR/multi-stream trace patterns.
+- in expected-profile under-load replay (`trace-limit=100` on active ingest keyspace), observed QPS remained approximately flat (`1.61 -> 1.60`), suggesting this change is neutral on simple filters and more relevant to broader OR workloads.
 
 Interpretation:
 
