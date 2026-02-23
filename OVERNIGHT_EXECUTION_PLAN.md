@@ -117,6 +117,7 @@ Current automation:
   - optional mirror-before-ingest per iteration (`MIRROR_BEFORE_INGEST=true`)
   - resumable next-range state (`CUR_START_BLOCK`, `CUR_SPAN`) in `logs/scale-state-<RUN_ID>.env`
   - ingest maintenance controls (`RUN_MAINTENANCE_EVERY_BLOCKS`, `SKIP_FINAL_MAINTENANCE`)
+  - bounded retry-on-failure controls (`MAX_RETRIES_PER_ITER`, `RETRY_DELAY_SECONDS`)
   - per-iteration mirror/ingest seconds and throughput columns in size table
 
 ## Milestone E: Benchmark + Profile + Optimize
@@ -203,6 +204,8 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
 RUN_ID=20260223T073907Z-scale-geom \
 RUN_MAINTENANCE_EVERY_BLOCKS=0 \
 SKIP_FINAL_MAINTENANCE=true \
+MAX_RETRIES_PER_ITER=5 \
+RETRY_DELAY_SECONDS=15 \
 nohup setsid ./scripts/scale_to_target_size.sh >> logs/scale-to-target-$RUN_ID.out 2>&1 &
 echo $! > logs/scale-to-target-$RUN_ID.pid
 ```

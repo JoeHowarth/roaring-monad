@@ -252,6 +252,10 @@ Additional ingest throughput work was applied in code:
   - `--run-maintenance-every-blocks 0`
   - `--skip-final-maintenance`
   to avoid expensive end-of-iteration maintenance sweeps during bulk size-growth runs.
+- scaler resilience hardened with bounded retry controls:
+  - `MAX_RETRIES_PER_ITER`
+  - `RETRY_DELAY_SECONDS`
+  so transient mirror/ingest failures do not terminate unattended overnight execution immediately.
 
 Observed in live scale run after relaunch (`iter=5`, span `8016`):
 

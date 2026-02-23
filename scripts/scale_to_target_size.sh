@@ -25,6 +25,8 @@ TARGET_CHUNK_BYTES="${TARGET_CHUNK_BYTES:-32768}"
 MAINTENANCE_SEAL_SECONDS="${MAINTENANCE_SEAL_SECONDS:-1800}"
 RUN_MAINTENANCE_EVERY_BLOCKS="${RUN_MAINTENANCE_EVERY_BLOCKS:-2000}"
 SKIP_FINAL_MAINTENANCE="${SKIP_FINAL_MAINTENANCE:-true}"
+MAX_RETRIES_PER_ITER="${MAX_RETRIES_PER_ITER:-5}"
+RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-15}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -60,6 +62,7 @@ if [[ -f "$STATE_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$STATE_FILE"
 fi
+ATTEMPT="${ATTEMPT:-0}"
 
 while (( ITER < MAX_ITERS )); do
   scylla_bytes=0
@@ -86,7 +89,7 @@ while (( ITER < MAX_ITERS )); do
   ingest_json="$RESULTS_DIR/scale-ingest-$RUN_ID-$iter_tag.json"
   mirror_elapsed="0"
 
-  echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER keyspace=$keyspace range=${CUR_START_BLOCK}-${cur_end_block} span=$CUR_SPAN" | tee -a "$PROGRESS_LOG"
+  echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER attempt=$ATTEMPT keyspace=$keyspace range=${CUR_START_BLOCK}-${cur_end_block} span=$CUR_SPAN" | tee -a "$PROGRESS_LOG"
 
   if [[ "$MIRROR_BEFORE_INGEST" == "true" ]]; then
     mirror_started="$(date +%s)"
@@ -129,11 +132,27 @@ while (( ITER < MAX_ITERS )); do
 
     mirror_elapsed="$(( $(date +%s) - mirror_started ))"
     if (( mirror_rc != 0 )); then
+      if (( ATTEMPT < MAX_RETRIES_PER_ITER )); then
+        ATTEMPT="$((ATTEMPT + 1))"
+        echo "$(date -u +%FT%TZ) :: scale mirror retry iter=$ITER attempt=$ATTEMPT rc=$mirror_rc log=$mirror_log" | tee -a "$PROGRESS_LOG"
+        {
+          echo "ITER=$ITER"
+          echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+          echo "CUR_SPAN=$CUR_SPAN"
+          echo "ATTEMPT=$ATTEMPT"
+          echo "LAST_RC=$mirror_rc"
+          echo "LAST_TABLE_FILE=$TABLE_FILE"
+        } >"$STATE_FILE"
+        sleep "$RETRY_DELAY_SECONDS"
+        continue
+      fi
+
       echo "$(date -u +%FT%TZ) :: scale mirror failed iter=$ITER rc=$mirror_rc log=$mirror_log" | tee -a "$PROGRESS_LOG"
       {
         echo "ITER=$ITER"
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
+        echo "ATTEMPT=$ATTEMPT"
         echo "LAST_RC=$mirror_rc"
       } >"$STATE_FILE"
       exit "$mirror_rc"
@@ -186,10 +205,27 @@ while (( ITER < MAX_ITERS )); do
         echo "ITER=$next_iter"
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
+        echo "ATTEMPT=0"
         echo "LAST_RC=$rc"
         echo "LAST_TABLE_FILE=$TABLE_FILE"
       } >"$STATE_FILE"
+      ATTEMPT=0
       ITER="$next_iter"
+      continue
+    fi
+
+    if (( ATTEMPT < MAX_RETRIES_PER_ITER )); then
+      ATTEMPT="$((ATTEMPT + 1))"
+      echo "$(date -u +%FT%TZ) :: scale ingest retry iter=$ITER attempt=$ATTEMPT rc=$rc log=$ingest_log" | tee -a "$PROGRESS_LOG"
+      {
+        echo "ITER=$ITER"
+        echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+        echo "CUR_SPAN=$CUR_SPAN"
+        echo "ATTEMPT=$ATTEMPT"
+        echo "LAST_RC=$rc"
+        echo "LAST_TABLE_FILE=$TABLE_FILE"
+      } >"$STATE_FILE"
+      sleep "$RETRY_DELAY_SECONDS"
       continue
     fi
 
@@ -198,6 +234,7 @@ while (( ITER < MAX_ITERS )); do
       echo "ITER=$ITER"
       echo "CUR_START_BLOCK=$CUR_START_BLOCK"
       echo "CUR_SPAN=$CUR_SPAN"
+      echo "ATTEMPT=$ATTEMPT"
       echo "LAST_RC=$rc"
       echo "LAST_TABLE_FILE=$TABLE_FILE"
     } >"$STATE_FILE"
@@ -226,6 +263,7 @@ while (( ITER < MAX_ITERS )); do
     echo "ITER=$((ITER + 1))"
     echo "CUR_START_BLOCK=$next_start_block"
     echo "CUR_SPAN=$next_span"
+    echo "ATTEMPT=0"
     echo "LAST_RC=0"
     echo "LAST_TOTAL_BYTES=$total_bytes"
     echo "LAST_TABLE_FILE=$TABLE_FILE"
@@ -235,5 +273,6 @@ while (( ITER < MAX_ITERS )); do
 
   CUR_START_BLOCK="$next_start_block"
   CUR_SPAN="$next_span"
+  ATTEMPT=0
   ITER=$((ITER + 1))
 done
