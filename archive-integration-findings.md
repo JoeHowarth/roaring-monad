@@ -292,6 +292,11 @@ Observed in live scale run after relaunch (`iter=5`, span `8016`):
 - prior comparable progress points in the previous iteration (`iter=4`) were around `~6.8-7.2 blocks/s` and `~175-182 logs/s`.
 - current long-span run (`iter=23`, `57212000..57233795`) is sustaining roughly `12-13 blocks/s` and `~333-350 logs/s` in-progress samples.
   - completed at `11.74 blocks/s`, `334.45 logs/s`, total backend `7.81 GiB`.
+- subsequent near-head run (`iter=25`, `57233796..57238906`) completed at:
+  - `17.06 blocks/s`
+  - `456.89 logs/s`
+  - total backend `7.91 GiB`
+  indicating a clear ingest throughput uplift after bounded write-concurrency changes.
 
 Live perf-stat sample on active ingest process (10s window):
 

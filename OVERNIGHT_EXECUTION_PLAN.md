@@ -166,8 +166,8 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
   - ingest CLI supports `--skip-final-maintenance`.
   - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
 - Last completed geometry row:
-  - `iter=23` (`57212000..57233795`, span `65536`) at `11.74 blocks/s`, `334.45 logs/s`, total backend `7.81 GiB`.
-- Current size baseline: `infra/data/distributed` ~`7.8G`.
+  - `iter=25` (`57233796..57238906`, span `65536`) at `17.06 blocks/s`, `456.89 logs/s`, total backend `7.91 GiB`.
+- Current size baseline: `infra/data/distributed` ~`7.9G`.
 - Active unattended scale loop:
 
 ```bash
@@ -182,11 +182,11 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=24`
-  - `CUR_START_BLOCK=57233796`
+  - `ITER=26`
+  - `CUR_START_BLOCK=57238907` (pre-wrap checkpoint; active iteration now wrapped)
   - `CUR_SPAN=65536`
 - Current active range:
-  - `iter=24` near-head span around `57233796..57238833` (will wrap to dense start when headroom drops below threshold).
+  - `iter=26` wrapped to dense historical span `56536000..56601535`.
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
 - Headroom recovery behavior added:
@@ -229,6 +229,7 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
   - completed row (`iter=5`): `blocks_per_sec=11.24`, `logs_per_sec=331.97`, `ingest_seconds=713.03`.
   - post-optimization sample (`iter=23`): `mapped_block=251`, `elapsed=20.22s`, `blocks_per_sec=12.42`, `logs_per_sec=289.88`.
   - `iter=23` completed: `21896` blocks range attempt resolved to `21796` blocks ingested at `11.74 blocks/s`, `334.45 logs/s`.
+  - `iter=25` completed after ingest concurrency changes: `17.06 blocks/s`, `456.89 logs/s`.
 
 - Recent committed reliability/perf changes:
   - `65394a0` wrap to `START_BLOCK` when near source head.
