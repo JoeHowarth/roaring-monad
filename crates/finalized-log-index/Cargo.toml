@@ -17,6 +17,7 @@ distributed-stores = [
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
+futures.workspace = true
 roaring.workspace = true
 serde.workspace = true
 thiserror.workspace = true

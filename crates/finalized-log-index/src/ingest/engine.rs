@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
@@ -23,6 +24,9 @@ use crate::domain::types::{
 };
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond, Record};
+
+const LOG_LOCATOR_WRITE_CONCURRENCY: usize = 128;
+const STREAM_APPEND_CONCURRENCY: usize = 64;
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
@@ -78,6 +82,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             let pack_key = log_pack_blob_key(first_log_id);
             self.blob_store.put_blob(&pack_key, log_pack).await?;
 
+            let mut in_flight = FuturesUnordered::new();
             for (i, (_off, _len)) in spans.iter().enumerate() {
                 let global_log_id = first_log_id + i as u64;
                 let locator = LogLocator {
@@ -85,15 +90,24 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                     byte_offset: *_off,
                     byte_len: *_len,
                 };
-                let _ = self
-                    .meta_store
-                    .put(
-                        &log_locator_key(global_log_id),
-                        encode_log_locator(&locator),
-                        PutCond::Any,
-                        FenceToken(epoch),
-                    )
-                    .await?;
+                let key = log_locator_key(global_log_id);
+                let value = encode_log_locator(&locator);
+                in_flight.push(async move {
+                    self.meta_store
+                        .put(&key, value, PutCond::Any, FenceToken(epoch))
+                        .await
+                });
+
+                if in_flight.len() >= LOG_LOCATOR_WRITE_CONCURRENCY {
+                    match in_flight.next().await {
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => return Err(e),
+                        None => break,
+                    }
+                }
+            }
+            while let Some(res) = in_flight.next().await {
+                let _ = res?;
             }
         }
 
@@ -126,10 +140,20 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         let appends = self
             .collect_stream_appends(block, first_log_id, epoch)
             .await?;
+        let mut appends_in_flight = FuturesUnordered::new();
         for (stream_id, values) in appends {
-            let _ = self
-                .apply_stream_appends(&stream_id, &values, epoch)
-                .await?;
+            appends_in_flight
+                .push(async move { self.apply_stream_appends(&stream_id, &values, epoch).await });
+            if appends_in_flight.len() >= STREAM_APPEND_CONCURRENCY {
+                match appends_in_flight.next().await {
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => return Err(e),
+                    None => break,
+                }
+            }
+        }
+        while let Some(res) = appends_in_flight.next().await {
+            let _ = res?;
         }
 
         let next = MetaState {
