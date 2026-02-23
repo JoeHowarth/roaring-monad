@@ -347,6 +347,8 @@ Observed behavior after deployment:
 - on failure, new fast path triggered exactly as intended:
   - `scale ingest partial-write timeout iter=29 rc=1; retrying range with new keyspace iter=30`
   - this removed the prior extra invalid-sequence retry cycle and reduced wasted time between attempts.
+- concurrent benchmark replay on the same box can increase timeout frequency:
+  - during one benchmark run, `iter=30` timed out much earlier (around raw block `56536697`) and then auto-advanced to `iter=31`.
 
 Updated benchmark evidence (under active ingest load):
 

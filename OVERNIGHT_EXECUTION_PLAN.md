@@ -189,12 +189,12 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=30`
+  - `ITER=31`
   - `CUR_START_BLOCK=56536000`
   - `CUR_SPAN=65536`
   - `FORCE_SKIP_MIRROR=true`
 - Current active range:
-  - `iter=30` ingesting dense historical span `56536000..56601535`.
+  - `iter=31` ingesting dense historical span `56536000..56601535`.
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
   - on Scylla CAS timeout partial-write failures, skip same-keyspace retry and advance directly to next keyspace iteration.
