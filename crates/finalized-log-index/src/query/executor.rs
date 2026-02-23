@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
+use futures::stream::{FuturesUnordered, StreamExt};
+
 use crate::codec::chunk::decode_chunk;
 use crate::codec::log::{decode_block_meta, decode_log, decode_log_locator};
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
@@ -11,6 +13,8 @@ use crate::domain::types::{Log, Topic32};
 use crate::error::{Error, Result};
 use crate::query::planner::{ClauseKind, QueryPlan, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
+
+const STREAM_LOAD_CONCURRENCY: usize = 32;
 
 pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     meta_store: &M,
@@ -293,11 +297,11 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
     let mut out = BTreeSet::new();
     let from_shard = (from_log_id >> 32) as u32;
     let to_shard = (to_log_id_inclusive >> 32) as u32;
+    let mut in_flight = FuturesUnordered::new();
 
     for value in values {
         for shard in from_shard..=to_shard {
             let sid = stream_id(kind, value, shard);
-            let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
             let local_from = if shard == from_shard {
                 from_log_id as u32
             } else {
@@ -308,10 +312,24 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
             } else {
                 u32::MAX
             };
-
-            for local in entries.range(local_from..=local_to) {
-                out.insert(((shard as u64) << 32) | (*local as u64));
+            in_flight.push(async move {
+                let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
+                Ok::<(u32, u32, u32, BTreeSet<u32>), Error>((shard, local_from, local_to, entries))
+            });
+            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
+                && let Some(res) = in_flight.next().await
+            {
+                let (shard, local_from, local_to, entries) = res?;
+                for local in entries.range(local_from..=local_to) {
+                    out.insert(((shard as u64) << 32) | (*local as u64));
+                }
             }
+        }
+    }
+    while let Some(res) = in_flight.next().await {
+        let (shard, local_from, local_to, entries) = res?;
+        for local in entries.range(local_from..=local_to) {
+            out.insert(((shard as u64) << 32) | (*local as u64));
         }
     }
     Ok(out)
@@ -328,11 +346,11 @@ async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
     let mut out = BTreeSet::new();
     let from_shard = (from_block >> 32) as u32;
     let to_shard = (to_block >> 32) as u32;
+    let mut in_flight = FuturesUnordered::new();
 
     for value in values {
         for shard in from_shard..=to_shard {
             let sid = stream_id(kind, value, shard);
-            let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
             let local_from = if shard == from_shard {
                 from_block as u32
             } else {
@@ -343,9 +361,24 @@ async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
             } else {
                 u32::MAX
             };
-            for local in entries.range(local_from..=local_to) {
-                out.insert(*local);
+            in_flight.push(async move {
+                let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
+                Ok::<(u32, u32, BTreeSet<u32>), Error>((local_from, local_to, entries))
+            });
+            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
+                && let Some(res) = in_flight.next().await
+            {
+                let (local_from, local_to, entries) = res?;
+                for local in entries.range(local_from..=local_to) {
+                    out.insert(*local);
+                }
             }
+        }
+    }
+    while let Some(res) = in_flight.next().await {
+        let (local_from, local_to, entries) = res?;
+        for local in entries.range(local_from..=local_to) {
+            out.insert(*local);
         }
     }
     Ok(out)
