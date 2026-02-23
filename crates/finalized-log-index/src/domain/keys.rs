@@ -1,6 +1,7 @@
 use crate::domain::types::Topic32;
 
 pub const META_STATE_KEY: &[u8] = b"meta/state";
+pub const LOG_LOCATOR_PAGE_SIZE: u64 = 1024;
 
 pub fn u64_be(v: u64) -> [u8; 8] {
     v.to_be_bytes()
@@ -19,6 +20,20 @@ pub fn log_locator_key(global_log_id: u64) -> Vec<u8> {
     let mut k = b"log_locators/".to_vec();
     k.extend_from_slice(&u64_be(global_log_id));
     k
+}
+
+pub fn log_locator_page_start(global_log_id: u64) -> u64 {
+    (global_log_id / LOG_LOCATOR_PAGE_SIZE) * LOG_LOCATOR_PAGE_SIZE
+}
+
+pub fn log_locator_page_key(page_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_locator_pages/".to_vec();
+    k.extend_from_slice(&u64_be(page_start_log_id));
+    k
+}
+
+pub fn log_locator_pages_prefix() -> &'static [u8] {
+    b"log_locator_pages/"
 }
 
 pub fn log_locators_prefix() -> &'static [u8] {

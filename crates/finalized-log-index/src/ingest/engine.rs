@@ -7,17 +7,18 @@ use roaring::RoaringBitmap;
 
 use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 use crate::codec::log::{
-    decode_block_meta, decode_meta_state, decode_topic0_mode, decode_topic0_stats,
-    encode_block_meta, encode_log, encode_log_locator, encode_meta_state, encode_topic0_mode,
-    encode_topic0_stats, encode_u64,
+    decode_block_meta, decode_log_locator_page, decode_meta_state, decode_topic0_mode,
+    decode_topic0_stats, encode_block_meta, encode_log, encode_log_locator_page, encode_meta_state,
+    encode_topic0_mode, encode_topic0_stats, encode_u64,
 };
 use crate::codec::manifest::{
     ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
 };
 use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_key,
-    log_pack_blob_key, manifest_key, stream_id, tail_key, topic0_mode_key, topic0_stats_key,
+    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
+    log_locator_page_start, log_pack_blob_key, manifest_key, stream_id, tail_key, topic0_mode_key,
+    topic0_stats_key,
 };
 use crate::domain::types::{
     Block, BlockMeta, IngestOutcome, LogLocator, MetaState, Topic0Mode, Topic0Stats,
@@ -88,19 +89,45 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             let pack_key = log_pack_blob_key(first_log_id);
             self.blob_store.put_blob(&pack_key, log_pack).await?;
 
-            let mut in_flight = FuturesUnordered::new();
-            for (i, (_off, _len)) in spans.iter().enumerate() {
+            let mut page_updates: HashMap<u64, HashMap<u16, LogLocator>> = HashMap::new();
+            for (i, (byte_offset, byte_len)) in spans.iter().enumerate() {
                 let global_log_id = first_log_id + i as u64;
-                let locator = LogLocator {
-                    blob_key: pack_key.clone(),
-                    byte_offset: *_off,
-                    byte_len: *_len,
-                };
-                let key = log_locator_key(global_log_id);
-                let value = encode_log_locator(&locator);
+                let page_start = log_locator_page_start(global_log_id);
+                let slot = u16::try_from(global_log_id - page_start)
+                    .map_err(|_| Error::Decode("log locator page slot overflow"))?;
+                page_updates.entry(page_start).or_default().insert(
+                    slot,
+                    LogLocator {
+                        blob_key: pack_key.clone(),
+                        byte_offset: *byte_offset,
+                        byte_len: *byte_len,
+                    },
+                );
+            }
+
+            let mut in_flight = FuturesUnordered::new();
+            for (page_start, page_entries) in page_updates {
+                let page_key = log_locator_page_key(page_start);
                 in_flight.push(async move {
+                    let mut merged_entries = match self.meta_store.get(&page_key).await? {
+                        Some(existing) => {
+                            let (stored_page_start, stored_entries) =
+                                decode_log_locator_page(&existing.value)?;
+                            if stored_page_start != page_start {
+                                return Err(Error::Decode("log locator page key mismatch"));
+                            }
+                            stored_entries
+                        }
+                        None => HashMap::new(),
+                    };
+                    merged_entries.extend(page_entries);
                     self.meta_store
-                        .put(&key, value, PutCond::Any, FenceToken(epoch))
+                        .put(
+                            &page_key,
+                            encode_log_locator_page(page_start, &merged_entries),
+                            PutCond::Any,
+                            FenceToken(epoch),
+                        )
                         .await
                 });
 

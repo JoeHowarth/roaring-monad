@@ -197,7 +197,7 @@ fn ingest_retry_survives_faults_at_phase_boundaries() {
             (
                 "log_locator_put",
                 FaultOp::MetaPut,
-                b"log_locators/".as_slice(),
+                b"log_locator_pages/".as_slice(),
                 1usize,
             ),
             (
@@ -303,10 +303,10 @@ fn ingest_retry_survives_faults_at_phase_boundaries() {
             assert_eq!(seen.len(), 4, "case={name}");
 
             let log_page = meta
-                .list_prefix(b"log_locators/", None, usize::MAX)
+                .list_prefix(b"log_locator_pages/", None, usize::MAX)
                 .await
                 .expect("list logs");
-            assert_eq!(log_page.keys.len(), 4, "case={name}");
+            assert_eq!(log_page.keys.len(), 1, "case={name}");
         }
     });
 }
@@ -326,7 +326,7 @@ fn crash_loop_eventually_commits_without_corrupting_state() {
 
         // Simulate repeated crashes across different write boundaries before a successful run.
         let staged_faults = vec![
-            (FaultOp::MetaPut, b"log_locators/".as_slice(), 2usize),
+            (FaultOp::MetaPut, b"log_locator_pages/".as_slice(), 1usize),
             (FaultOp::BlobPut, b"log_packs/".as_slice(), 1usize),
             (FaultOp::MetaPut, b"manifests/".as_slice(), 1usize),
             (FaultOp::BlobPut, b"chunks/".as_slice(), 1usize),
@@ -370,9 +370,9 @@ fn crash_loop_eventually_commits_without_corrupting_state() {
         assert_eq!(logs.len(), 2);
 
         let log_page = meta
-            .list_prefix(b"log_locators/", None, usize::MAX)
+            .list_prefix(b"log_locator_pages/", None, usize::MAX)
             .await
             .expect("list logs");
-        assert_eq!(log_page.keys.len(), 2);
+        assert_eq!(log_page.keys.len(), 1);
     });
 }

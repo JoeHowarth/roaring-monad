@@ -3,13 +3,16 @@ use std::collections::{BTreeSet, HashMap};
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::codec::chunk::decode_chunk;
-use crate::codec::log::{decode_block_meta, decode_log, decode_log_locator};
+use crate::codec::log::{
+    decode_block_meta, decode_log, decode_log_locator, decode_log_locator_page,
+};
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::domain::filter::{Clause, LogFilter};
 use crate::domain::keys::{
-    block_meta_key, chunk_blob_key, log_locator_key, manifest_key, stream_id, tail_key,
+    block_meta_key, chunk_blob_key, log_locator_key, log_locator_page_key, log_locator_page_start,
+    manifest_key, stream_id, tail_key,
 };
-use crate::domain::types::{Log, Topic32};
+use crate::domain::types::{Log, LogLocator, Topic32};
 use crate::error::{Error, Result};
 use crate::query::planner::{ClauseKind, QueryPlan, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -22,8 +25,16 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
     plan: QueryPlan,
 ) -> Result<Vec<Log>> {
     let mut log_pack_cache: HashMap<Vec<u8>, bytes::Bytes> = HashMap::new();
+    let mut locator_page_cache: HashMap<u64, HashMap<u16, LogLocator>> = HashMap::new();
     if plan.force_block_scan {
-        return execute_block_scan(meta_store, blob_store, &plan, &mut log_pack_cache).await;
+        return execute_block_scan(
+            meta_store,
+            blob_store,
+            &plan,
+            &mut locator_page_cache,
+            &mut log_pack_cache,
+        )
+        .await;
     }
 
     let mut clause_sets: Vec<BTreeSet<u64>> = Vec::new();
@@ -133,7 +144,14 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
 
     let mut out = Vec::new();
     for id in candidates {
-        let Some(log) = load_log_by_id(meta_store, blob_store, id, &mut log_pack_cache).await?
+        let Some(log) = load_log_by_id(
+            meta_store,
+            blob_store,
+            id,
+            &mut locator_page_cache,
+            &mut log_pack_cache,
+        )
+        .await?
         else {
             continue;
         };
@@ -166,6 +184,7 @@ async fn execute_block_scan<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     plan: &QueryPlan,
+    locator_page_cache: &mut HashMap<u64, HashMap<u16, LogLocator>>,
     log_pack_cache: &mut HashMap<Vec<u8>, bytes::Bytes>,
 ) -> Result<Vec<Log>> {
     let mut out = Vec::new();
@@ -179,7 +198,14 @@ async fn execute_block_scan<M: MetaStore, B: BlobStore>(
         let end = start + meta.count as u64;
 
         for id in start..end {
-            let Some(log) = load_log_by_id(meta_store, blob_store, id, log_pack_cache).await?
+            let Some(log) = load_log_by_id(
+                meta_store,
+                blob_store,
+                id,
+                locator_page_cache,
+                log_pack_cache,
+            )
+            .await?
             else {
                 continue;
             };
@@ -203,13 +229,38 @@ async fn load_log_by_id<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     log_id: u64,
+    locator_page_cache: &mut HashMap<u64, HashMap<u16, LogLocator>>,
     log_pack_cache: &mut HashMap<Vec<u8>, bytes::Bytes>,
 ) -> Result<Option<Log>> {
-    let locator_rec = match meta_store.get(&log_locator_key(log_id)).await? {
-        Some(r) => r,
-        None => return Ok(None),
+    let page_start = log_locator_page_start(log_id);
+    if let std::collections::hash_map::Entry::Vacant(entry) = locator_page_cache.entry(page_start) {
+        let page = match meta_store.get(&log_locator_page_key(page_start)).await? {
+            Some(rec) => {
+                let (decoded_page_start, entries) = decode_log_locator_page(&rec.value)?;
+                if decoded_page_start != page_start {
+                    return Err(Error::Decode("log locator page start mismatch"));
+                }
+                entries
+            }
+            None => HashMap::new(),
+        };
+        entry.insert(page);
+    }
+
+    let mut locator = locator_page_cache.get(&page_start).and_then(|page| {
+        let slot = u16::try_from(log_id - page_start).ok()?;
+        page.get(&slot).cloned()
+    });
+    if locator.is_none() {
+        locator = match meta_store.get(&log_locator_key(log_id)).await? {
+            Some(rec) => Some(decode_log_locator(&rec.value)?),
+            None => None,
+        };
+    }
+    let Some(locator) = locator else {
+        return Ok(None);
     };
-    let locator = decode_log_locator(&locator_rec.value)?;
+
     if !log_pack_cache.contains_key(&locator.blob_key) {
         let Some(blob) = blob_store.get_blob(&locator.blob_key).await? else {
             return Ok(None);
