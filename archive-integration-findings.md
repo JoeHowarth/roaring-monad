@@ -213,6 +213,24 @@ Implication:
 - In this scanned region, logs per block are relatively modest.
 - Hitting ~100GB from only finalized-log-index log ingestion is primarily a throughput/time problem, not a single-hot-range selection problem.
 
+Follow-up fine-grained scans used to retarget overnight scaling:
+
+- `56536000..56550000` (`step=10`):
+  - avg logs/sample: `39.50`
+  - max sampled: `296`
+  - output: `logs/results/scan-density-20260223T0909Z-window56542-step10.json`
+- `56885000..56898000` (`step=10`):
+  - avg logs/sample: `20.93`
+  - max sampled: `684` (spiky outliers, lower sustained density)
+  - output: `logs/results/scan-density-20260223T0909Z-window56890-step10.json`
+
+Resulting scaler default retarget:
+
+- `START_BLOCK=56536000`
+- `END_BLOCK=56536500`
+
+This keeps geometric scaling in a denser sustained region and improves bytes-per-hour accumulation.
+
 ## 11) Mirror-path optimization (archiver vs sequential mirror)
 
 A direct mirror speed test showed large improvement by using `monad-archiver` instead of per-block sequential mirror calls:
