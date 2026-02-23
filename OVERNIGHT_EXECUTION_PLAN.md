@@ -169,10 +169,22 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
 - Latest measured geometry run outputs are being written to:
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
+- Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
+  - `ITER=4`
+  - `CUR_START_BLOCK=57215507`
+  - `CUR_SPAN=4008`
+- Iteration 4 range currently running:
+  - `57215507..57219514`
+- Script-level retry behavior added:
+  - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
 
 - Density scan snapshot:
   - coarse scan (`56,000,000..57,220,000`, step `2000`) avg logs/sample `27.10`, max sampled `155`
   - output: `logs/results/scan-density-20260223T074555Z-coarse.json`
+
+- Mirror path selection:
+  - scaler now defaults to `MIRROR_METHOD=archiver` (fast path through `monad-archiver`).
+  - caveat: `--stop-block` can overshoot by about one batch, causing harmless overlap/NoClobber skips later.
 
 - Launch command used for current geometry run:
 
@@ -185,6 +197,9 @@ INITIAL_SPAN=501 \
 GROWTH_FACTOR=2 \
 MAX_SPAN=65536 \
 MIRROR_BEFORE_INGEST=true \
+MIRROR_METHOD=archiver \
+ARCHIVER_MAX_BLOCKS_PER_ITERATION=200 \
+ARCHIVER_MAX_CONCURRENT_BLOCKS=128 \
 MIRROR_TIMEOUT_SECONDS=21600 \
 INGEST_TIMEOUT_SECONDS=7200 \
 nohup setsid ./scripts/scale_to_target_size.sh > logs/scale-to-target-$RUN_ID.out 2>&1 &

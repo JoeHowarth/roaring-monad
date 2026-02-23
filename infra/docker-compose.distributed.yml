@@ -2,7 +2,17 @@ services:
   scylla:
     image: scylladb/scylla:5.4
     container_name: finalized-index-scylla
-    command: ["--smp", "1", "--memory", "1G", "--overprovisioned", "1", "--api-address", "0.0.0.0"]
+    command:
+      [
+        "--smp",
+        "8",
+        "--memory",
+        "24G",
+        "--overprovisioned",
+        "1",
+        "--api-address",
+        "0.0.0.0",
+      ]
     ports:
       - "9042:9042"
     healthcheck:

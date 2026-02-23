@@ -2,10 +2,14 @@
 set -euo pipefail
 
 RM_ROOT="${RM_ROOT:-/home/jhow/roaring-monad}"
+MA_ROOT="${MA_ROOT:-/home/jhow/monad-bft}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-$RM_ROOT/data/archive-mainnet-deu-009-0}"
 ARCHIVE_SOURCE="${ARCHIVE_SOURCE:-aws mainnet-deu-009-0 50}"
 MIRROR_BEFORE_INGEST="${MIRROR_BEFORE_INGEST:-true}"
+MIRROR_METHOD="${MIRROR_METHOD:-archiver}"
+ARCHIVER_MAX_BLOCKS_PER_ITERATION="${ARCHIVER_MAX_BLOCKS_PER_ITERATION:-200}"
+ARCHIVER_MAX_CONCURRENT_BLOCKS="${ARCHIVER_MAX_CONCURRENT_BLOCKS:-128}"
 START_BLOCK="${START_BLOCK:-57212000}"
 END_BLOCK="${END_BLOCK:-57212500}"
 INITIAL_SPAN="${INITIAL_SPAN:-0}"
@@ -81,23 +85,43 @@ while (( ITER < MAX_ITERS )); do
 
   if [[ "$MIRROR_BEFORE_INGEST" == "true" ]]; then
     mirror_started="$(date +%s)"
-    set +e
-    timeout "${MIRROR_TIMEOUT_SECONDS}s" env \
-      TRIEDB_TARGET=triedb_driver \
-      CC=/usr/bin/gcc-15 \
-      CXX=/usr/bin/g++-15 \
-      ASMFLAGS='-march=haswell' \
-      CFLAGS='-march=haswell' \
-      CXXFLAGS='-march=haswell' \
-      cargo +1.91.1 run --release -p benchmarking -- mirror \
-        --archive-root "$ARCHIVE_ROOT" \
-        --source "$ARCHIVE_SOURCE" \
-        --start-block "$CUR_START_BLOCK" \
-        --end-block "$cur_end_block" \
-        --log-every 500 \
-        >"$mirror_log" 2>&1
-    mirror_rc=$?
-    set -e
+
+    if [[ "$MIRROR_METHOD" == "archiver" ]]; then
+      set +e
+      timeout "${MIRROR_TIMEOUT_SECONDS}s" bash -lc "
+        set -euo pipefail
+        cd '$MA_ROOT'
+        cargo run -p monad-archive --bin monad-archiver -- \
+          set-start-block --block '$((CUR_START_BLOCK - 1))' --archive-sink 'fs $ARCHIVE_ROOT' >/dev/null 2>&1
+        cargo run -p monad-archive --bin monad-archiver -- \
+          --block-data-source '$ARCHIVE_SOURCE' \
+          --archive-sink 'fs $ARCHIVE_ROOT' \
+          --max-blocks-per-iteration '$ARCHIVER_MAX_BLOCKS_PER_ITERATION' \
+          --max-concurrent-blocks '$ARCHIVER_MAX_CONCURRENT_BLOCKS' \
+          --stop-block '$cur_end_block'
+      " >"$mirror_log" 2>&1
+      mirror_rc=$?
+      set -e
+    else
+      set +e
+      timeout "${MIRROR_TIMEOUT_SECONDS}s" env \
+        TRIEDB_TARGET=triedb_driver \
+        CC=/usr/bin/gcc-15 \
+        CXX=/usr/bin/g++-15 \
+        ASMFLAGS='-march=haswell' \
+        CFLAGS='-march=haswell' \
+        CXXFLAGS='-march=haswell' \
+        cargo +1.91.1 run --release -p benchmarking -- mirror \
+          --archive-root "$ARCHIVE_ROOT" \
+          --source "$ARCHIVE_SOURCE" \
+          --start-block "$CUR_START_BLOCK" \
+          --end-block "$cur_end_block" \
+          --log-every 500 \
+          >"$mirror_log" 2>&1
+      mirror_rc=$?
+      set -e
+    fi
+
     mirror_elapsed="$(( $(date +%s) - mirror_started ))"
     if (( mirror_rc != 0 )); then
       echo "$(date -u +%FT%TZ) :: scale mirror failed iter=$ITER rc=$mirror_rc log=$mirror_log" | tee -a "$PROGRESS_LOG"
@@ -144,10 +168,27 @@ while (( ITER < MAX_ITERS )); do
   set -e
 
   if (( rc != 0 )); then
+    if grep -q "invalid finalized sequence" "$ingest_log"; then
+      next_iter="$((ITER + 1))"
+      echo "$(date -u +%FT%TZ) :: scale iteration keyspace conflict iter=$ITER rc=$rc; retrying range with iter=$next_iter" | tee -a "$PROGRESS_LOG"
+      {
+        echo "ITER=$next_iter"
+        echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+        echo "CUR_SPAN=$CUR_SPAN"
+        echo "LAST_RC=$rc"
+        echo "LAST_TABLE_FILE=$TABLE_FILE"
+      } >"$STATE_FILE"
+      ITER="$next_iter"
+      continue
+    fi
+
     echo "$(date -u +%FT%TZ) :: scale iteration failed iter=$ITER rc=$rc log=$ingest_log" | tee -a "$PROGRESS_LOG"
     {
       echo "ITER=$ITER"
+      echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+      echo "CUR_SPAN=$CUR_SPAN"
       echo "LAST_RC=$rc"
+      echo "LAST_TABLE_FILE=$TABLE_FILE"
     } >"$STATE_FILE"
     exit "$rc"
   fi

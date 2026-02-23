@@ -212,3 +212,29 @@ Implication:
 
 - In this scanned region, logs per block are relatively modest.
 - Hitting ~100GB from only finalized-log-index log ingestion is primarily a throughput/time problem, not a single-hot-range selection problem.
+
+## 11) Mirror-path optimization (archiver vs sequential mirror)
+
+A direct mirror speed test showed large improvement by using `monad-archiver` instead of per-block sequential mirror calls:
+
+- sequential mirror path (`benchmarking mirror`): ~`90s` for ~`501` blocks in prior runs.
+- `monad-archiver` path (`set-start-block` + `--max-concurrent-blocks`): ~`5s` observed for a 501-block test window.
+
+Operational caveat:
+
+- `monad-archiver --stop-block` may archive up to roughly one batch beyond the requested stop block (bounded by `--max-blocks-per-iteration`), then stop.
+- This is acceptable for scaling flows but causes overlap and `NoClobber` skip warnings on later mirror passes.
+
+## 12) Scylla profile reconfiguration and impact
+
+Scylla compose profile was increased from `--smp 1 --memory 1G` to `--smp 8 --memory 24G`.
+
+Control ingest test (`57212000..57212500`, release settings):
+
+- pre-change (best comparable release run): ~`6.73 blocks/s` (maintenance-tuned)
+- post-change control run: ~`6.21 blocks/s`
+
+Conclusion:
+
+- For this workload/shape, ingest is not materially improved by just increasing Scylla shards/memory.
+- Dominant constraints are likely client-side/write pattern and per-block service path overhead, not only Scylla CPU allocation.
