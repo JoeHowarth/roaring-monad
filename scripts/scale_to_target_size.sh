@@ -27,6 +27,7 @@ RUN_MAINTENANCE_EVERY_BLOCKS="${RUN_MAINTENANCE_EVERY_BLOCKS:-2000}"
 SKIP_FINAL_MAINTENANCE="${SKIP_FINAL_MAINTENANCE:-true}"
 MAX_RETRIES_PER_ITER="${MAX_RETRIES_PER_ITER:-5}"
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-15}"
+SOURCE_LATEST_TIMEOUT_SECONDS="${SOURCE_LATEST_TIMEOUT_SECONDS:-120}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -79,8 +80,71 @@ while (( ITER < MAX_ITERS )); do
     break
   fi
 
-  cur_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
   iter_tag="$(printf 'i%05d' "$ITER")"
+  desired_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
+  source_latest_log="$LOG_DIR/source-latest-$RUN_ID.log"
+
+  set +e
+  latest_source_raw="$(
+    timeout "${SOURCE_LATEST_TIMEOUT_SECONDS}s" env \
+      TRIEDB_TARGET=triedb_driver \
+      CC=/usr/bin/gcc-15 \
+      CXX=/usr/bin/g++-15 \
+      ASMFLAGS='-march=haswell' \
+      CFLAGS='-march=haswell' \
+      CXXFLAGS='-march=haswell' \
+      cargo +1.91.1 run --release -p benchmarking -- source-latest \
+        --source "$ARCHIVE_SOURCE" \
+        2>>"$source_latest_log"
+  )"
+  latest_source_rc=$?
+  set -e
+
+  latest_source="$(echo "$latest_source_raw" | tail -n 1 | tr -dc '0-9')"
+  if (( latest_source_rc != 0 )) || [[ -z "$latest_source" ]]; then
+    if (( ATTEMPT < MAX_RETRIES_PER_ITER )); then
+      ATTEMPT="$((ATTEMPT + 1))"
+      echo "$(date -u +%FT%TZ) :: source-latest retry iter=$ITER attempt=$ATTEMPT rc=$latest_source_rc" | tee -a "$PROGRESS_LOG"
+      {
+        echo "ITER=$ITER"
+        echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+        echo "CUR_SPAN=$CUR_SPAN"
+        echo "ATTEMPT=$ATTEMPT"
+        echo "LAST_RC=$latest_source_rc"
+        echo "LAST_TABLE_FILE=$TABLE_FILE"
+      } >"$STATE_FILE"
+      sleep "$RETRY_DELAY_SECONDS"
+      continue
+    fi
+
+    echo "$(date -u +%FT%TZ) :: source-latest failed iter=$ITER rc=$latest_source_rc latest='$latest_source_raw'" | tee -a "$PROGRESS_LOG"
+    {
+      echo "ITER=$ITER"
+      echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+      echo "CUR_SPAN=$CUR_SPAN"
+      echo "ATTEMPT=$ATTEMPT"
+      echo "LAST_RC=$latest_source_rc"
+      echo "LAST_TABLE_FILE=$TABLE_FILE"
+    } >"$STATE_FILE"
+    exit "$latest_source_rc"
+  fi
+
+  if (( CUR_START_BLOCK > latest_source )); then
+    echo "$(date -u +%FT%TZ) :: source head reached iter=$ITER start=$CUR_START_BLOCK latest_source=$latest_source; wrapping to START_BLOCK=$START_BLOCK" | tee -a "$PROGRESS_LOG"
+    CUR_START_BLOCK="$START_BLOCK"
+    desired_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
+  fi
+
+  cur_end_block="$desired_end_block"
+  if (( cur_end_block > latest_source )); then
+    cur_end_block="$latest_source"
+  fi
+  if (( cur_end_block < CUR_START_BLOCK )); then
+    echo "$(date -u +%FT%TZ) :: no source blocks available iter=$ITER start=$CUR_START_BLOCK latest_source=$latest_source; sleeping" | tee -a "$PROGRESS_LOG"
+    sleep "$RETRY_DELAY_SECONDS"
+    continue
+  fi
+
   keyspace_raw="fi_scale_${RUN_ID}_${iter_tag}"
   keyspace="$(to_keyspace_safe "$keyspace_raw")"
   prefix="runs/$RUN_ID/scale/$iter_tag"

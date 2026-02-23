@@ -36,6 +36,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     Mirror(MirrorArgs),
+    SourceLatest(SourceLatestArgs),
     CollectGenerate(CollectGenerateArgs),
     IngestDistributed(IngestDistributedArgs),
     Benchmark(BenchmarkArgs),
@@ -80,6 +81,15 @@ struct MirrorArgs {
 
     #[arg(long, default_value_t = 250)]
     log_every: u64,
+}
+
+#[derive(Args, Debug, Clone)]
+struct SourceLatestArgs {
+    #[arg(long, default_value = "aws mainnet-deu-009-0 50")]
+    source: String,
+
+    #[arg(long)]
+    output_json: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -275,6 +285,12 @@ struct ScanDensityReport {
 }
 
 #[derive(Debug, Serialize)]
+struct SourceLatestReport {
+    source: String,
+    latest_uploaded_block: u64,
+}
+
+#[derive(Debug, Serialize)]
 struct IngestReport {
     start_block: u64,
     end_block: u64,
@@ -317,6 +333,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Mirror(args) => cmd_mirror(args).await,
+        Command::SourceLatest(args) => cmd_source_latest(args).await,
         Command::CollectGenerate(args) => cmd_collect_generate(args).await,
         Command::IngestDistributed(args) => cmd_ingest_distributed(args).await,
         Command::Benchmark(args) => cmd_benchmark(args).await,
@@ -402,6 +419,35 @@ async fn cmd_mirror(args: MirrorArgs) -> Result<()> {
         args.range.end_block,
         args.archive.archive_root.display()
     );
+    Ok(())
+}
+
+async fn cmd_source_latest(args: SourceLatestArgs) -> Result<()> {
+    let metrics = Metrics::none();
+    let source_args = BlockDataReaderArgs::from_str(args.source.trim())
+        .map_err(|e| anyhow::anyhow!("parse block data source '{}': {e}", args.source))?;
+    let source = source_args
+        .build(&metrics)
+        .await
+        .map_err(|e| anyhow::anyhow!("build source '{}': {e}", args.source))?;
+
+    let latest_uploaded_block = source
+        .get_latest(LatestKind::Uploaded)
+        .await
+        .map_err(|e| anyhow::anyhow!("source latest uploaded lookup: {e}"))?
+        .unwrap_or(0);
+
+    let report = SourceLatestReport {
+        source: args.source,
+        latest_uploaded_block,
+    };
+
+    // Keep stdout machine-readable for scripts.
+    println!("{}", report.latest_uploaded_block);
+    if let Some(path) = &args.output_json {
+        write_json(path, &report)?;
+    }
+
     Ok(())
 }
 

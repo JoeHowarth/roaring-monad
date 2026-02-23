@@ -256,6 +256,9 @@ Additional ingest throughput work was applied in code:
   - `MAX_RETRIES_PER_ITER`
   - `RETRY_DELAY_SECONDS`
   so transient mirror/ingest failures do not terminate unattended overnight execution immediately.
+- scaler now queries source head each iteration (`benchmarking source-latest`) and caps ingest range to available blocks.
+  - this prevents archiver from waiting indefinitely when geometric span overshoots current chain head.
+  - on head overrun, the scaler wraps start back to `START_BLOCK` so the run can continue accumulating DB size instead of idling.
 
 Observed in live scale run after relaunch (`iter=5`, span `8016`):
 

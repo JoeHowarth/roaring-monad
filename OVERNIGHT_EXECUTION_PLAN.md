@@ -118,6 +118,8 @@ Current automation:
   - resumable next-range state (`CUR_START_BLOCK`, `CUR_SPAN`) in `logs/scale-state-<RUN_ID>.env`
   - ingest maintenance controls (`RUN_MAINTENANCE_EVERY_BLOCKS`, `SKIP_FINAL_MAINTENANCE`)
   - bounded retry-on-failure controls (`MAX_RETRIES_PER_ITER`, `RETRY_DELAY_SECONDS`)
+  - source-head capping via `benchmarking source-latest` (`SOURCE_LATEST_TIMEOUT_SECONDS`)
+  - automatic head wrap-to-start when `CUR_START_BLOCK` is beyond source latest
   - per-iteration mirror/ingest seconds and throughput columns in size table
 
 ## Milestone E: Benchmark + Profile + Optimize
@@ -183,7 +185,7 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `CUR_START_BLOCK=57227531`
   - `CUR_SPAN=16032`
 - Current active range:
-  - `57227531..57243562` (`iter=6`)
+  - capped from desired `57227531..57243562` to source head `57231880` (`iter=6`)
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
 - Recent failure/recovery:
@@ -206,6 +208,7 @@ RUN_MAINTENANCE_EVERY_BLOCKS=0 \
 SKIP_FINAL_MAINTENANCE=true \
 MAX_RETRIES_PER_ITER=5 \
 RETRY_DELAY_SECONDS=15 \
+SOURCE_LATEST_TIMEOUT_SECONDS=120 \
 nohup setsid ./scripts/scale_to_target_size.sh >> logs/scale-to-target-$RUN_ID.out 2>&1 &
 echo $! > logs/scale-to-target-$RUN_ID.pid
 ```
