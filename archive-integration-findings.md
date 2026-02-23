@@ -256,6 +256,7 @@ Additional ingest throughput work was applied in code:
 Observed in live scale run after relaunch (`iter=5`, span `8016`):
 
 - early ingest progress reached about `9.99 blocks/s` and `323.36 logs/s` (`mapped_block=486`, `elapsed=48.63s`).
+- completed ingest for the full span finished at `11.24 blocks/s` and `331.97 logs/s` (`8016` blocks, `236702` logs, `713.03s`).
 - prior comparable progress points in the previous iteration (`iter=4`) were around `~6.8-7.2 blocks/s` and `~175-182 logs/s`.
 
 Interpretation:

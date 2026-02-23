@@ -162,8 +162,8 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
   - ingest CLI supports `--skip-final-maintenance`.
   - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
 - Last completed geometry row:
-  - `iter=4` (`57215507..57219514`, span `4008`) at `5.92 blocks/s`, total backend `5.02 GiB`.
-- Current size baseline: `infra/data/distributed` ~`5.0G`.
+  - `iter=5` (`57219515..57227530`, span `8016`) at `11.24 blocks/s`, `331.97 logs/s`, total backend `7.11 GiB`.
+- Current size baseline: `infra/data/distributed` ~`7.1G`.
 - Active unattended scale loop:
 
 ```bash
@@ -178,11 +178,11 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=5`
-  - `CUR_START_BLOCK=57219515`
-  - `CUR_SPAN=8016`
+  - `ITER=6`
+  - `CUR_START_BLOCK=57227531`
+  - `CUR_SPAN=16032`
 - Current active range:
-  - `57219515..57227530` (`iter=5`)
+  - `57227531..57243562` (`iter=6`)
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
 - Recent failure/recovery:
@@ -207,5 +207,6 @@ nohup setsid ./scripts/scale_to_target_size.sh >> logs/scale-to-target-$RUN_ID.o
 echo $! > logs/scale-to-target-$RUN_ID.pid
 ```
 
-- Early live throughput sample after relaunch (iter 5):
-  - `mapped_block=486`, `elapsed=48.63s`, `blocks_per_sec=9.99`, `logs_per_sec=323.36`.
+- Throughput evidence after relaunch:
+  - early sample (`iter=5`): `mapped_block=486`, `elapsed=48.63s`, `blocks_per_sec=9.99`, `logs_per_sec=323.36`.
+  - completed row (`iter=5`): `blocks_per_sec=11.24`, `logs_per_sec=331.97`, `ingest_seconds=713.03`.
