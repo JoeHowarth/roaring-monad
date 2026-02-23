@@ -116,6 +116,7 @@ Current automation:
   - geometric span growth (`INITIAL_SPAN`, `GROWTH_FACTOR`, `MAX_SPAN`)
   - optional mirror-before-ingest per iteration (`MIRROR_BEFORE_INGEST=true`)
   - resumable next-range state (`CUR_START_BLOCK`, `CUR_SPAN`) in `logs/scale-state-<RUN_ID>.env`
+  - ingest maintenance controls (`RUN_MAINTENANCE_EVERY_BLOCKS`, `SKIP_FINAL_MAINTENANCE`)
   - per-iteration mirror/ingest seconds and throughput columns in size table
 
 ## Milestone E: Benchmark + Profile + Optimize
@@ -155,7 +156,14 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
 - Release optimization evidence captured:
   - benchmark (expected, limit=100): dev `1.04 qps` -> release `2.30 qps`.
   - ingest: release baseline `6.15 blocks/s`; maintenance-tuned `6.73 blocks/s`.
-- Size baseline after completed runs: `infra/data/distributed` ~`1.4G`.
+- Additional ingest optimizations now landed:
+  - Scylla write path reduced extra round trips in `put`.
+  - `topic0_mode` ingest lookups cached in memory.
+  - ingest CLI supports `--skip-final-maintenance`.
+  - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
+- Last completed geometry row:
+  - `iter=4` (`57215507..57219514`, span `4008`) at `5.92 blocks/s`, total backend `5.02 GiB`.
+- Current size baseline: `infra/data/distributed` ~`5.0G`.
 - Active unattended scale loop:
 
 ```bash
@@ -170,13 +178,16 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=4`
-  - `CUR_START_BLOCK=57215507`
-  - `CUR_SPAN=4008`
-- Iteration 4 range currently running:
-  - `57215507..57219514`
+  - `ITER=5`
+  - `CUR_START_BLOCK=57219515`
+  - `CUR_SPAN=8016`
+- Current active range:
+  - `57219515..57227530` (`iter=5`)
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
+- Recent failure/recovery:
+  - initial `iter=5` failed due compile error after adding `skip_final_maintenance` field (`missing field` in `RunAll` initializer).
+  - fixed in `crates/benchmarking/src/main.rs`, revalidated (`clippy/test`), and resumed from same state.
 
 - Density scan snapshot:
   - coarse scan (`56,000,000..57,220,000`, step `2000`) avg logs/sample `27.10`, max sampled `155`
@@ -186,21 +197,15 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - scaler now defaults to `MIRROR_METHOD=archiver` (fast path through `monad-archiver`).
   - caveat: `--stop-block` can overshoot by about one batch, causing harmless overlap/NoClobber skips later.
 
-- Launch command used for current geometry run:
+- Relaunch command used for current geometry run (resume + ingest-speed settings):
 
 ```bash
 RUN_ID=20260223T073907Z-scale-geom \
-TARGET_GB=100 \
-START_BLOCK=57212000 \
-END_BLOCK=57212500 \
-INITIAL_SPAN=501 \
-GROWTH_FACTOR=2 \
-MAX_SPAN=65536 \
-MIRROR_BEFORE_INGEST=true \
-MIRROR_METHOD=archiver \
-ARCHIVER_MAX_BLOCKS_PER_ITERATION=200 \
-ARCHIVER_MAX_CONCURRENT_BLOCKS=128 \
-MIRROR_TIMEOUT_SECONDS=21600 \
-INGEST_TIMEOUT_SECONDS=7200 \
-nohup setsid ./scripts/scale_to_target_size.sh > logs/scale-to-target-$RUN_ID.out 2>&1 &
+RUN_MAINTENANCE_EVERY_BLOCKS=0 \
+SKIP_FINAL_MAINTENANCE=true \
+nohup setsid ./scripts/scale_to_target_size.sh >> logs/scale-to-target-$RUN_ID.out 2>&1 &
+echo $! > logs/scale-to-target-$RUN_ID.pid
 ```
+
+- Early live throughput sample after relaunch (iter 5):
+  - `mapped_block=486`, `elapsed=48.63s`, `blocks_per_sec=9.99`, `logs_per_sec=323.36`.

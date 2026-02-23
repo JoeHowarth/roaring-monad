@@ -238,3 +238,27 @@ Conclusion:
 
 - For this workload/shape, ingest is not materially improved by just increasing Scylla shards/memory.
 - Dominant constraints are likely client-side/write pattern and per-block service path overhead, not only Scylla CPU allocation.
+
+## 13) Ingest-path code optimizations and observed impact
+
+Additional ingest throughput work was applied in code:
+
+- `ScyllaMetaStore::put` was optimized to remove unnecessary per-write readbacks:
+  - dropped pre-read and post-read around writes,
+  - reduced `IfVersion` update to use `v+1` directly,
+  - switched fence checks to a short periodic refresh window instead of querying fence table for every write.
+- `IngestEngine` now caches `topic0_mode` lookups in memory to avoid repeated metadata `get` calls for the same topic signatures.
+- Benchmarking ingest command added `--skip-final-maintenance`; scaler can now run with:
+  - `--run-maintenance-every-blocks 0`
+  - `--skip-final-maintenance`
+  to avoid expensive end-of-iteration maintenance sweeps during bulk size-growth runs.
+
+Observed in live scale run after relaunch (`iter=5`, span `8016`):
+
+- early ingest progress reached about `9.99 blocks/s` and `323.36 logs/s` (`mapped_block=486`, `elapsed=48.63s`).
+- prior comparable progress points in the previous iteration (`iter=4`) were around `~6.8-7.2 blocks/s` and `~175-182 logs/s`.
+
+Interpretation:
+
+- write-path round-trip reduction and maintenance deferral materially improved ingest headroom for scale-out.
+- this directly shortens time-to-target for the ~100GB backend build.
