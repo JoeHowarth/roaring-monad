@@ -128,7 +128,7 @@ Current automation:
 - [x] Capture CPU profile during ingestion and query replay.
 - [x] Apply targeted optimizations.
 - [x] Re-run benchmark and compare baseline vs optimized.
-- [ ] Commit optimization changes and benchmark evidence.
+- [x] Commit optimization changes and benchmark evidence.
 
 Optimization focus order:
 
@@ -165,9 +165,16 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
   - `topic0_stats` updates now use an in-memory cache and fast long-gap advancement.
   - ingest CLI supports `--skip-final-maintenance`.
   - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
+  - scaler now persists `FORCE_SKIP_MIRROR` and can skip mirror after keyspace-rollover conflicts.
+  - scaler now detects Scylla CAS timeout partial writes and immediately rolls to a new keyspace iteration.
+  - Scylla retry defaults increased (`max_retries=10`, `base_delay_ms=50`, `max_delay_ms=5000`).
+  - stream-append ingest concurrency lowered to `32` to reduce LWT pressure.
 - Last completed geometry row:
   - `iter=25` (`57233796..57238906`, span `65536`) at `17.06 blocks/s`, `456.89 logs/s`, total backend `7.91 GiB`.
 - Current size baseline: `infra/data/distributed` ~`7.9G`.
+- Latest benchmark replay under ingest load:
+  - `logs/results/benchmark-20260223T073907Z-scale-geom-i00025-expected-limit100-post-cas-tune.json`
+  - `qps=2.13`, `p50_us=4909`, `p95_us=2517654`.
 - Active unattended scale loop:
 
 ```bash
@@ -182,13 +189,15 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=26`
-  - `CUR_START_BLOCK=57238907` (pre-wrap checkpoint; active iteration now wrapped)
+  - `ITER=30`
+  - `CUR_START_BLOCK=56536000`
   - `CUR_SPAN=65536`
+  - `FORCE_SKIP_MIRROR=true`
 - Current active range:
-  - `iter=26` wrapped to dense historical span `56536000..56601535`.
+  - `iter=30` ingesting dense historical span `56536000..56601535`.
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
+  - on Scylla CAS timeout partial-write failures, skip same-keyspace retry and advance directly to next keyspace iteration.
 - Headroom recovery behavior added:
   - low source headroom (`latest_source - CUR_START_BLOCK + 1`) triggers wrap to `START_BLOCK`.
 - Recent failure/recovery:
@@ -241,3 +250,5 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
   - `de898c9` + `85d2081` add optional prebuilt benchmarking binary mode, but keep default scaler path on `cargo run` for shared-lib safety.
   - `4bea665` add watchdog script (`scripts/watch_scale_loop.sh`) for unattended auto-restart.
   - `2127d33` + `a053da8` retarget scaler defaults to denser historical block windows (latest: `56656000`).
+  - `727967f` skip mirror after keyspace-conflict iteration rollover.
+  - `38e51d6` harden ingest loop against CAS timeout churn (scylla retries/backoff, lower stream concurrency, timeout->new-keyspace fast path).

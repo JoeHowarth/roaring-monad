@@ -318,3 +318,45 @@ Interpretation:
 
 - write-path round-trip reduction and maintenance deferral materially improved ingest headroom for scale-out.
 - this directly shortens time-to-target for the ~100GB backend build.
+
+## 14) Post-optimization continuation: keyspace rollover + CAS-timeout handling
+
+Further reliability/performance tuning was applied during continued overnight execution:
+
+- scaler keyspace-rollover handling:
+  - new state flag `FORCE_SKIP_MIRROR` allows skipping mirror when the next iteration is only a keyspace rollover for the same block range.
+  - avoids repeated long mirror phases after keyspace conflicts.
+- scaler ingest-failure handling:
+  - added fast path for CAS timeout partial writes (`scylla put if version` / `LocalSerial`/`Cas` patterns).
+  - instead of retrying same keyspace (which then fails with invalid sequence), scaler advances immediately to a new keyspace iteration.
+- store/ingest tuning:
+  - `ScyllaMetaStore` default retry profile increased to `max_retries=10`, `base_delay_ms=50`, `max_delay_ms=5000`.
+  - `IngestEngine` stream-append concurrency reduced from `64` to `32` to lower LWT pressure.
+
+Validation:
+
+- `cargo +1.91.1 fmt --all`
+- `cargo +1.91.1 clippy -p finalized-log-index --all-targets --all-features -- -D warnings`
+- `cargo +1.91.1 test -p finalized-log-index`
+
+Observed behavior after deployment:
+
+- `iter=29` progressed materially farther than earlier failing attempts:
+  - reached around `raw_block=56542178` (about `6001` blocks ingested in run logs) before CAS timeout.
+  - earlier repeated failures were around `~3000` ingested blocks.
+- on failure, new fast path triggered exactly as intended:
+  - `scale ingest partial-write timeout iter=29 rc=1; retrying range with new keyspace iter=30`
+  - this removed the prior extra invalid-sequence retry cycle and reduced wasted time between attempts.
+
+Updated benchmark evidence (under active ingest load):
+
+- command used scaler env (`TRIEDB_TARGET=triedb_driver`, GCC15/CFLAGS haswell) for successful release build/run.
+- result JSON:
+  - `logs/results/benchmark-20260223T073907Z-scale-geom-i00025-expected-limit100-post-cas-tune.json`
+- output summary:
+  - `qps=2.13`, `p50_us=4909`, `p95_us=2517654`, `p99_us=2820084`, `max_us=2888019`.
+
+New commits:
+
+- `727967f` Skip mirror after keyspace-conflict iteration rollover.
+- `38e51d6` Harden ingest loop against CAS timeout churn.
