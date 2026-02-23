@@ -32,6 +32,8 @@ pub struct Config {
     pub backend_error_degraded_after: u64,
     pub ingest_mode: IngestMode,
     pub topic0_stats_flush_interval_blocks: u64,
+    pub log_locator_write_concurrency: usize,
+    pub stream_append_concurrency: usize,
 }
 
 impl Default for Config {
@@ -51,6 +53,8 @@ impl Default for Config {
             backend_error_degraded_after: 10,
             ingest_mode: IngestMode::StrictCas,
             topic0_stats_flush_interval_blocks: 1,
+            log_locator_write_concurrency: 256,
+            stream_append_concurrency: 64,
         }
     }
 }

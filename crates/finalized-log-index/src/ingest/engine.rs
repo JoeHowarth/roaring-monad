@@ -25,9 +25,6 @@ use crate::domain::types::{
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond, Record};
 
-const LOG_LOCATOR_WRITE_CONCURRENCY: usize = 128;
-const STREAM_APPEND_CONCURRENCY: usize = 32;
-
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
     pub meta_store: M,
@@ -98,7 +95,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                         .await
                 });
 
-                if in_flight.len() >= LOG_LOCATOR_WRITE_CONCURRENCY {
+                if in_flight.len() >= self.config.log_locator_write_concurrency.max(1) {
                     match in_flight.next().await {
                         Some(Ok(_)) => {}
                         Some(Err(e)) => return Err(e),
@@ -144,7 +141,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         for (stream_id, values) in appends {
             appends_in_flight
                 .push(async move { self.apply_stream_appends(&stream_id, &values, epoch).await });
-            if appends_in_flight.len() >= STREAM_APPEND_CONCURRENCY {
+            if appends_in_flight.len() >= self.config.stream_append_concurrency.max(1) {
                 match appends_in_flight.next().await {
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e),

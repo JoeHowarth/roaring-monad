@@ -179,6 +179,12 @@ struct IngestDistributedArgs {
     #[arg(long, default_value_t = 1)]
     topic0_stats_flush_interval_blocks: u64,
 
+    #[arg(long, default_value_t = 256)]
+    log_locator_write_concurrency: usize,
+
+    #[arg(long, default_value_t = 64)]
+    stream_append_concurrency: usize,
+
     #[arg(long, default_value_t = 250)]
     log_every: u64,
 
@@ -327,6 +333,8 @@ struct IngestReport {
     minio_prefix: String,
     ingest_mode: String,
     topic0_stats_flush_interval_blocks: u64,
+    log_locator_write_concurrency: usize,
+    stream_append_concurrency: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -614,6 +622,8 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         maintenance_seal_seconds: args.maintenance_seal_seconds,
         ingest_mode: args.ingest_mode.into(),
         topic0_stats_flush_interval_blocks: args.topic0_stats_flush_interval_blocks.max(1),
+        log_locator_write_concurrency: args.log_locator_write_concurrency.max(1),
+        stream_append_concurrency: args.stream_append_concurrency.max(1),
         ..IndexConfig::default()
     };
 
@@ -707,6 +717,8 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
             IngestModeArg::SingleWriterFast => "single_writer_fast".to_string(),
         },
         topic0_stats_flush_interval_blocks: args.topic0_stats_flush_interval_blocks.max(1),
+        log_locator_write_concurrency: args.log_locator_write_concurrency.max(1),
+        stream_append_concurrency: args.stream_append_concurrency.max(1),
     };
 
     println!(
@@ -858,6 +870,8 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         run_maintenance_every_blocks: 500,
         ingest_mode: IngestModeArg::StrictCas,
         topic0_stats_flush_interval_blocks: 1,
+        log_locator_write_concurrency: 256,
+        stream_append_concurrency: 64,
         log_every: 250,
         skip_final_maintenance: false,
         output_json: None,

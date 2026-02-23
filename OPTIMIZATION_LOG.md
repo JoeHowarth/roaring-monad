@@ -146,3 +146,76 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 
 - Compared to bucketed-only run (`104.25 blocks/s`), prepared statements reached `168.99 blocks/s` (`+62.1%`).
 - Scylla CPU usage dropped materially (`~213%` to `~99%`) while throughput increased, indicating large coordinator/query-parse overhead was removed.
+
+## 20260223T200811Z - Profiling Run concurrency-128x32
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T200811Z-concurrency-128x32 blocks=4001 logs=160347 elapsed_s=20.42971848 bps=195.842150439657 lps=7848.713145850457 mode=single_writer_fast flush=64 locator_c=128 stream_c=32
+- pid=1098063 cmd=benchmarking samples=21 avg_cpu=81.81 avg_wait=0.62 avg_usr=44.00 avg_sys=37.81
+- pid=213044 cmd=minio samples=21 avg_cpu=19.90 avg_wait=0.00 avg_usr=11.76 avg_sys=8.14
+- pid=213248 cmd=scylla samples=21 avg_cpu=112.81 avg_wait=0.90 avg_usr=72.00 avg_sys=40.81
+- nvme0n1 samples=22 avg_util=17.41 avg_aqu=0.26 avg_wkB_s=39009.92 avg_rkB_s=83.43
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T200811Z-concurrency-128x32.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T200811Z-concurrency-128x32.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T200811Z-concurrency-128x32.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T200811Z-concurrency-128x32.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T200811Z-concurrency-128x32.env`
+
+## 20260223T200845Z - Profiling Run concurrency-256x64
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T200845Z-concurrency-256x64 blocks=4001 logs=160347 elapsed_s=20.173661006 bps=198.3279087920647 lps=7948.334214216745 mode=single_writer_fast flush=64 locator_c=256 stream_c=64
+- pid=1098694 cmd=benchmarking samples=20 avg_cpu=78.40 avg_wait=0.45 avg_usr=43.05 avg_sys=35.35
+- pid=213044 cmd=minio samples=20 avg_cpu=19.95 avg_wait=0.00 avg_usr=11.90 avg_sys=8.05
+- pid=213248 cmd=scylla samples=20 avg_cpu=105.75 avg_wait=1.00 avg_usr=68.90 avg_sys=36.85
+- nvme0n1 samples=21 avg_util=18.78 avg_aqu=0.26 avg_wkB_s=37873.88 avg_rkB_s=87.41
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T200845Z-concurrency-256x64.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T200845Z-concurrency-256x64.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T200845Z-concurrency-256x64.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T200845Z-concurrency-256x64.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T200845Z-concurrency-256x64.env`
+
+## 20260223T200916Z - Profiling Run concurrency-512x64
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T200916Z-concurrency-512x64 blocks=4001 logs=160347 elapsed_s=20.319883865 bps=196.90073164697193 lps=7891.137619944266 mode=single_writer_fast flush=64 locator_c=512 stream_c=64
+- pid=1099341 cmd=benchmarking samples=21 avg_cpu=77.81 avg_wait=0.43 avg_usr=42.86 avg_sys=34.95
+- pid=213044 cmd=minio samples=21 avg_cpu=20.19 avg_wait=0.00 avg_usr=12.43 avg_sys=7.76
+- pid=213248 cmd=scylla samples=21 avg_cpu=106.52 avg_wait=1.00 avg_usr=70.14 avg_sys=36.38
+- nvme0n1 samples=22 avg_util=18.63 avg_aqu=0.27 avg_wkB_s=40247.29 avg_rkB_s=95.07
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T200916Z-concurrency-512x64.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T200916Z-concurrency-512x64.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T200916Z-concurrency-512x64.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T200916Z-concurrency-512x64.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T200916Z-concurrency-512x64.env`
+
+### Sweep Interpretation
+
+- `128/32`: `195.84 blocks/s` (`logs/results/profile-ingest-20260223T200811Z-concurrency-128x32.json`)
+- `256/64`: `198.33 blocks/s` (`logs/results/profile-ingest-20260223T200845Z-concurrency-256x64.json`)
+- `512/64`: `196.90 blocks/s` (`logs/results/profile-ingest-20260223T200916Z-concurrency-512x64.json`)
+- Selected defaults: `log_locator_write_concurrency=256`, `stream_append_concurrency=64`.

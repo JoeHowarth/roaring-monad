@@ -108,7 +108,7 @@ pub async fn run_offline_generate(
         max_threads_used: resolve_max_threads(&config),
         max_queue_depth: 0,
         dataset_valid: manifest.valid,
-        invalid_reason: manifest.invalid_reason.clone(),
+        invalid_reason: manifest.invalid_reason,
     });
     write_run_summary(
         dataset_path,
