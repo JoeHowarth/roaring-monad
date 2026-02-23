@@ -119,3 +119,30 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 
 - Compared to prior 4k-window baseline (`review-perfstat-20260223T193429Z.json` at `93.30 blocks/s`), bucketed partitioning improved to `104.25 blocks/s` (`+11.7%`).
 - Scylla remains the dominant consumer and ingest is still round-trip sensitive, but partition hot-spot pressure dropped measurably.
+
+## 20260223T200338Z - Profiling Run prepared-statements
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T200338Z-prepared-statements blocks=4001 logs=160347 elapsed_s=23.676232183 bps=168.98803699318327 lps=6772.488069919009 mode=single_writer_fast flush=64
+- pid=1087260 cmd=benchmarking samples=24 avg_cpu=71.21 avg_wait=0.54 avg_usr=38.38 avg_sys=32.83
+- pid=213044 cmd=minio samples=24 avg_cpu=17.79 avg_wait=0.00 avg_usr=10.71 avg_sys=7.08
+- pid=213248 cmd=scylla samples=24 avg_cpu=99.00 avg_wait=0.79 avg_usr=63.17 avg_sys=35.83
+- nvme0n1 samples=25 avg_util=29.08 avg_aqu=0.41 avg_wkB_s=33387.86 avg_rkB_s=75.98
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T200338Z-prepared-statements.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T200338Z-prepared-statements.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T200338Z-prepared-statements.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T200338Z-prepared-statements.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T200338Z-prepared-statements.env`
+
+### Interpretation
+
+- Compared to bucketed-only run (`104.25 blocks/s`), prepared statements reached `168.99 blocks/s` (`+62.1%`).
+- Scylla CPU usage dropped materially (`~213%` to `~99%`) while throughput increased, indicating large coordinator/query-parse overhead was removed.

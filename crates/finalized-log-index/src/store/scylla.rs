@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use scylla::frame::response::result::CqlValue;
+use scylla::prepared_statement::PreparedStatement;
 use scylla::{Session, SessionBuilder};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -94,8 +95,6 @@ impl ScyllaTelemetry {
 #[derive(Clone)]
 pub struct ScyllaMetaStore {
     session: Arc<Session>,
-    table: String,
-    fence_table: String,
     fence_key: String,
     max_retries: u32,
     base_delay_ms: u64,
@@ -104,6 +103,20 @@ pub struct ScyllaMetaStore {
     cached_min_epoch: Arc<AtomicU64>,
     last_fence_check_ms: Arc<AtomicU64>,
     telemetry: Arc<ScyllaTelemetry>,
+    stmts: Arc<ScyllaStatements>,
+}
+
+#[derive(Debug)]
+struct ScyllaStatements {
+    set_min_epoch: PreparedStatement,
+    get_min_epoch: PreparedStatement,
+    get: PreparedStatement,
+    put_any: PreparedStatement,
+    put_if_absent: PreparedStatement,
+    put_if_version: PreparedStatement,
+    delete_any: PreparedStatement,
+    delete_if_version: PreparedStatement,
+    list_prefix: PreparedStatement,
 }
 
 impl ScyllaMetaStore {
@@ -166,10 +179,73 @@ impl ScyllaMetaStore {
             .await
             .map_err(|e| Error::Backend(format!("create table meta_fence: {e}")))?;
 
+        let statements = ScyllaStatements {
+            set_min_epoch: prepare_statement(
+                &session,
+                format!("INSERT INTO {fence_table} (id, min_epoch) VALUES (?, ?)"),
+                "set_min_epoch",
+            )
+            .await?,
+            get_min_epoch: prepare_statement(
+                &session,
+                format!("SELECT min_epoch FROM {fence_table} WHERE id = ?"),
+                "get_min_epoch",
+            )
+            .await?,
+            get: prepare_statement(
+                &session,
+                format!("SELECT v, version FROM {table} WHERE grp = ? AND bucket = ? AND k = ?"),
+                "get",
+            )
+            .await?,
+            put_any: prepare_statement(
+                &session,
+                format!(
+                    "INSERT INTO {table} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?)"
+                ),
+                "put_any",
+            )
+            .await?,
+            put_if_absent: prepare_statement(
+                &session,
+                format!(
+                    "INSERT INTO {table} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS"
+                ),
+                "put_if_absent",
+            )
+            .await?,
+            put_if_version: prepare_statement(
+                &session,
+                format!(
+                    "UPDATE {table} SET v = ?, version = ? WHERE grp = ? AND bucket = ? AND k = ? IF version = ?"
+                ),
+                "put_if_version",
+            )
+            .await?,
+            delete_any: prepare_statement(
+                &session,
+                format!("DELETE FROM {table} WHERE grp = ? AND bucket = ? AND k = ?"),
+                "delete_any",
+            )
+            .await?,
+            delete_if_version: prepare_statement(
+                &session,
+                format!(
+                    "DELETE FROM {table} WHERE grp = ? AND bucket = ? AND k = ? IF version = ?"
+                ),
+                "delete_if_version",
+            )
+            .await?,
+            list_prefix: prepare_statement(
+                &session,
+                format!("SELECT k FROM {table} WHERE grp = ? AND bucket = ?"),
+                "list_prefix",
+            )
+            .await?,
+        };
+
         Ok(Self {
             session: Arc::new(session),
-            table,
-            fence_table,
             fence_key: DEFAULT_FENCE_KEY.to_string(),
             max_retries: 10,
             base_delay_ms: 50,
@@ -178,6 +254,7 @@ impl ScyllaMetaStore {
             cached_min_epoch: Arc::new(AtomicU64::new(0)),
             last_fence_check_ms: Arc::new(AtomicU64::new(0)),
             telemetry: Arc::new(ScyllaTelemetry::default()),
+            stmts: Arc::new(statements),
         })
     }
 
@@ -198,15 +275,10 @@ impl ScyllaMetaStore {
     }
 
     pub async fn set_min_epoch(&self, min_epoch: u64) -> Result<()> {
+        let stmt = self.stmts.set_min_epoch.clone();
         self.with_retry("set_min_epoch", || async {
             self.session
-                .query_unpaged(
-                    format!(
-                        "INSERT INTO {} (id, min_epoch) VALUES (?, ?)",
-                        self.fence_table
-                    ),
-                    (self.fence_key.as_str(), min_epoch as i64),
-                )
+                .execute_unpaged(&stmt, (self.fence_key.as_str(), min_epoch as i64))
                 .await
                 .map_err(|e| Error::Backend(format!("set min epoch: {e}")))?;
             Ok(())
@@ -230,13 +302,11 @@ impl ScyllaMetaStore {
             return Ok(());
         }
 
+        let stmt = self.stmts.get_min_epoch.clone();
         let res = self
             .with_retry("validate_fence", || async {
                 self.session
-                    .query_unpaged(
-                        format!("SELECT min_epoch FROM {} WHERE id = ?", self.fence_table),
-                        (self.fence_key.as_str(),),
-                    )
+                    .execute_unpaged(&stmt, (self.fence_key.as_str(),))
                     .await
                     .map_err(|e| Error::Backend(format!("get min epoch: {e}")))
             })
@@ -258,16 +328,11 @@ impl MetaStore for ScyllaMetaStore {
         let grp = extract_group(key);
         let key_vec = key.to_vec();
         let bucket = key_bucket(&key_vec);
+        let stmt = self.stmts.get.clone();
         let res = self
             .with_retry("get", || async {
                 self.session
-                    .query_unpaged(
-                        format!(
-                            "SELECT v, version FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
-                            self.table
-                        ),
-                        (grp.as_str(), bucket, key_vec.clone()),
-                    )
+                    .execute_unpaged(&stmt, (grp.as_str(), bucket, key_vec.clone()))
                     .await
                     .map_err(|e| Error::Backend(format!("scylla get: {e}")))
             })
@@ -295,13 +360,11 @@ impl MetaStore for ScyllaMetaStore {
 
         match cond {
             PutCond::Any => {
+                let stmt = self.stmts.put_any.clone();
                 self.with_retry("put_any", || async {
                     self.session
-                        .query_unpaged(
-                            format!(
-                                "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?)",
-                                self.table
-                            ),
+                        .execute_unpaged(
+                            &stmt,
                             (
                                 grp.as_str(),
                                 bucket,
@@ -323,14 +386,12 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfAbsent => {
                 let cas_op = format!("put_if_absent:{grp}");
                 self.telemetry.record_cas_attempt(&cas_op);
+                let stmt = self.stmts.put_if_absent.clone();
                 let res = self
                     .with_retry("put_if_absent", || async {
                         self.session
-                            .query_unpaged(
-                                format!(
-                                    "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS",
-                                    self.table
-                                ),
+                            .execute_unpaged(
+                                &stmt,
                                 (grp.as_str(), bucket, key_vec.clone(), value.to_vec(), 1_i64),
                             )
                             .await
@@ -349,14 +410,12 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfVersion(v) => {
                 let cas_op = format!("put_if_version:{grp}");
                 self.telemetry.record_cas_attempt(&cas_op);
+                let stmt = self.stmts.put_if_version.clone();
                 let res = self
                     .with_retry("put_if_version", || async {
                         self.session
-                            .query_unpaged(
-                                format!(
-                                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
-                                    self.table
-                                ),
+                            .execute_unpaged(
+                                &stmt,
                                 (
                                     value.to_vec(),
                                     (v + 1) as i64,
@@ -389,15 +448,10 @@ impl MetaStore for ScyllaMetaStore {
         let bucket = key_bucket(key);
         match cond {
             DelCond::Any => {
+                let stmt = self.stmts.delete_any.clone();
                 self.with_retry("delete_any", || async {
                     self.session
-                        .query_unpaged(
-                            format!(
-                                "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
-                                self.table
-                            ),
-                            (grp.as_str(), bucket, key.to_vec()),
-                        )
+                        .execute_unpaged(&stmt, (grp.as_str(), bucket, key.to_vec()))
                         .await
                         .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
                     Ok(())
@@ -405,16 +459,11 @@ impl MetaStore for ScyllaMetaStore {
                 .await?;
             }
             DelCond::IfVersion(v) => {
+                let stmt = self.stmts.delete_if_version.clone();
                 let _ = self
                     .with_retry("delete_if_version", || async {
                         self.session
-                            .query_unpaged(
-                                format!(
-                                    "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
-                                    self.table
-                                ),
-                                (grp.as_str(), bucket, key.to_vec(), v as i64),
-                            )
+                            .execute_unpaged(&stmt, (grp.as_str(), bucket, key.to_vec(), v as i64))
                             .await
                             .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))
                     })
@@ -444,16 +493,11 @@ impl MetaStore for ScyllaMetaStore {
                 if keys.len() >= limit {
                     break;
                 }
+                let stmt = self.stmts.list_prefix.clone();
                 let res = self
                     .with_retry("list_prefix", || async {
                         self.session
-                            .query_unpaged(
-                                format!(
-                                    "SELECT k FROM {} WHERE grp = ? AND bucket = ?",
-                                    self.table
-                                ),
-                                (grp.as_str(), bucket as i16),
-                            )
+                            .execute_unpaged(&stmt, (grp.as_str(), bucket as i16))
                             .await
                             .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))
                     })
@@ -514,6 +558,17 @@ impl ScyllaMetaStore {
             }
         }
     }
+}
+
+async fn prepare_statement(
+    session: &Session,
+    query: String,
+    label: &str,
+) -> Result<PreparedStatement> {
+    session
+        .prepare(query)
+        .await
+        .map_err(|e| Error::Backend(format!("prepare statement {label}: {e}")))
 }
 
 fn first_col_i64(res: scylla::QueryResult) -> Option<i64> {
