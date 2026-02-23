@@ -10,6 +10,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
+    volumes:
+      - ./data/distributed/scylla:/var/lib/scylla
 
   minio:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
@@ -26,3 +28,5 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+    volumes:
+      - ./data/distributed/minio:/data
