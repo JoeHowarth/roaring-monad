@@ -28,6 +28,7 @@ SKIP_FINAL_MAINTENANCE="${SKIP_FINAL_MAINTENANCE:-true}"
 MAX_RETRIES_PER_ITER="${MAX_RETRIES_PER_ITER:-5}"
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-15}"
 SOURCE_LATEST_TIMEOUT_SECONDS="${SOURCE_LATEST_TIMEOUT_SECONDS:-120}"
+MIN_AVAILABLE_SPAN_BEFORE_WRAP="${MIN_AVAILABLE_SPAN_BEFORE_WRAP:-2000}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -133,6 +134,15 @@ while (( ITER < MAX_ITERS )); do
     echo "$(date -u +%FT%TZ) :: source head reached iter=$ITER start=$CUR_START_BLOCK latest_source=$latest_source; wrapping to START_BLOCK=$START_BLOCK" | tee -a "$PROGRESS_LOG"
     CUR_START_BLOCK="$START_BLOCK"
     desired_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
+  fi
+
+  if (( CUR_START_BLOCK <= latest_source )); then
+    available_span="$((latest_source - CUR_START_BLOCK + 1))"
+    if (( available_span < MIN_AVAILABLE_SPAN_BEFORE_WRAP )); then
+      echo "$(date -u +%FT%TZ) :: low headroom iter=$ITER start=$CUR_START_BLOCK latest_source=$latest_source available_span=$available_span; wrapping to START_BLOCK=$START_BLOCK" | tee -a "$PROGRESS_LOG"
+      CUR_START_BLOCK="$START_BLOCK"
+      desired_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
+    fi
   fi
 
   cur_end_block="$desired_end_block"
