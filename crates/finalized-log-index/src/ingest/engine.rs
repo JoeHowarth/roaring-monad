@@ -29,6 +29,13 @@ pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub meta_store: M,
     pub blob_store: B,
     topic0_mode_cache: RwLock<HashMap<[u8; 32], Topic0Mode>>,
+    topic0_stats_cache: RwLock<HashMap<[u8; 32], CachedTopic0Stats>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedTopic0Stats {
+    stats: Topic0Stats,
+    version: Option<u64>,
 }
 
 impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
@@ -38,6 +45,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             meta_store,
             blob_store,
             topic0_mode_cache: RwLock::new(HashMap::new()),
+            topic0_stats_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -418,29 +426,41 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         epoch: u64,
     ) -> Result<()> {
         let key = topic0_stats_key(&topic0);
-        let (mut stats, version): (Topic0Stats, Option<u64>) =
+        let cached = self
+            .topic0_stats_cache
+            .write()
+            .ok()
+            .and_then(|mut cache| cache.remove(&topic0));
+        let (mut stats, version): (Topic0Stats, Option<u64>) = if let Some(cached) = cached {
+            (cached.stats, cached.version)
+        } else {
             match self.meta_store.get(&key).await? {
                 Some(Record { value, version }) => (decode_topic0_stats(&value)?, Some(version)),
-                None => (
-                    Topic0Stats {
-                        window_len: 50_000,
-                        blocks_seen_in_window: 0,
-                        ring_cursor: 0,
-                        last_updated_block: block_num.saturating_sub(1),
-                        ring_bits: vec![0u8; (50_000usize).div_ceil(8)],
-                    },
-                    None,
-                ),
-            };
+                None => (default_topic0_stats(block_num), None),
+            }
+        };
 
         if block_num <= stats.last_updated_block {
+            if let Ok(mut cache) = self.topic0_stats_cache.write() {
+                cache.insert(topic0, CachedTopic0Stats { stats, version });
+            }
             return Ok(());
         }
 
-        let start = stats.last_updated_block.saturating_add(1);
-        for b in start..=block_num {
-            let seen = b == block_num && seen_in_block;
-            apply_window_step(&mut stats, b, seen);
+        let window = stats.window_len.max(1) as u64;
+        let gap = block_num.saturating_sub(stats.last_updated_block);
+        if gap >= window {
+            stats.blocks_seen_in_window = 0;
+            stats.ring_bits.fill(0);
+            apply_window_step(&mut stats, block_num, seen_in_block);
+        } else if stats.blocks_seen_in_window == 0 {
+            apply_window_step(&mut stats, block_num, seen_in_block);
+        } else {
+            let start = stats.last_updated_block.saturating_add(1);
+            for b in start..=block_num {
+                let seen = b == block_num && seen_in_block;
+                apply_window_step(&mut stats, b, seen);
+            }
         }
 
         let cond = version.map(PutCond::IfVersion).unwrap_or(PutCond::IfAbsent);
@@ -453,16 +473,18 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         let mode_key = topic0_mode_key(&topic0);
-        let (mut mode, mode_exists) = match self.meta_store.get(&mode_key).await? {
-            Some(rec) => (decode_topic0_mode(&rec.value)?, true),
-            None => (
-                Topic0Mode {
-                    log_enabled: false,
-                    enabled_from_block: 0,
-                },
-                false,
-            ),
-        };
+        let mut mode = if let Ok(cache) = self.topic0_mode_cache.read() {
+            cache.get(&topic0).cloned()
+        } else {
+            None
+        }
+        .unwrap_or(match self.meta_store.get(&mode_key).await? {
+            Some(rec) => decode_topic0_mode(&rec.value)?,
+            None => Topic0Mode {
+                log_enabled: false,
+                enabled_from_block: 0,
+            },
+        });
 
         let denom = u64::min(stats.window_len as u64, block_num.saturating_add(1)).max(1);
         let ratio = stats.blocks_seen_in_window as f64 / denom as f64;
@@ -476,7 +498,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             changed = true;
         }
 
-        if changed || !mode_exists {
+        if changed {
             let _ = self
                 .meta_store
                 .put(
@@ -490,6 +512,15 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
 
         if let Ok(mut cache) = self.topic0_mode_cache.write() {
             cache.insert(topic0, mode);
+        }
+        if let Ok(mut cache) = self.topic0_stats_cache.write() {
+            cache.insert(
+                topic0,
+                CachedTopic0Stats {
+                    stats,
+                    version: result.version,
+                },
+            );
         }
         Ok(())
     }
@@ -538,6 +569,16 @@ fn apply_window_step(stats: &mut Topic0Stats, block_num: u64, seen: bool) {
     }
     stats.ring_cursor = ((index + 1) % window) as u32;
     stats.last_updated_block = block_num;
+}
+
+fn default_topic0_stats(block_num: u64) -> Topic0Stats {
+    Topic0Stats {
+        window_len: 50_000,
+        blocks_seen_in_window: 0,
+        ring_cursor: 0,
+        last_updated_block: block_num.saturating_sub(1),
+        ring_bits: vec![0u8; (50_000usize).div_ceil(8)],
+    }
 }
 
 fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {

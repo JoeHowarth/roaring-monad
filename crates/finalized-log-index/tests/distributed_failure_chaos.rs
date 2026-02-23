@@ -90,7 +90,10 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     assert!(docker_control(&["stop", "finalized-index-minio"]));
 
     let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
-    let e1 = svc.ingest_finalized_block(b2).await.expect_err("backend fail");
+    let e1 = svc
+        .ingest_finalized_block(b2)
+        .await
+        .expect_err("backend fail");
     assert!(matches!(e1, Error::Backend(_)));
 
     let e2 = svc
