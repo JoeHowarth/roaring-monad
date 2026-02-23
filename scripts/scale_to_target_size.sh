@@ -29,6 +29,8 @@ MAX_RETRIES_PER_ITER="${MAX_RETRIES_PER_ITER:-5}"
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-15}"
 SOURCE_LATEST_TIMEOUT_SECONDS="${SOURCE_LATEST_TIMEOUT_SECONDS:-120}"
 MIN_AVAILABLE_SPAN_BEFORE_WRAP="${MIN_AVAILABLE_SPAN_BEFORE_WRAP:-2000}"
+BENCH_BIN="${BENCH_BIN:-$RM_ROOT/target/release/benchmarking}"
+BENCH_USE_CARGO_RUN="${BENCH_USE_CARGO_RUN:-false}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -43,6 +45,12 @@ to_keyspace_safe() {
   s="$(echo "$1" | tr '[:upper:]-' '[:lower:]_')"
   echo "$s"
 }
+
+if [[ "$BENCH_USE_CARGO_RUN" == "true" || ! -x "$BENCH_BIN" ]]; then
+  BENCH_CMD=(cargo +1.91.1 run --release -p benchmarking --)
+else
+  BENCH_CMD=("$BENCH_BIN")
+fi
 
 if [[ ! -f "$TABLE_FILE" ]]; then
   {
@@ -94,7 +102,7 @@ while (( ITER < MAX_ITERS )); do
       ASMFLAGS='-march=haswell' \
       CFLAGS='-march=haswell' \
       CXXFLAGS='-march=haswell' \
-      cargo +1.91.1 run --release -p benchmarking -- source-latest \
+      "${BENCH_CMD[@]}" source-latest \
         --source "$ARCHIVE_SOURCE" \
         2>>"$source_latest_log"
   )"
@@ -193,7 +201,7 @@ while (( ITER < MAX_ITERS )); do
         ASMFLAGS='-march=haswell' \
         CFLAGS='-march=haswell' \
         CXXFLAGS='-march=haswell' \
-        cargo +1.91.1 run --release -p benchmarking -- mirror \
+        "${BENCH_CMD[@]}" mirror \
           --archive-root "$ARCHIVE_ROOT" \
           --source "$ARCHIVE_SOURCE" \
           --start-block "$CUR_START_BLOCK" \
@@ -246,7 +254,7 @@ while (( ITER < MAX_ITERS )); do
     ASMFLAGS='-march=haswell' \
     CFLAGS='-march=haswell' \
     CXXFLAGS='-march=haswell' \
-    cargo +1.91.1 run --release -p benchmarking -- ingest-distributed \
+    "${BENCH_CMD[@]}" ingest-distributed \
       --archive-root "$ARCHIVE_ROOT" \
       --start-block "$CUR_START_BLOCK" \
       --end-block "$cur_end_block" \
