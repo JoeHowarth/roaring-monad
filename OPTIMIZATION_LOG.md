@@ -219,3 +219,30 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - `256/64`: `198.33 blocks/s` (`logs/results/profile-ingest-20260223T200845Z-concurrency-256x64.json`)
 - `512/64`: `196.90 blocks/s` (`logs/results/profile-ingest-20260223T200916Z-concurrency-512x64.json`)
 - Selected defaults: `log_locator_write_concurrency=256`, `stream_append_concurrency=64`.
+
+## 20260223T201235Z - Profiling Run stream-cache
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T201235Z-stream-cache blocks=4001 logs=160347 elapsed_s=19.769206942 bps=202.38545793659586 lps=8110.947519060069 mode=single_writer_fast flush=64 locator_c=256 stream_c=64
+- pid=1107211 cmd=benchmarking samples=20 avg_cpu=58.50 avg_wait=0.25 avg_usr=32.30 avg_sys=26.20
+- pid=213044 cmd=minio samples=20 avg_cpu=19.65 avg_wait=0.00 avg_usr=12.00 avg_sys=7.65
+- pid=213248 cmd=scylla samples=20 avg_cpu=76.00 avg_wait=0.50 avg_usr=49.40 avg_sys=26.60
+- nvme0n1 samples=21 avg_util=25.59 avg_aqu=0.36 avg_wkB_s=36339.14 avg_rkB_s=381.30
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T201235Z-stream-cache.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T201235Z-stream-cache.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T201235Z-stream-cache.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T201235Z-stream-cache.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T201235Z-stream-cache.env`
+
+### Interpretation
+
+- Compared to the tuned-concurrency run (`198.33 blocks/s`), stream-state cache reached `202.39 blocks/s` (`+2.0%`).
+- Scylla CPU dropped again (`~105.75%` to `~76.00%`), consistent with fewer manifest/tail read round-trips.

@@ -31,12 +31,20 @@ pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub blob_store: B,
     topic0_mode_cache: RwLock<HashMap<[u8; 32], Topic0Mode>>,
     topic0_stats_cache: RwLock<HashMap<[u8; 32], CachedTopic0Stats>>,
+    stream_state_cache: RwLock<HashMap<String, CachedStreamState>>,
 }
 
 #[derive(Debug, Clone)]
 struct CachedTopic0Stats {
     stats: Topic0Stats,
     version: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedStreamState {
+    manifest: Manifest,
+    manifest_version: Option<u64>,
+    tail: RoaringBitmap,
 }
 
 impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
@@ -47,6 +55,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             blob_store,
             topic0_mode_cache: RwLock::new(HashMap::new()),
             topic0_stats_cache: RwLock::new(HashMap::new()),
+            stream_state_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -168,6 +177,9 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
     }
 
     pub async fn run_periodic_maintenance(&self, epoch: u64) -> Result<MaintenanceStats> {
+        if let Ok(mut cache) = self.stream_state_cache.write() {
+            cache.clear();
+        }
         let mut stats = MaintenanceStats::default();
         let page = self
             .meta_store
@@ -245,8 +257,18 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
     }
 
     async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<bool> {
-        let (mut manifest, manifest_version) = self.load_manifest(stream).await?;
-        let mut tail = self.load_tail(stream).await?;
+        let cached = self
+            .stream_state_cache
+            .write()
+            .ok()
+            .and_then(|mut cache| cache.remove(stream));
+        let (mut manifest, mut manifest_version, mut tail) = if let Some(cached) = cached {
+            (cached.manifest, cached.manifest_version, cached.tail)
+        } else {
+            let (manifest, manifest_version) = self.load_manifest(stream).await?;
+            let tail = self.load_tail(stream).await?;
+            (manifest, manifest_version, tail)
+        };
         let mut manifest_changed = false;
 
         for v in values {
@@ -289,10 +311,21 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         if manifest_changed {
-            self.store_manifest(stream, &manifest, manifest_version, epoch)
+            manifest_version = self
+                .store_manifest(stream, &manifest, manifest_version, epoch)
                 .await?;
         }
         self.store_tail(stream, &tail, epoch).await?;
+        if let Ok(mut cache) = self.stream_state_cache.write() {
+            cache.insert(
+                stream.to_string(),
+                CachedStreamState {
+                    manifest,
+                    manifest_version,
+                    tail,
+                },
+            );
+        }
         Ok(sealed)
     }
 
@@ -381,7 +414,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         manifest: &Manifest,
         version: Option<u64>,
         epoch: u64,
-    ) -> Result<()> {
+    ) -> Result<Option<u64>> {
         let key = manifest_key(stream);
         let (cond, strict_applied_check) = match self.config.ingest_mode {
             IngestMode::StrictCas => (
@@ -400,7 +433,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         if strict_applied_check && !r.applied {
             return Err(Error::CasConflict);
         }
-        Ok(())
+        Ok(r.version.or(version))
     }
 
     async fn load_tail(&self, stream: &str) -> Result<RoaringBitmap> {
