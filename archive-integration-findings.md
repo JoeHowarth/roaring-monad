@@ -219,6 +219,10 @@ Follow-up fine-grained scans used to retarget overnight scaling:
   - avg logs/sample: `39.50`
   - max sampled: `296`
   - output: `logs/results/scan-density-20260223T0909Z-window56542-step10.json`
+- `56656000..56670000` (`step=10`):
+  - avg logs/sample: `46.40`
+  - max sampled: `253`
+  - output: `logs/results/scan-density-20260223T0932Z-window56662-step10.json`
 - `56885000..56898000` (`step=10`):
   - avg logs/sample: `20.93`
   - max sampled: `684` (spiky outliers, lower sustained density)
@@ -226,8 +230,8 @@ Follow-up fine-grained scans used to retarget overnight scaling:
 
 Resulting scaler default retarget:
 
-- `START_BLOCK=56536000`
-- `END_BLOCK=56536500`
+- `START_BLOCK=56656000`
+- `END_BLOCK=56656500`
 
 This keeps geometric scaling in a denser sustained region and improves bytes-per-hour accumulation.
 

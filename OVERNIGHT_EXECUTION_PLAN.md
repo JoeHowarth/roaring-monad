@@ -201,13 +201,15 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - output: `logs/results/scan-density-20260223T074555Z-coarse.json`
   - fine scan (`56,536,000..56,550,000`, step `10`) avg logs/sample `39.50`, max sampled `296`
   - output: `logs/results/scan-density-20260223T0909Z-window56542-step10.json`
+  - fine scan (`56,656,000..56,670,000`, step `10`) avg logs/sample `46.40`, max sampled `253`
+  - output: `logs/results/scan-density-20260223T0932Z-window56662-step10.json`
 
 - Mirror path selection:
   - scaler now defaults to `MIRROR_METHOD=archiver` (fast path through `monad-archiver`).
   - caveat: `--stop-block` can overshoot by about one batch, causing harmless overlap/NoClobber skips later.
   - scaler default wrap target retuned to denser region:
-    - `START_BLOCK=56536000`
-    - `END_BLOCK=56536500`
+    - `START_BLOCK=56656000`
+    - `END_BLOCK=56656500`
     to improve bytes/hour on long unattended runs.
 
 - Relaunch command used for current geometry run (resume + ingest-speed settings):
@@ -238,4 +240,4 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
   - `ebfa2f8` parallelize query stream loading for OR/multi-stream query paths.
   - `de898c9` + `85d2081` add optional prebuilt benchmarking binary mode, but keep default scaler path on `cargo run` for shared-lib safety.
   - `4bea665` add watchdog script (`scripts/watch_scale_loop.sh`) for unattended auto-restart.
-  - `2127d33` retarget scaler defaults to denser historical block window.
+  - `2127d33` + `a053da8` retarget scaler defaults to denser historical block windows (latest: `56656000`).
