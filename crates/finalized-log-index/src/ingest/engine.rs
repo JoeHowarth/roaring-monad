@@ -291,6 +291,10 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .and_then(|mut cache| cache.remove(stream));
         let (mut manifest, mut manifest_version, mut tail) = if let Some(cached) = cached {
             (cached.manifest, cached.manifest_version, cached.tail)
+        } else if self.config.assume_empty_streams
+            && matches!(self.config.ingest_mode, IngestMode::SingleWriterFast)
+        {
+            (Manifest::default(), None, RoaringBitmap::new())
         } else {
             let (manifest, manifest_version) = self.load_manifest(stream).await?;
             let tail = self.load_tail(stream).await?;

@@ -470,3 +470,157 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - Keep run tags short enough for Scylla keyspace limits, or enforce automatic truncation in tooling.
 - Prefer comparing medians and not single maxima when differences are <2%.
 - Continue collecting `pidstat` + `iostat` with each run to distinguish DB CPU pressure from disk saturation.
+
+## 20260223T203327Z - Profiling Run ase0
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203327Z-ase0 blocks=4001 logs=160347 elapsed_s=20.28723852 bps=197.21757577087925 lps=7903.835696609141 mode=single_writer_fast flush=64 assume_empty=null locator_c=256 stream_c=64
+- pid=1143792 cmd=benchmarking samples=21 avg_cpu=56.38 avg_wait=0.24 avg_usr=30.19 avg_sys=26.19
+- pid=213044 cmd=minio samples=21 avg_cpu=16.10 avg_wait=0.00 avg_usr=9.38 avg_sys=6.71
+- pid=213248 cmd=scylla samples=21 avg_cpu=73.10 avg_wait=0.48 avg_usr=47.43 avg_sys=25.67
+- nvme0n1 samples=22 avg_util=27.13 avg_aqu=0.58 avg_wkB_s=46479.85 avg_rkB_s=18.65
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203327Z-ase0.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203327Z-ase0.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203327Z-ase0.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203327Z-ase0.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203327Z-ase0.env`
+
+## 20260223T203745Z - Profiling Run ase0n
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203745Z-ase0n blocks=4001 logs=160347 elapsed_s=20.622122791 bps=194.01494407482312 lps=7775.484688219361 mode=single_writer_fast flush=64 assume_empty=false locator_c=256 stream_c=64
+- pid=1167408 cmd=benchmarking samples=21 avg_cpu=43.81 avg_wait=0.10 avg_usr=24.57 avg_sys=19.24
+- pid=213044 cmd=minio samples=21 avg_cpu=19.43 avg_wait=0.00 avg_usr=11.67 avg_sys=7.76
+- pid=213248 cmd=scylla samples=21 avg_cpu=52.33 avg_wait=0.29 avg_usr=33.05 avg_sys=19.29
+- nvme0n1 samples=22 avg_util=28.78 avg_aqu=0.43 avg_wkB_s=38759.71 avg_rkB_s=11.78
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203745Z-ase0n.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203745Z-ase0n.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203745Z-ase0n.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203745Z-ase0n.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203745Z-ase0n.env`
+
+## 20260223T203809Z - Profiling Run ase1n
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203809Z-ase1n blocks=4001 logs=160347 elapsed_s=18.862704119 bps=212.11168742078067 lps=8500.742999964988 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=64
+- pid=1167837 cmd=benchmarking samples=19 avg_cpu=44.89 avg_wait=0.11 avg_usr=25.42 avg_sys=19.47
+- pid=213044 cmd=minio samples=19 avg_cpu=20.68 avg_wait=0.00 avg_usr=12.21 avg_sys=8.47
+- pid=213248 cmd=scylla samples=19 avg_cpu=52.95 avg_wait=0.26 avg_usr=33.00 avg_sys=19.95
+- nvme0n1 samples=20 avg_util=23.98 avg_aqu=0.40 avg_wkB_s=40970.54 avg_rkB_s=19.36
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203809Z-ase1n.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203809Z-ase1n.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203809Z-ase1n.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203809Z-ase1n.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203809Z-ase1n.env`
+
+## 20260223T203841Z - Profiling Run ase0m
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203841Z-ase0m blocks=4001 logs=160347 elapsed_s=18.601446528 bps=215.09079920088246 lps=8620.136060850762 mode=single_writer_fast flush=64 assume_empty=false locator_c=256 stream_c=64
+- pid=1168402 cmd=benchmarking samples=19 avg_cpu=48.11 avg_wait=0.11 avg_usr=26.53 avg_sys=21.58
+- pid=213044 cmd=minio samples=19 avg_cpu=21.05 avg_wait=0.00 avg_usr=12.79 avg_sys=8.26
+- pid=213248 cmd=scylla samples=19 avg_cpu=57.42 avg_wait=0.26 avg_usr=35.74 avg_sys=21.68
+- nvme0n1 samples=20 avg_util=21.57 avg_aqu=0.30 avg_wkB_s=39989.58 avg_rkB_s=284.55
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203841Z-ase0m.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203841Z-ase0m.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203841Z-ase0m.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203841Z-ase0m.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203841Z-ase0m.env`
+
+## 20260223T203905Z - Profiling Run ase1m
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203905Z-ase1m blocks=4001 logs=160347 elapsed_s=18.031499708 bps=221.88947479642442 lps=8892.604752607414 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=64
+- pid=1168926 cmd=benchmarking samples=18 avg_cpu=46.67 avg_wait=0.11 avg_usr=26.44 avg_sys=20.22
+- pid=213044 cmd=minio samples=18 avg_cpu=20.83 avg_wait=0.00 avg_usr=12.28 avg_sys=8.56
+- pid=213248 cmd=scylla samples=18 avg_cpu=55.50 avg_wait=0.28 avg_usr=35.39 avg_sys=20.11
+- nvme0n1 samples=19 avg_util=22.93 avg_aqu=0.37 avg_wkB_s=39468.93 avg_rkB_s=1943.71
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203905Z-ase1m.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203905Z-ase1m.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203905Z-ase1m.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203905Z-ase1m.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203905Z-ase1m.env`
+
+## 20260223T203929Z - Profiling Run ase0p
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203929Z-ase0p blocks=4001 logs=160347 elapsed_s=18.526159436 bps=215.96489082487673 lps=8655.166795575233 mode=single_writer_fast flush=64 assume_empty=false locator_c=256 stream_c=64
+- pid=1169363 cmd=benchmarking samples=19 avg_cpu=48.32 avg_wait=0.11 avg_usr=27.00 avg_sys=21.32
+- pid=213044 cmd=minio samples=19 avg_cpu=20.53 avg_wait=0.00 avg_usr=12.00 avg_sys=8.53
+- pid=213248 cmd=scylla samples=19 avg_cpu=58.16 avg_wait=0.32 avg_usr=36.89 avg_sys=21.26
+- nvme0n1 samples=20 avg_util=22.13 avg_aqu=0.33 avg_wkB_s=40074.05 avg_rkB_s=2010.97
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203929Z-ase0p.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203929Z-ase0p.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203929Z-ase0p.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203929Z-ase0p.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203929Z-ase0p.env`
+
+## 20260223T203954Z - Profiling Run ase1p
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T203954Z-ase1p blocks=4001 logs=160347 elapsed_s=18.15743029 bps=220.35056371404633 lps=8830.930227407196 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=64
+- pid=1169822 cmd=benchmarking samples=18 avg_cpu=46.83 avg_wait=0.11 avg_usr=26.56 avg_sys=20.28
+- pid=213044 cmd=minio samples=18 avg_cpu=20.72 avg_wait=0.00 avg_usr=12.17 avg_sys=8.56
+- pid=213248 cmd=scylla samples=18 avg_cpu=55.78 avg_wait=0.28 avg_usr=34.78 avg_sys=21.00
+- nvme0n1 samples=19 avg_util=22.10 avg_aqu=0.33 avg_wkB_s=42286.94 avg_rkB_s=2049.45
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T203954Z-ase1p.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T203954Z-ase1p.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203954Z-ase1p.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203954Z-ase1p.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T203954Z-ase1p.env`
