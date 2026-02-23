@@ -30,7 +30,7 @@ RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-15}"
 SOURCE_LATEST_TIMEOUT_SECONDS="${SOURCE_LATEST_TIMEOUT_SECONDS:-120}"
 MIN_AVAILABLE_SPAN_BEFORE_WRAP="${MIN_AVAILABLE_SPAN_BEFORE_WRAP:-2000}"
 BENCH_BIN="${BENCH_BIN:-$RM_ROOT/target/release/benchmarking}"
-BENCH_USE_CARGO_RUN="${BENCH_USE_CARGO_RUN:-false}"
+BENCH_USE_CARGO_RUN="${BENCH_USE_CARGO_RUN:-true}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -49,7 +49,12 @@ to_keyspace_safe() {
 if [[ "$BENCH_USE_CARGO_RUN" == "true" || ! -x "$BENCH_BIN" ]]; then
   BENCH_CMD=(cargo +1.91.1 run --release -p benchmarking --)
 else
-  BENCH_CMD=("$BENCH_BIN")
+  if "$BENCH_BIN" --help >/dev/null 2>&1; then
+    BENCH_CMD=("$BENCH_BIN")
+  else
+    echo "$(date -u +%FT%TZ) :: benchmark binary unavailable; falling back to cargo run (BENCH_BIN=$BENCH_BIN)" | tee -a "$PROGRESS_LOG"
+    BENCH_CMD=(cargo +1.91.1 run --release -p benchmarking --)
+  fi
 fi
 
 if [[ ! -f "$TABLE_FILE" ]]; then
