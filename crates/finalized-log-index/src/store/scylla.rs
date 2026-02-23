@@ -13,6 +13,7 @@ use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutRes
 
 const DEFAULT_FENCE_KEY: &str = "global";
 const DEFAULT_FENCE_CHECK_INTERVAL_MS: u64 = 1000;
+const META_BUCKETS: u16 = 256;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
     "block_meta",
@@ -140,10 +141,11 @@ impl ScyllaMetaStore {
                 format!(
                     "CREATE TABLE IF NOT EXISTS {table} (\
                      grp text, \
+                     bucket smallint, \
                      k blob, \
                      v blob, \
                      version bigint, \
-                     PRIMARY KEY ((grp), k)\
+                     PRIMARY KEY ((grp, bucket), k)\
                     )"
                 ),
                 &[],
@@ -255,15 +257,16 @@ impl MetaStore for ScyllaMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         let grp = extract_group(key);
         let key_vec = key.to_vec();
+        let bucket = key_bucket(&key_vec);
         let res = self
             .with_retry("get", || async {
                 self.session
                     .query_unpaged(
                         format!(
-                            "SELECT v, version FROM {} WHERE grp = ? AND k = ?",
+                            "SELECT v, version FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
                             self.table
                         ),
-                        (grp.as_str(), key_vec.clone()),
+                        (grp.as_str(), bucket, key_vec.clone()),
                     )
                     .await
                     .map_err(|e| Error::Backend(format!("scylla get: {e}")))
@@ -288,6 +291,7 @@ impl MetaStore for ScyllaMetaStore {
 
         let grp = extract_group(key);
         let key_vec = key.to_vec();
+        let bucket = key_bucket(&key_vec);
 
         match cond {
             PutCond::Any => {
@@ -295,11 +299,12 @@ impl MetaStore for ScyllaMetaStore {
                     self.session
                         .query_unpaged(
                             format!(
-                                "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?)",
+                                "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?)",
                                 self.table
                             ),
                             (
                                 grp.as_str(),
+                                bucket,
                                 key_vec.clone(),
                                 value.to_vec(),
                                 now_millis_u64() as i64,
@@ -323,10 +328,10 @@ impl MetaStore for ScyllaMetaStore {
                         self.session
                             .query_unpaged(
                                 format!(
-                                    "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+                                    "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS",
                                     self.table
                                 ),
-                                (grp.as_str(), key_vec.clone(), value.to_vec(), 1_i64),
+                                (grp.as_str(), bucket, key_vec.clone(), value.to_vec(), 1_i64),
                             )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))
@@ -349,13 +354,14 @@ impl MetaStore for ScyllaMetaStore {
                         self.session
                             .query_unpaged(
                                 format!(
-                                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND k = ? IF version = ?",
+                                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
                                     self.table
                                 ),
                                 (
                                     value.to_vec(),
                                     (v + 1) as i64,
                                     grp.as_str(),
+                                    bucket,
                                     key_vec.clone(),
                                     v as i64,
                                 ),
@@ -380,13 +386,17 @@ impl MetaStore for ScyllaMetaStore {
         self.validate_fence(fence).await?;
 
         let grp = extract_group(key);
+        let bucket = key_bucket(key);
         match cond {
             DelCond::Any => {
                 self.with_retry("delete_any", || async {
                     self.session
                         .query_unpaged(
-                            format!("DELETE FROM {} WHERE grp = ? AND k = ?", self.table),
-                            (grp.as_str(), key.to_vec()),
+                            format!(
+                                "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
+                                self.table
+                            ),
+                            (grp.as_str(), bucket, key.to_vec()),
                         )
                         .await
                         .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
@@ -400,10 +410,10 @@ impl MetaStore for ScyllaMetaStore {
                         self.session
                             .query_unpaged(
                                 format!(
-                                    "DELETE FROM {} WHERE grp = ? AND k = ? IF version = ?",
+                                    "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
                                     self.table
                                 ),
-                                (grp.as_str(), key.to_vec(), v as i64),
+                                (grp.as_str(), bucket, key.to_vec(), v as i64),
                             )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))
@@ -430,34 +440,42 @@ impl MetaStore for ScyllaMetaStore {
         let start = cursor.unwrap_or_default();
 
         for grp in groups {
-            if keys.len() >= limit {
-                break;
-            }
-            let res = self
-                .with_retry("list_prefix", || async {
-                    self.session
-                        .query_unpaged(
-                            format!("SELECT k FROM {} WHERE grp = ?", self.table),
-                            (grp.as_str(),),
-                        )
-                        .await
-                        .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))
-                })
-                .await?;
+            for bucket in 0..META_BUCKETS {
+                if keys.len() >= limit {
+                    break;
+                }
+                let res = self
+                    .with_retry("list_prefix", || async {
+                        self.session
+                            .query_unpaged(
+                                format!(
+                                    "SELECT k FROM {} WHERE grp = ? AND bucket = ?",
+                                    self.table
+                                ),
+                                (grp.as_str(), bucket as i16),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))
+                    })
+                    .await?;
 
-            if let Ok(rows_result) = res.into_rows_result()
-                && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
-            {
-                for row in iter {
-                    let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
-                    if k < start || !k.starts_with(prefix) {
-                        continue;
-                    }
-                    keys.push(k);
-                    if keys.len() >= limit {
-                        break;
+                if let Ok(rows_result) = res.into_rows_result()
+                    && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
+                {
+                    for row in iter {
+                        let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
+                        if k < start || !k.starts_with(prefix) {
+                            continue;
+                        }
+                        keys.push(k);
+                        if keys.len() >= limit {
+                            break;
+                        }
                     }
                 }
+            }
+            if keys.len() >= limit {
+                break;
             }
         }
 
@@ -547,6 +565,16 @@ fn extract_group(key: &[u8]) -> String {
     } else {
         out
     }
+}
+
+fn key_bucket(key: &[u8]) -> i16 {
+    // FNV-1a hash for deterministic, low-cost bucket placement.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in key {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    (hash % u64::from(META_BUCKETS)) as i16
 }
 
 fn compute_backoff_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {

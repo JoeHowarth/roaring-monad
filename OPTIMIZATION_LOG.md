@@ -92,3 +92,30 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - `/home/jhow/roaring-monad/logs/profile-iostat-20260223T195116Z-script-smoke.log`
 - `/home/jhow/roaring-monad/logs/profile-ingest-20260223T195116Z-script-smoke.log`
 - `/home/jhow/roaring-monad/logs/profile-meta-20260223T195116Z-script-smoke.env`
+
+## 20260223T195900Z - Profiling Run bucketed-partition
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T195900Z-bucketed-partition blocks=4001 logs=160347 elapsed_s=38.380278798 bps=104.24624638757165 lps=4177.848755188191 mode=single_writer_fast flush=64
+- pid=1080195 cmd=benchmarking samples=39 avg_cpu=76.44 avg_wait=0.92 avg_usr=39.54 avg_sys=36.90
+- pid=213044 cmd=minio samples=39 avg_cpu=13.00 avg_wait=0.00 avg_usr=7.77 avg_sys=5.23
+- pid=213248 cmd=scylla samples=39 avg_cpu=213.51 avg_wait=1.31 avg_usr=95.87 avg_sys=117.64
+- nvme0n1 samples=40 avg_util=15.73 avg_aqu=0.49 avg_wkB_s=27237.50 avg_rkB_s=310.69
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T195900Z-bucketed-partition.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T195900Z-bucketed-partition.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T195900Z-bucketed-partition.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T195900Z-bucketed-partition.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T195900Z-bucketed-partition.env`
+
+### Interpretation
+
+- Compared to prior 4k-window baseline (`review-perfstat-20260223T193429Z.json` at `93.30 blocks/s`), bucketed partitioning improved to `104.25 blocks/s` (`+11.7%`).
+- Scylla remains the dominant consumer and ingest is still round-trip sensitive, but partition hot-spot pressure dropped measurably.
