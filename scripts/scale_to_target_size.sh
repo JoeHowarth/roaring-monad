@@ -7,6 +7,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-$RM_ROOT/data/archive-mainnet-deu-009-0}"
 ARCHIVE_SOURCE="${ARCHIVE_SOURCE:-aws mainnet-deu-009-0 50}"
 MIRROR_BEFORE_INGEST="${MIRROR_BEFORE_INGEST:-true}"
+SKIP_MIRROR_ON_RETRY="${SKIP_MIRROR_ON_RETRY:-true}"
 MIRROR_METHOD="${MIRROR_METHOD:-archiver}"
 ARCHIVER_MAX_BLOCKS_PER_ITERATION="${ARCHIVER_MAX_BLOCKS_PER_ITERATION:-200}"
 ARCHIVER_MAX_CONCURRENT_BLOCKS="${ARCHIVER_MAX_CONCURRENT_BLOCKS:-128}"
@@ -178,7 +179,12 @@ while (( ITER < MAX_ITERS )); do
 
   echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER attempt=$ATTEMPT keyspace=$keyspace range=${CUR_START_BLOCK}-${cur_end_block} span=$CUR_SPAN" | tee -a "$PROGRESS_LOG"
 
-  if [[ "$MIRROR_BEFORE_INGEST" == "true" ]]; then
+  do_mirror="$MIRROR_BEFORE_INGEST"
+  if [[ "$SKIP_MIRROR_ON_RETRY" == "true" ]] && (( ATTEMPT > 0 )); then
+    do_mirror="false"
+  fi
+
+  if [[ "$do_mirror" == "true" ]]; then
     mirror_started="$(date +%s)"
 
     if [[ "$MIRROR_METHOD" == "archiver" ]]; then
