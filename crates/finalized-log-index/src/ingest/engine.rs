@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond, Record};
 
 const LOG_LOCATOR_WRITE_CONCURRENCY: usize = 128;
-const STREAM_APPEND_CONCURRENCY: usize = 64;
+const STREAM_APPEND_CONCURRENCY: usize = 32;
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,

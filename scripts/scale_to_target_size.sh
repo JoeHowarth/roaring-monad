@@ -317,6 +317,24 @@ while (( ITER < MAX_ITERS )); do
       continue
     fi
 
+    if grep -Eiq "scylla put if version|consistency: localserial|write_type: cas" "$ingest_log"; then
+      next_iter="$((ITER + 1))"
+      echo "$(date -u +%FT%TZ) :: scale ingest partial-write timeout iter=$ITER rc=$rc; retrying range with new keyspace iter=$next_iter" | tee -a "$PROGRESS_LOG"
+      {
+        echo "ITER=$next_iter"
+        echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+        echo "CUR_SPAN=$CUR_SPAN"
+        echo "ATTEMPT=0"
+        echo "FORCE_SKIP_MIRROR=true"
+        echo "LAST_RC=$rc"
+        echo "LAST_TABLE_FILE=$TABLE_FILE"
+      } >"$STATE_FILE"
+      ATTEMPT=0
+      FORCE_SKIP_MIRROR=true
+      ITER="$next_iter"
+      continue
+    fi
+
     if (( ATTEMPT < MAX_RETRIES_PER_ITER )); then
       ATTEMPT="$((ATTEMPT + 1))"
       echo "$(date -u +%FT%TZ) :: scale ingest retry iter=$ITER attempt=$ATTEMPT rc=$rc log=$ingest_log" | tee -a "$PROGRESS_LOG"
