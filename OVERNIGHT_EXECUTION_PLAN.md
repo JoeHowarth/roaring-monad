@@ -226,4 +226,5 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
 - Recent committed reliability/perf changes:
   - `65394a0` wrap to `START_BLOCK` when near source head.
   - `43e6d69` optimize topic0 stats updates during ingest.
-  - `de898c9` scaler defaults to prebuilt `target/release/benchmarking` binary (fallback to `cargo run`).
+  - `a39b157` parallelize ingest writes with bounded concurrency.
+  - `de898c9` + `85d2081` add optional prebuilt benchmarking binary mode, but keep default scaler path on `cargo run` for shared-lib safety.

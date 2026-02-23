@@ -248,6 +248,13 @@ Additional ingest throughput work was applied in code:
   - reduced `IfVersion` update to use `v+1` directly,
   - switched fence checks to a short periodic refresh window instead of querying fence table for every write.
 - `IngestEngine` now caches `topic0_mode` lookups in memory to avoid repeated metadata `get` calls for the same topic signatures.
+- `IngestEngine` now also caches `topic0_stats` in memory and uses a fast path for long block gaps:
+  - avoids repeated per-signature stats reads from metadata store on every block,
+  - avoids iterating every skipped block when a signature was absent for long stretches.
+- ingest block write path now uses bounded async parallelism:
+  - log-locator writes: concurrency `128`,
+  - stream-appends: concurrency `64`,
+  to reduce time spent waiting on Scylla/MinIO round trips.
 - Benchmarking ingest command added `--skip-final-maintenance`; scaler can now run with:
   - `--run-maintenance-every-blocks 0`
   - `--skip-final-maintenance`
@@ -258,13 +265,21 @@ Additional ingest throughput work was applied in code:
   so transient mirror/ingest failures do not terminate unattended overnight execution immediately.
 - scaler now queries source head each iteration (`benchmarking source-latest`) and caps ingest range to available blocks.
   - this prevents archiver from waiting indefinitely when geometric span overshoots current chain head.
-  - on head overrun, the scaler wraps start back to `START_BLOCK` so the run can continue accumulating DB size instead of idling.
+  - on low headroom near the source tip, scaler wraps start back to `START_BLOCK` so the run can continue accumulating DB size instead of idling on tiny tip windows.
 
 Observed in live scale run after relaunch (`iter=5`, span `8016`):
 
 - early ingest progress reached about `9.99 blocks/s` and `323.36 logs/s` (`mapped_block=486`, `elapsed=48.63s`).
 - completed ingest for the full span finished at `11.24 blocks/s` and `331.97 logs/s` (`8016` blocks, `236702` logs, `713.03s`).
 - prior comparable progress points in the previous iteration (`iter=4`) were around `~6.8-7.2 blocks/s` and `~175-182 logs/s`.
+- current long-span run (`iter=23`, `57212000..57233795`) is sustaining roughly `12-13 blocks/s` and `~333-350 logs/s` in-progress samples.
+
+Live perf-stat sample on active ingest process (10s window):
+
+- CPU utilization: `~0.214` cores used by process
+- instructions per cycle: `~0.67`
+- branch miss rate: `~10.1%`
+- interpretation: ingest remains primarily I/O / remote-call limited (not CPU-saturated), so bounded write concurrency is the right next optimization direction.
 
 Interpretation:
 
