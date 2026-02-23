@@ -39,6 +39,7 @@ enum Command {
     CollectGenerate(CollectGenerateArgs),
     IngestDistributed(IngestDistributedArgs),
     Benchmark(BenchmarkArgs),
+    ScanDensity(ScanDensityArgs),
     RunAll(RunAllArgs),
 }
 
@@ -231,6 +232,45 @@ struct RunAllArgs {
     skip_mirror: bool,
 }
 
+#[derive(Args, Debug, Clone)]
+struct ScanDensityArgs {
+    #[command(flatten)]
+    range: RangeArgs,
+
+    #[arg(long, default_value = "aws mainnet-deu-009-0 50")]
+    source: String,
+
+    #[arg(long, default_value_t = 1)]
+    step: u64,
+
+    #[arg(long, default_value_t = 50)]
+    top: usize,
+
+    #[arg(long, default_value_t = 250)]
+    log_every: u64,
+
+    #[arg(long)]
+    output_json: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+struct DensityEntry {
+    block_num: u64,
+    txs: u64,
+    logs: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ScanDensityReport {
+    start_block: u64,
+    end_block: u64,
+    step: u64,
+    sampled_blocks: u64,
+    avg_logs_per_sample: f64,
+    max_logs_in_sample: u64,
+    top_blocks: Vec<DensityEntry>,
+}
+
 #[derive(Debug, Serialize)]
 struct IngestReport {
     start_block: u64,
@@ -277,6 +317,7 @@ async fn main() -> Result<()> {
         Command::CollectGenerate(args) => cmd_collect_generate(args).await,
         Command::IngestDistributed(args) => cmd_ingest_distributed(args).await,
         Command::Benchmark(args) => cmd_benchmark(args).await,
+        Command::ScanDensity(args) => cmd_scan_density(args).await,
         Command::RunAll(args) => cmd_run_all(args).await,
     }
 }
@@ -337,7 +378,7 @@ async fn cmd_mirror(args: MirrorArgs) -> Result<()> {
 
         if block_num == args.range.start_block
             || block_num == args.range.end_block
-            || block_num % args.log_every == 0
+            || (args.log_every > 0 && block_num.is_multiple_of(args.log_every))
         {
             let elapsed = started.elapsed().as_secs_f64();
             let done = block_num - args.range.start_block + 1;
@@ -749,6 +790,109 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         output_json: None,
     })
     .await
+}
+
+async fn cmd_scan_density(args: ScanDensityArgs) -> Result<()> {
+    validate_range(&args.range)?;
+    if args.step == 0 {
+        bail!("step must be > 0");
+    }
+    if args.top == 0 {
+        bail!("top must be > 0");
+    }
+
+    let metrics = Metrics::none();
+    let source_args = BlockDataReaderArgs::from_str(args.source.trim())
+        .map_err(|e| anyhow::anyhow!("parse block data source '{}': {e}", args.source))?;
+    let source = source_args
+        .build(&metrics)
+        .await
+        .map_err(|e| anyhow::anyhow!("build source '{}': {e}", args.source))?;
+
+    let mut sampled_blocks = 0u64;
+    let mut total_logs = 0u64;
+    let mut max_logs_in_sample = 0u64;
+    let mut top_blocks = Vec::<DensityEntry>::new();
+
+    let mut block_num = args.range.start_block;
+    while block_num <= args.range.end_block {
+        let receipts = source
+            .get_block_receipts(block_num)
+            .await
+            .map_err(|e| anyhow::anyhow!("scan read receipts {block_num}: {e}"))?;
+
+        let logs = receipts
+            .iter()
+            .map(|r| r.receipt.logs().len() as u64)
+            .sum::<u64>();
+        let txs = receipts.len() as u64;
+
+        sampled_blocks = sampled_blocks.saturating_add(1);
+        total_logs = total_logs.saturating_add(logs);
+        max_logs_in_sample = max_logs_in_sample.max(logs);
+
+        top_blocks.push(DensityEntry {
+            block_num,
+            txs,
+            logs,
+        });
+        top_blocks.sort_by(|a, b| b.logs.cmp(&a.logs).then_with(|| b.txs.cmp(&a.txs)));
+        if top_blocks.len() > args.top {
+            top_blocks.truncate(args.top);
+        }
+
+        if block_num == args.range.start_block
+            || block_num == args.range.end_block
+            || (args.log_every > 0 && block_num.is_multiple_of(args.log_every))
+        {
+            let avg_logs = if sampled_blocks > 0 {
+                total_logs as f64 / sampled_blocks as f64
+            } else {
+                0.0
+            };
+            println!(
+                "scan_density_progress block={block_num} sampled_blocks={sampled_blocks} avg_logs={avg_logs:.2} max_logs={max_logs_in_sample}"
+            );
+        }
+
+        if args.range.end_block - block_num < args.step {
+            break;
+        }
+        block_num += args.step;
+    }
+
+    let report = ScanDensityReport {
+        start_block: args.range.start_block,
+        end_block: args.range.end_block,
+        step: args.step,
+        sampled_blocks,
+        avg_logs_per_sample: if sampled_blocks > 0 {
+            total_logs as f64 / sampled_blocks as f64
+        } else {
+            0.0
+        },
+        max_logs_in_sample,
+        top_blocks,
+    };
+
+    println!(
+        "scan_density_done sampled_blocks={} avg_logs={:.2} max_logs={} top_count={}",
+        report.sampled_blocks,
+        report.avg_logs_per_sample,
+        report.max_logs_in_sample,
+        report.top_blocks.len()
+    );
+    for entry in &report.top_blocks {
+        println!(
+            "scan_density_top block={} txs={} logs={}",
+            entry.block_num, entry.txs, entry.logs
+        );
+    }
+
+    if let Some(path) = &args.output_json {
+        write_json(path, &report)?;
+    }
+    Ok(())
 }
 
 fn validate_range(range: &RangeArgs) -> Result<()> {

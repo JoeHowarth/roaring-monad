@@ -106,9 +106,17 @@ docker exec finalized-index-minio sh -lc 'du -sb /data || true'
 Range scaling strategy:
 
 1. Start from validated range.
-2. Increase block span geometrically (x2) while monitoring ingest stability.
+2. Increase block span geometrically while monitoring ingest stability.
 3. If errors increase, reduce concurrency and continue.
 4. Stop once combined size is ~100GB (+/-10%).
+
+Current automation:
+
+- `scripts/scale_to_target_size.sh` now supports:
+  - geometric span growth (`INITIAL_SPAN`, `GROWTH_FACTOR`, `MAX_SPAN`)
+  - optional mirror-before-ingest per iteration (`MIRROR_BEFORE_INGEST=true`)
+  - resumable next-range state (`CUR_START_BLOCK`, `CUR_SPAN`) in `logs/scale-state-<RUN_ID>.env`
+  - per-iteration mirror/ingest seconds and throughput columns in size table
 
 ## Milestone E: Benchmark + Profile + Optimize
 
@@ -148,13 +156,36 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
   - benchmark (expected, limit=100): dev `1.04 qps` -> release `2.30 qps`.
   - ingest: release baseline `6.15 blocks/s`; maintenance-tuned `6.73 blocks/s`.
 - Size baseline after completed runs: `infra/data/distributed` ~`1.4G`.
-- Next immediate action: run unattended scale loop to 100GB target:
+- Active unattended scale loop:
 
 ```bash
-RUN_ID=$(cat logs/latest-run-id.txt) \
+RUN_ID=20260223T073907Z-scale-geom
+PID=$(cat logs/scale-to-target-$RUN_ID.pid)
+ps -p "$PID" -o pid,etime,cmd
+tail -f logs/scale-to-target-$RUN_ID.out
+tail -n 50 logs/results/size-growth-$RUN_ID.md
+```
+
+- Latest measured geometry run outputs are being written to:
+  - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
+  - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
+
+- Density scan snapshot:
+  - coarse scan (`56,000,000..57,220,000`, step `2000`) avg logs/sample `27.10`, max sampled `155`
+  - output: `logs/results/scan-density-20260223T074555Z-coarse.json`
+
+- Launch command used for current geometry run:
+
+```bash
+RUN_ID=20260223T073907Z-scale-geom \
 TARGET_GB=100 \
 START_BLOCK=57212000 \
 END_BLOCK=57212500 \
-nohup ./scripts/scale_to_target_size.sh \
-  > logs/scale-to-target-$RUN_ID.out 2>&1 &
+INITIAL_SPAN=501 \
+GROWTH_FACTOR=2 \
+MAX_SPAN=65536 \
+MIRROR_BEFORE_INGEST=true \
+MIRROR_TIMEOUT_SECONDS=21600 \
+INGEST_TIMEOUT_SECONDS=7200 \
+nohup setsid ./scripts/scale_to_target_size.sh > logs/scale-to-target-$RUN_ID.out 2>&1 &
 ```

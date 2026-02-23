@@ -189,3 +189,26 @@ What it does:
 4. Writes resumable state to `logs/scale-state-<RUN_ID>.env`.
 
 The script is intended for unattended overnight execution until the target byte threshold is reached.
+
+## 10) Density scan results (coarse, AWS source)
+
+A coarse scan was run directly against AWS receipts:
+
+- command:
+  - `benchmarking scan-density --source 'aws mainnet-deu-009-0 50' --start-block 56000000 --end-block 57220000 --step 2000 --top 30`
+- sampled blocks: `611`
+- average logs/sample: `27.10`
+- max logs/sample: `155`
+
+Top sampled blocks by logs (coarse step) include:
+
+- `56094000` (`155` logs)
+- `56890000` (`136` logs)
+- `56662000` (`130` logs)
+- `56542000` (`130` logs)
+- `56968000` (`120` logs)
+
+Implication:
+
+- In this scanned region, logs per block are relatively modest.
+- Hitting ~100GB from only finalized-log-index log ingestion is primarily a throughput/time problem, not a single-hot-range selection problem.

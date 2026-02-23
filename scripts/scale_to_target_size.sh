@@ -4,11 +4,17 @@ set -euo pipefail
 RM_ROOT="${RM_ROOT:-/home/jhow/roaring-monad}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-$RM_ROOT/data/archive-mainnet-deu-009-0}"
+ARCHIVE_SOURCE="${ARCHIVE_SOURCE:-aws mainnet-deu-009-0 50}"
+MIRROR_BEFORE_INGEST="${MIRROR_BEFORE_INGEST:-true}"
 START_BLOCK="${START_BLOCK:-57212000}"
 END_BLOCK="${END_BLOCK:-57212500}"
+INITIAL_SPAN="${INITIAL_SPAN:-0}"
+GROWTH_FACTOR="${GROWTH_FACTOR:-2}"
+MAX_SPAN="${MAX_SPAN:-65536}"
 TARGET_GB="${TARGET_GB:-100}"
 TARGET_BYTES="${TARGET_BYTES:-$((TARGET_GB * 1024 * 1024 * 1024))}"
 INGEST_TIMEOUT_SECONDS="${INGEST_TIMEOUT_SECONDS:-3600}"
+MIRROR_TIMEOUT_SECONDS="${MIRROR_TIMEOUT_SECONDS:-7200}"
 MAX_ITERS="${MAX_ITERS:-10000}"
 
 LOG_DIR="$RM_ROOT/logs"
@@ -29,12 +35,18 @@ if [[ ! -f "$TABLE_FILE" ]]; then
   {
     echo "# Size Growth ($RUN_ID)"
     echo
-    echo "| Iter | Timestamp UTC | Keyspace | Range | Scylla Bytes | MinIO Bytes | Total Bytes | Total GiB |"
-    echo "| --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
+    echo "| Iter | Timestamp UTC | Keyspace | Range | Span | Mirror Sec | Ingest Sec | Blocks/s | Logs/s | Scylla Bytes | MinIO Bytes | Total Bytes | Total GiB |"
+    echo "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
   } >"$TABLE_FILE"
 fi
 
 ITER=0
+CUR_START_BLOCK="$START_BLOCK"
+if (( INITIAL_SPAN > 0 )); then
+  CUR_SPAN="$INITIAL_SPAN"
+else
+  CUR_SPAN="$((END_BLOCK - START_BLOCK + 1))"
+fi
 if [[ -f "$STATE_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$STATE_FILE"
@@ -55,14 +67,49 @@ while (( ITER < MAX_ITERS )); do
     break
   fi
 
+  cur_end_block="$((CUR_START_BLOCK + CUR_SPAN - 1))"
   iter_tag="$(printf 'i%05d' "$ITER")"
   keyspace_raw="fi_scale_${RUN_ID}_${iter_tag}"
   keyspace="$(to_keyspace_safe "$keyspace_raw")"
   prefix="runs/$RUN_ID/scale/$iter_tag"
+  mirror_log="$LOG_DIR/scale-mirror-$RUN_ID-$iter_tag.log"
   ingest_log="$LOG_DIR/scale-ingest-$RUN_ID-$iter_tag.log"
   ingest_json="$RESULTS_DIR/scale-ingest-$RUN_ID-$iter_tag.json"
+  mirror_elapsed="0"
 
-  echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER keyspace=$keyspace" | tee -a "$PROGRESS_LOG"
+  echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER keyspace=$keyspace range=${CUR_START_BLOCK}-${cur_end_block} span=$CUR_SPAN" | tee -a "$PROGRESS_LOG"
+
+  if [[ "$MIRROR_BEFORE_INGEST" == "true" ]]; then
+    mirror_started="$(date +%s)"
+    set +e
+    timeout "${MIRROR_TIMEOUT_SECONDS}s" env \
+      TRIEDB_TARGET=triedb_driver \
+      CC=/usr/bin/gcc-15 \
+      CXX=/usr/bin/g++-15 \
+      ASMFLAGS='-march=haswell' \
+      CFLAGS='-march=haswell' \
+      CXXFLAGS='-march=haswell' \
+      cargo +1.91.1 run --release -p benchmarking -- mirror \
+        --archive-root "$ARCHIVE_ROOT" \
+        --source "$ARCHIVE_SOURCE" \
+        --start-block "$CUR_START_BLOCK" \
+        --end-block "$cur_end_block" \
+        --log-every 500 \
+        >"$mirror_log" 2>&1
+    mirror_rc=$?
+    set -e
+    mirror_elapsed="$(( $(date +%s) - mirror_started ))"
+    if (( mirror_rc != 0 )); then
+      echo "$(date -u +%FT%TZ) :: scale mirror failed iter=$ITER rc=$mirror_rc log=$mirror_log" | tee -a "$PROGRESS_LOG"
+      {
+        echo "ITER=$ITER"
+        echo "CUR_START_BLOCK=$CUR_START_BLOCK"
+        echo "CUR_SPAN=$CUR_SPAN"
+        echo "LAST_RC=$mirror_rc"
+      } >"$STATE_FILE"
+      exit "$mirror_rc"
+    fi
+  fi
 
   set +e
   timeout "${INGEST_TIMEOUT_SECONDS}s" env \
@@ -74,8 +121,8 @@ while (( ITER < MAX_ITERS )); do
     CXXFLAGS='-march=haswell' \
     cargo +1.91.1 run --release -p benchmarking -- ingest-distributed \
       --archive-root "$ARCHIVE_ROOT" \
-      --start-block "$START_BLOCK" \
-      --end-block "$END_BLOCK" \
+      --start-block "$CUR_START_BLOCK" \
+      --end-block "$cur_end_block" \
       --chain-id 1 \
       --scylla-node 127.0.0.1:9042 \
       --scylla-keyspace "$keyspace" \
@@ -88,8 +135,8 @@ while (( ITER < MAX_ITERS )); do
       --writer-epoch 1 \
       --target-entries-per-chunk 1950 \
       --target-chunk-bytes 32768 \
-      --maintenance-seal-seconds 600 \
-      --run-maintenance-every-blocks 500 \
+      --maintenance-seal-seconds 1800 \
+      --run-maintenance-every-blocks 2000 \
       --log-every 250 \
       --output-json "$ingest_json" \
       >"$ingest_log" 2>&1
@@ -109,19 +156,32 @@ while (( ITER < MAX_ITERS )); do
   minio_bytes="$(du -sb "$RM_ROOT/infra/data/distributed/minio" | awk '{print $1}')"
   total_bytes="$((scylla_bytes + minio_bytes))"
   total_gib="$(awk -v b="$total_bytes" 'BEGIN { printf "%.2f", b / (1024*1024*1024) }')"
+  ingest_elapsed="$(jq -r '.elapsed_seconds // 0' "$ingest_json" 2>/dev/null || echo 0)"
+  ingest_bps="$(jq -r '.blocks_per_second // 0' "$ingest_json" 2>/dev/null || echo 0)"
+  ingest_lps="$(jq -r '.logs_per_second // 0' "$ingest_json" 2>/dev/null || echo 0)"
 
   {
-    echo "| $ITER | $(date -u +%FT%TZ) | $keyspace | $START_BLOCK-$END_BLOCK | $scylla_bytes | $minio_bytes | $total_bytes | $total_gib |"
+    echo "| $ITER | $(date -u +%FT%TZ) | $keyspace | $CUR_START_BLOCK-$cur_end_block | $CUR_SPAN | $mirror_elapsed | $ingest_elapsed | $ingest_bps | $ingest_lps | $scylla_bytes | $minio_bytes | $total_bytes | $total_gib |"
   } >>"$TABLE_FILE"
+
+  next_start_block="$((cur_end_block + 1))"
+  next_span="$((CUR_SPAN * GROWTH_FACTOR))"
+  if (( next_span > MAX_SPAN )); then
+    next_span="$MAX_SPAN"
+  fi
 
   {
     echo "ITER=$((ITER + 1))"
+    echo "CUR_START_BLOCK=$next_start_block"
+    echo "CUR_SPAN=$next_span"
     echo "LAST_RC=0"
     echo "LAST_TOTAL_BYTES=$total_bytes"
     echo "LAST_TABLE_FILE=$TABLE_FILE"
   } >"$STATE_FILE"
 
-  echo "$(date -u +%FT%TZ) :: scale iteration done iter=$ITER total_bytes=$total_bytes total_gib=$total_gib" | tee -a "$PROGRESS_LOG"
+  echo "$(date -u +%FT%TZ) :: scale iteration done iter=$ITER total_bytes=$total_bytes total_gib=$total_gib next_start=$next_start_block next_span=$next_span" | tee -a "$PROGRESS_LOG"
 
+  CUR_START_BLOCK="$next_start_block"
+  CUR_SPAN="$next_span"
   ITER=$((ITER + 1))
 done
