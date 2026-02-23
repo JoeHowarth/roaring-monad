@@ -56,7 +56,7 @@ impl Default for Config {
             topic0_stats_flush_interval_blocks: 1,
             assume_empty_streams: false,
             log_locator_write_concurrency: 256,
-            stream_append_concurrency: 64,
+            stream_append_concurrency: 96,
         }
     }
 }

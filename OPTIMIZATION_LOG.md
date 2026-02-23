@@ -624,3 +624,82 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - `/home/jhow/roaring-monad/logs/profile-iostat-20260223T203954Z-ase1p.log`
 - `/home/jhow/roaring-monad/logs/profile-ingest-20260223T203954Z-ase1p.log`
 - `/home/jhow/roaring-monad/logs/profile-meta-20260223T203954Z-ase1p.env`
+
+## 20260223T204058Z - Profiling Run ase1s96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T204058Z-ase1s96 blocks=4001 logs=160347 elapsed_s=17.864289409 bps=223.9663671136173 lps=8975.839806940065 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=96
+- pid=1171099 cmd=benchmarking samples=18 avg_cpu=47.22 avg_wait=0.11 avg_usr=26.44 avg_sys=20.78
+- pid=213044 cmd=minio samples=18 avg_cpu=20.83 avg_wait=0.00 avg_usr=12.22 avg_sys=8.61
+- pid=213248 cmd=scylla samples=18 avg_cpu=55.39 avg_wait=0.28 avg_usr=34.89 avg_sys=20.50
+- nvme0n1 samples=19 avg_util=21.56 avg_aqu=0.31 avg_wkB_s=38597.95 avg_rkB_s=1864.25
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T204058Z-ase1s96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T204058Z-ase1s96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T204058Z-ase1s96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T204058Z-ase1s96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T204058Z-ase1s96.env`
+
+## 20260223T204121Z - Profiling Run ase1s128
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T204121Z-ase1s128 blocks=4001 logs=160347 elapsed_s=18.292066626 bps=218.72870254654845 lps=8765.931333974357 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=128
+- pid=1171598 cmd=benchmarking samples=19 avg_cpu=46.53 avg_wait=0.11 avg_usr=26.26 avg_sys=20.26
+- pid=213044 cmd=minio samples=19 avg_cpu=20.68 avg_wait=0.00 avg_usr=11.84 avg_sys=8.84
+- pid=213248 cmd=scylla samples=19 avg_cpu=54.32 avg_wait=0.26 avg_usr=33.95 avg_sys=20.37
+- nvme0n1 samples=20 avg_util=22.74 avg_aqu=0.33 avg_wkB_s=41917.68 avg_rkB_s=1900.65
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T204121Z-ase1s128.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T204121Z-ase1s128.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T204121Z-ase1s128.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T204121Z-ase1s128.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T204121Z-ase1s128.env`
+
+## 20260223T204241Z - Profiling Run defopt
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T204241Z-defopt blocks=4001 logs=160347 elapsed_s=18.097233932 bps=221.0835100564914 lps=8860.304320676887 mode=single_writer_fast flush=64 assume_empty=true locator_c=256 stream_c=96
+- pid=1174490 cmd=benchmarking samples=18 avg_cpu=46.67 avg_wait=0.11 avg_usr=26.44 avg_sys=20.22
+- pid=213044 cmd=minio samples=18 avg_cpu=21.28 avg_wait=0.00 avg_usr=12.61 avg_sys=8.67
+- pid=213248 cmd=scylla samples=18 avg_cpu=56.78 avg_wait=0.33 avg_usr=36.22 avg_sys=20.56
+- nvme0n1 samples=19 avg_util=20.81 avg_aqu=0.54 avg_wkB_s=53341.47 avg_rkB_s=371.87
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T204241Z-defopt.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T204241Z-defopt.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T204241Z-defopt.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T204241Z-defopt.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T204241Z-defopt.env`
+
+## 2026-02-23T20:45:00Z - Post Assume-Empty + Concurrency Tuning
+
+### Summary
+
+- Default profile after latest changes (`run_id=20260223T204241Z-defopt`) reached `221.08 blocks/s` / `8860.30 logs/s`.
+- Relative to the pre-page baseline (`202.39 blocks/s`), current path is now `+9.2%` faster end-to-end on the same 4,001-block window.
+
+### Bottleneck Snapshot
+
+- Scylla remains the largest single backend consumer, but no longer dominates as heavily as earlier runs.
+- Current run averages: benchmarking process `~46.67%` CPU, Scylla `~56.78%` CPU, MinIO `~21.28%` CPU.
+- Practical interpretation: ingest pressure is now split between app-side stream/index work and Scylla meta writes, with less acute DB hotspot behavior than earlier stages.

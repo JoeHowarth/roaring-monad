@@ -185,7 +185,7 @@ struct IngestDistributedArgs {
     #[arg(long, default_value_t = 256)]
     log_locator_write_concurrency: usize,
 
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 96)]
     stream_append_concurrency: usize,
 
     #[arg(long, default_value_t = 250)]
@@ -878,7 +878,7 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         topic0_stats_flush_interval_blocks: 1,
         assume_empty_streams: false,
         log_locator_write_concurrency: 256,
-        stream_append_concurrency: 64,
+        stream_append_concurrency: 96,
         log_every: 250,
         skip_final_maintenance: false,
         output_json: None,
