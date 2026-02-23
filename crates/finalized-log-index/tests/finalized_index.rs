@@ -1,22 +1,25 @@
 use std::fs;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::log::{decode_topic0_mode, encode_topic0_mode};
-use finalized_log_index::codec::manifest::{decode_manifest, encode_manifest};
-use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction};
+use finalized_log_index::codec::manifest::{Manifest, decode_manifest, encode_manifest};
+use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
 use finalized_log_index::domain::keys::{
-    block_hash_to_num_key, manifest_key, stream_id, topic0_mode_key,
+    META_STATE_KEY, block_hash_to_num_key, manifest_key, stream_id, topic0_mode_key,
 };
 use finalized_log_index::domain::types::{Block, Log, Topic0Mode};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_log_index::store::traits::{
+    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
@@ -85,6 +88,66 @@ impl MetaStore for FlakyMetaStore {
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_log_index::error::Result<finalized_log_index::store::traits::Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
+#[derive(Default)]
+struct RecordingMetaStore {
+    inner: InMemoryMetaStore,
+    puts: Mutex<Vec<(Vec<u8>, PutCond)>>,
+}
+
+impl RecordingMetaStore {
+    fn count_puts_with_prefix<F>(&self, prefix: &[u8], mut pred: F) -> usize
+    where
+        F: FnMut(PutCond) -> bool,
+    {
+        self.puts
+            .lock()
+            .map(|puts| {
+                puts.iter()
+                    .filter(|(k, cond)| k.starts_with(prefix) && pred(*cond))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+}
+
+#[async_trait::async_trait]
+impl MetaStore for RecordingMetaStore {
+    async fn get(&self, key: &[u8]) -> finalized_log_index::error::Result<Option<Record>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: bytes::Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> finalized_log_index::error::Result<PutResult> {
+        if let Ok(mut puts) = self.puts.lock() {
+            puts.push((key.to_vec(), cond));
+        }
+        self.inner.put(key, value, cond, fence).await
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: DelCond,
+        fence: FenceToken,
+    ) -> finalized_log_index::error::Result<()> {
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_log_index::error::Result<Page> {
         self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
@@ -457,14 +520,14 @@ fn periodic_maintenance_seals_old_tails() {
 
         let sid = stream_id("addr", &[7; 20], 0);
         let mkey = manifest_key(&sid);
-        let rec = svc
+        let mut manifest = svc
             .ingest
             .meta_store
             .get(&mkey)
             .await
             .expect("manifest get")
-            .expect("manifest");
-        let mut manifest = decode_manifest(&rec.value).expect("decode manifest");
+            .map(|rec| decode_manifest(&rec.value).expect("decode manifest"))
+            .unwrap_or_else(Manifest::default);
         assert_eq!(manifest.chunk_refs.len(), 0);
 
         manifest.last_seal_unix_sec = 1;
@@ -758,5 +821,175 @@ fn backend_success_clears_throttle() {
         let health = svc.health().await;
         assert!(!health.degraded);
         assert_eq!(health.message, "ok");
+    });
+}
+
+#[test]
+fn strict_mode_keeps_cas_for_state_manifest_and_topic0_stats() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                ingest_mode: IngestMode::StrictCas,
+                target_entries_per_chunk: 1,
+                ..Config::default()
+            },
+            RecordingMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(9, 5, 4, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(META_STATE_KEY, |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                })
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(META_STATE_KEY, |c| matches!(c, PutCond::Any)),
+            0
+        );
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"manifests/", |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                })
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"manifests/", |c| matches!(c, PutCond::Any)),
+            0
+        );
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                })
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
+            0
+        );
+    });
+}
+
+#[test]
+fn fast_mode_uses_unconditional_writes_for_state_manifest_and_topic0_stats() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                ingest_mode: IngestMode::SingleWriterFast,
+                target_entries_per_chunk: 1,
+                ..Config::default()
+            },
+            RecordingMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(9, 5, 4, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(META_STATE_KEY, |c| matches!(c, PutCond::Any))
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(META_STATE_KEY, |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                }),
+            0
+        );
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"manifests/", |c| matches!(c, PutCond::Any))
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"manifests/", |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                }),
+            0
+        );
+
+        assert!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any))
+                >= 1
+        );
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| {
+                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
+                }),
+            0
+        );
+    });
+}
+
+#[test]
+fn fast_mode_topic0_stats_flush_interval_reduces_write_frequency() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                ingest_mode: IngestMode::SingleWriterFast,
+                topic0_stats_flush_interval_blocks: 4,
+                target_entries_per_chunk: 10_000,
+                ..Config::default()
+            },
+            RecordingMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let mut parent = [0u8; 32];
+        for block_num in 1..=3u64 {
+            let block = mk_block(block_num, parent, vec![mk_log(7, 8, 9, block_num, 0, 0)]);
+            parent = block.block_hash;
+            svc.ingest_finalized_block(block).await.expect("ingest");
+        }
+
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
+            1
+        );
+
+        let block4 = mk_block(4, parent, vec![mk_log(7, 8, 9, 4, 0, 0)]);
+        svc.ingest_finalized_block(block4)
+            .await
+            .expect("ingest block 4");
+        assert_eq!(
+            svc.ingest
+                .meta_store
+                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
+            2
+        );
     });
 }

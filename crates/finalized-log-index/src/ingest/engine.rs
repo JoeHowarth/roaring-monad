@@ -14,7 +14,7 @@ use crate::codec::log::{
 use crate::codec::manifest::{
     ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
 };
-use crate::config::Config;
+use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_key,
     log_pack_blob_key, manifest_key, stream_id, tail_key, topic0_mode_key, topic0_stats_key,
@@ -250,6 +250,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
     async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<bool> {
         let (mut manifest, manifest_version) = self.load_manifest(stream).await?;
         let mut tail = self.load_tail(stream).await?;
+        let mut manifest_changed = false;
 
         for v in values {
             tail.insert(*v);
@@ -286,11 +287,14 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             });
 
             tail = RoaringBitmap::new();
+            manifest_changed = true;
             sealed = true;
         }
 
-        self.store_manifest(stream, &manifest, manifest_version, epoch)
-            .await?;
+        if manifest_changed {
+            self.store_manifest(stream, &manifest, manifest_version, epoch)
+                .await?;
+        }
         self.store_tail(stream, &tail, epoch).await?;
         Ok(sealed)
     }
@@ -332,9 +336,15 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         current_version: Option<u64>,
         epoch: u64,
     ) -> Result<()> {
-        let cond = match current_version {
-            Some(v) => PutCond::IfVersion(v),
-            None => PutCond::IfAbsent,
+        let (cond, strict_applied_check) = match self.config.ingest_mode {
+            IngestMode::StrictCas => (
+                match current_version {
+                    Some(v) => PutCond::IfVersion(v),
+                    None => PutCond::IfAbsent,
+                },
+                true,
+            ),
+            IngestMode::SingleWriterFast => (PutCond::Any, false),
         };
         let r = self
             .meta_store
@@ -345,7 +355,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                 FenceToken(epoch),
             )
             .await?;
-        if !r.applied {
+        if strict_applied_check && !r.applied {
             return Err(Error::CasConflict);
         }
         Ok(())
@@ -376,15 +386,21 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         epoch: u64,
     ) -> Result<()> {
         let key = manifest_key(stream);
-        let cond = match version {
-            Some(v) => PutCond::IfVersion(v),
-            None => PutCond::IfAbsent,
+        let (cond, strict_applied_check) = match self.config.ingest_mode {
+            IngestMode::StrictCas => (
+                match version {
+                    Some(v) => PutCond::IfVersion(v),
+                    None => PutCond::IfAbsent,
+                },
+                true,
+            ),
+            IngestMode::SingleWriterFast => (PutCond::Any, false),
         };
         let r = self
             .meta_store
             .put(&key, encode_manifest(manifest), cond, FenceToken(epoch))
             .await?;
-        if !r.applied {
+        if strict_applied_check && !r.applied {
             return Err(Error::CasConflict);
         }
         Ok(())
@@ -487,13 +503,23 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             }
         }
 
-        let cond = version.map(PutCond::IfVersion).unwrap_or(PutCond::IfAbsent);
-        let result = self
-            .meta_store
-            .put(&key, encode_topic0_stats(&stats), cond, FenceToken(epoch))
-            .await?;
-        if !result.applied {
-            return Ok(());
+        let mut persisted_version = version;
+        if self.should_flush_topic0_stats(block_num) {
+            let (cond, strict_applied_check) = match self.config.ingest_mode {
+                IngestMode::StrictCas => (
+                    version.map(PutCond::IfVersion).unwrap_or(PutCond::IfAbsent),
+                    true,
+                ),
+                IngestMode::SingleWriterFast => (PutCond::Any, false),
+            };
+            let result = self
+                .meta_store
+                .put(&key, encode_topic0_stats(&stats), cond, FenceToken(epoch))
+                .await?;
+            if strict_applied_check && !result.applied {
+                return Ok(());
+            }
+            persisted_version = result.version.or(persisted_version);
         }
 
         let mode_key = topic0_mode_key(&topic0);
@@ -542,11 +568,19 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                 topic0,
                 CachedTopic0Stats {
                     stats,
-                    version: result.version,
+                    version: persisted_version,
                 },
             );
         }
         Ok(())
+    }
+
+    fn should_flush_topic0_stats(&self, block_num: u64) -> bool {
+        if !matches!(self.config.ingest_mode, IngestMode::SingleWriterFast) {
+            return true;
+        }
+        let every = self.config.topic0_stats_flush_interval_blocks.max(1);
+        block_num == 1 || block_num.is_multiple_of(every)
     }
 }
 

@@ -10,6 +10,12 @@ pub enum GuardrailAction {
     FailClosed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestMode {
+    StrictCas,
+    SingleWriterFast,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub target_entries_per_chunk: u32,
@@ -24,6 +30,8 @@ pub struct Config {
     pub max_stale_tail_keys: u64,
     pub backend_error_throttle_after: u64,
     pub backend_error_degraded_after: u64,
+    pub ingest_mode: IngestMode,
+    pub topic0_stats_flush_interval_blocks: u64,
 }
 
 impl Default for Config {
@@ -41,6 +49,8 @@ impl Default for Config {
             max_stale_tail_keys: 1_000_000,
             backend_error_throttle_after: 3,
             backend_error_degraded_after: 10,
+            ingest_mode: IngestMode::StrictCas,
+            topic0_stats_flush_interval_blocks: 1,
         }
     }
 }

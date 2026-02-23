@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
-use finalized_log_index::config::Config as IndexConfig;
+use finalized_log_index::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
 use finalized_log_index::domain::types::{Block as IndexBlock, Log as IndexLog};
 use finalized_log_index::store::minio::MinioBlobStore;
@@ -173,6 +173,12 @@ struct IngestDistributedArgs {
     #[arg(long, default_value_t = 500)]
     run_maintenance_every_blocks: u64,
 
+    #[arg(long, value_enum, default_value = "strict-cas")]
+    ingest_mode: IngestModeArg,
+
+    #[arg(long, default_value_t = 1)]
+    topic0_stats_flush_interval_blocks: u64,
+
     #[arg(long, default_value_t = 250)]
     log_every: u64,
 
@@ -189,6 +195,21 @@ enum TraceProfileArg {
     Stress,
     Adversarial,
     All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum IngestModeArg {
+    StrictCas,
+    SingleWriterFast,
+}
+
+impl From<IngestModeArg> for IndexIngestMode {
+    fn from(value: IngestModeArg) -> Self {
+        match value {
+            IngestModeArg::StrictCas => IndexIngestMode::StrictCas,
+            IngestModeArg::SingleWriterFast => IndexIngestMode::SingleWriterFast,
+        }
+    }
 }
 
 #[derive(Args, Debug, Clone)]
@@ -304,6 +325,8 @@ struct IngestReport {
     scylla_keyspace: String,
     minio_bucket: String,
     minio_prefix: String,
+    ingest_mode: String,
+    topic0_stats_flush_interval_blocks: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -589,6 +612,8 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         target_entries_per_chunk: args.target_entries_per_chunk,
         target_chunk_bytes: args.target_chunk_bytes,
         maintenance_seal_seconds: args.maintenance_seal_seconds,
+        ingest_mode: args.ingest_mode.into(),
+        topic0_stats_flush_interval_blocks: args.topic0_stats_flush_interval_blocks.max(1),
         ..IndexConfig::default()
     };
 
@@ -677,6 +702,11 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         scylla_keyspace: args.distributed.scylla_keyspace.clone(),
         minio_bucket: args.distributed.minio_bucket.clone(),
         minio_prefix: args.distributed.minio_prefix.clone(),
+        ingest_mode: match args.ingest_mode {
+            IngestModeArg::StrictCas => "strict_cas".to_string(),
+            IngestModeArg::SingleWriterFast => "single_writer_fast".to_string(),
+        },
+        topic0_stats_flush_interval_blocks: args.topic0_stats_flush_interval_blocks.max(1),
     };
 
     println!(
@@ -826,6 +856,8 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         target_chunk_bytes: 32 * 1024,
         maintenance_seal_seconds: 600,
         run_maintenance_every_blocks: 500,
+        ingest_mode: IngestModeArg::StrictCas,
+        topic0_stats_flush_interval_blocks: 1,
         log_every: 250,
         skip_final_maintenance: false,
         output_json: None,

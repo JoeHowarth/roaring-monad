@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use scylla::frame::response::result::CqlValue;
 use scylla::{Session, SessionBuilder};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
@@ -22,6 +24,72 @@ const KNOWN_GROUPS: &[&str] = &[
     "log_locators",
 ];
 
+#[derive(Debug, Clone)]
+pub struct ScyllaTelemetrySnapshot {
+    pub cas_attempts: u64,
+    pub cas_conflicts: u64,
+    pub timeout_errors: u64,
+    pub cas_attempts_by_op: BTreeMap<String, u64>,
+    pub cas_conflicts_by_op: BTreeMap<String, u64>,
+    pub timeout_errors_by_op: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Default)]
+struct ScyllaTelemetry {
+    cas_attempts: AtomicU64,
+    cas_conflicts: AtomicU64,
+    timeout_errors: AtomicU64,
+    cas_attempts_by_op: Mutex<BTreeMap<String, u64>>,
+    cas_conflicts_by_op: Mutex<BTreeMap<String, u64>>,
+    timeout_errors_by_op: Mutex<BTreeMap<String, u64>>,
+}
+
+impl ScyllaTelemetry {
+    fn record_cas_attempt(&self, op: &str) {
+        let _ = self.cas_attempts.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut m) = self.cas_attempts_by_op.lock() {
+            *m.entry(op.to_string()).or_default() += 1;
+        }
+    }
+
+    fn record_cas_conflict(&self, op: &str) {
+        let _ = self.cas_conflicts.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut m) = self.cas_conflicts_by_op.lock() {
+            *m.entry(op.to_string()).or_default() += 1;
+        }
+    }
+
+    fn record_timeout(&self, op: &str) {
+        let _ = self.timeout_errors.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut m) = self.timeout_errors_by_op.lock() {
+            *m.entry(op.to_string()).or_default() += 1;
+        }
+    }
+
+    fn snapshot(&self) -> ScyllaTelemetrySnapshot {
+        ScyllaTelemetrySnapshot {
+            cas_attempts: self.cas_attempts.load(Ordering::Relaxed),
+            cas_conflicts: self.cas_conflicts.load(Ordering::Relaxed),
+            timeout_errors: self.timeout_errors.load(Ordering::Relaxed),
+            cas_attempts_by_op: self
+                .cas_attempts_by_op
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default(),
+            cas_conflicts_by_op: self
+                .cas_conflicts_by_op
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default(),
+            timeout_errors_by_op: self
+                .timeout_errors_by_op
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ScyllaMetaStore {
     session: Arc<Session>,
@@ -34,6 +102,7 @@ pub struct ScyllaMetaStore {
     fence_check_interval_ms: u64,
     cached_min_epoch: Arc<AtomicU64>,
     last_fence_check_ms: Arc<AtomicU64>,
+    telemetry: Arc<ScyllaTelemetry>,
 }
 
 impl ScyllaMetaStore {
@@ -106,6 +175,7 @@ impl ScyllaMetaStore {
             fence_check_interval_ms: DEFAULT_FENCE_CHECK_INTERVAL_MS,
             cached_min_epoch: Arc::new(AtomicU64::new(0)),
             last_fence_check_ms: Arc::new(AtomicU64::new(0)),
+            telemetry: Arc::new(ScyllaTelemetry::default()),
         })
     }
 
@@ -119,6 +189,10 @@ impl ScyllaMetaStore {
         self.base_delay_ms = base_delay_ms;
         self.max_delay_ms = max_delay_ms;
         self
+    }
+
+    pub fn telemetry_snapshot(&self) -> ScyllaTelemetrySnapshot {
+        self.telemetry.snapshot()
     }
 
     pub async fn set_min_epoch(&self, min_epoch: u64) -> Result<()> {
@@ -242,6 +316,8 @@ impl MetaStore for ScyllaMetaStore {
                 })
             }
             PutCond::IfAbsent => {
+                let cas_op = format!("put_if_absent:{grp}");
+                self.telemetry.record_cas_attempt(&cas_op);
                 let res = self
                     .with_retry("put_if_absent", || async {
                         self.session
@@ -257,12 +333,17 @@ impl MetaStore for ScyllaMetaStore {
                     })
                     .await?;
                 let applied = lwt_applied(res)?;
+                if !applied {
+                    self.telemetry.record_cas_conflict(&cas_op);
+                }
                 Ok(PutResult {
                     applied,
                     version: applied.then_some(1),
                 })
             }
             PutCond::IfVersion(v) => {
+                let cas_op = format!("put_if_version:{grp}");
+                self.telemetry.record_cas_attempt(&cas_op);
                 let res = self
                     .with_retry("put_if_version", || async {
                         self.session
@@ -284,6 +365,9 @@ impl MetaStore for ScyllaMetaStore {
                     })
                     .await?;
                 let applied = lwt_applied(res)?;
+                if !applied {
+                    self.telemetry.record_cas_conflict(&cas_op);
+                }
                 Ok(PutResult {
                     applied,
                     version: applied.then_some(v + 1),
@@ -388,7 +472,7 @@ impl MetaStore for ScyllaMetaStore {
 }
 
 impl ScyllaMetaStore {
-    async fn with_retry<T, F, Fut>(&self, _op: &str, mut f: F) -> Result<T>
+    async fn with_retry<T, F, Fut>(&self, op: &str, mut f: F) -> Result<T>
     where
         F: FnMut() -> Fut,
         Fut: core::future::Future<Output = Result<T>>,
@@ -398,6 +482,9 @@ impl ScyllaMetaStore {
             match f().await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
+                    if is_timeout_backend_error(&e) {
+                        self.telemetry.record_timeout(op);
+                    }
                     if attempt >= self.max_retries || !is_retryable_backend_error(&e) {
                         return Err(e);
                     }
@@ -474,12 +561,19 @@ fn now_millis_u64() -> u64 {
         .unwrap_or(0)
 }
 
+fn is_timeout_backend_error(err: &Error) -> bool {
+    let Error::Backend(msg) = err else {
+        return false;
+    };
+    msg.to_ascii_lowercase().contains("timeout")
+}
+
 fn is_retryable_backend_error(err: &Error) -> bool {
     let Error::Backend(msg) = err else {
         return false;
     };
     let s = msg.to_ascii_lowercase();
-    s.contains("timeout")
+    is_timeout_backend_error(err)
         || s.contains("temporar")
         || s.contains("connection")
         || s.contains("reset")
