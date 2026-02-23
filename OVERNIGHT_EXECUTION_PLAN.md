@@ -162,11 +162,12 @@ echo "$(date -u +%FT%TZ) :: <event>" | tee -a "$LOG_DIR/progress.log"
 - Additional ingest optimizations now landed:
   - Scylla write path reduced extra round trips in `put`.
   - `topic0_mode` ingest lookups cached in memory.
+  - `topic0_stats` updates now use an in-memory cache and fast long-gap advancement.
   - ingest CLI supports `--skip-final-maintenance`.
   - scaler supports `RUN_MAINTENANCE_EVERY_BLOCKS` and `SKIP_FINAL_MAINTENANCE`.
 - Last completed geometry row:
-  - `iter=5` (`57219515..57227530`, span `8016`) at `11.24 blocks/s`, `331.97 logs/s`, total backend `7.11 GiB`.
-- Current size baseline: `infra/data/distributed` ~`7.1G`.
+  - `iter=21` (`57233457..57233485`, span `65536`) at `6.84 blocks/s`, `241.92 logs/s`, total backend `7.26 GiB`.
+- Current size baseline: `infra/data/distributed` ~`7.3G`.
 - Active unattended scale loop:
 
 ```bash
@@ -181,16 +182,19 @@ tail -n 50 logs/results/size-growth-$RUN_ID.md
   - `logs/scale-to-target-20260223T073907Z-scale-geom.out`
   - `logs/results/size-growth-20260223T073907Z-scale-geom.md`
 - Current resume state (`logs/scale-state-20260223T073907Z-scale-geom.env`):
-  - `ITER=6`
-  - `CUR_START_BLOCK=57227531`
-  - `CUR_SPAN=16032`
+  - `ITER=23`
+  - `CUR_START_BLOCK=57212000`
+  - `CUR_SPAN=65536`
 - Current active range:
-  - capped from desired `57227531..57243562` to source head `57231880` (`iter=6`)
+  - `iter=23` ingesting wrapped historical span `57212000..57233795` after source-head low-headroom detection.
 - Script-level retry behavior added:
   - on `invalid finalized sequence`, auto-advance to next keyspace iteration and retry same range (instead of exiting).
+- Headroom recovery behavior added:
+  - low source headroom (`latest_source - CUR_START_BLOCK + 1`) triggers wrap to `START_BLOCK`.
 - Recent failure/recovery:
   - initial `iter=5` failed due compile error after adding `skip_final_maintenance` field (`missing field` in `RunAll` initializer).
   - fixed in `crates/benchmarking/src/main.rs`, revalidated (`clippy/test`), and resumed from same state.
+  - `iter=22` keyspace conflict recovered automatically to `iter=23`.
 
 - Density scan snapshot:
   - coarse scan (`56,000,000..57,220,000`, step `2000`) avg logs/sample `27.10`, max sampled `155`
@@ -209,6 +213,7 @@ SKIP_FINAL_MAINTENANCE=true \
 MAX_RETRIES_PER_ITER=5 \
 RETRY_DELAY_SECONDS=15 \
 SOURCE_LATEST_TIMEOUT_SECONDS=120 \
+MIN_AVAILABLE_SPAN_BEFORE_WRAP=2000 \
 nohup setsid ./scripts/scale_to_target_size.sh >> logs/scale-to-target-$RUN_ID.out 2>&1 &
 echo $! > logs/scale-to-target-$RUN_ID.pid
 ```
@@ -216,3 +221,9 @@ echo $! > logs/scale-to-target-$RUN_ID.pid
 - Throughput evidence after relaunch:
   - early sample (`iter=5`): `mapped_block=486`, `elapsed=48.63s`, `blocks_per_sec=9.99`, `logs_per_sec=323.36`.
   - completed row (`iter=5`): `blocks_per_sec=11.24`, `logs_per_sec=331.97`, `ingest_seconds=713.03`.
+  - post-optimization sample (`iter=23`): `mapped_block=251`, `elapsed=20.22s`, `blocks_per_sec=12.42`, `logs_per_sec=289.88`.
+
+- Recent committed reliability/perf changes:
+  - `65394a0` wrap to `START_BLOCK` when near source head.
+  - `43e6d69` optimize topic0 stats updates during ingest.
+  - `de898c9` scaler defaults to prebuilt `target/release/benchmarking` binary (fallback to `cargo run`).
