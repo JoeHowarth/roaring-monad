@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use roaring::RoaringBitmap;
@@ -27,6 +28,7 @@ pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
     pub meta_store: M,
     pub blob_store: B,
+    topic0_mode_cache: RwLock<HashMap<[u8; 32], Topic0Mode>>,
 }
 
 impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
@@ -35,6 +37,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             config,
             meta_store,
             blob_store,
+            topic0_mode_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -373,12 +376,24 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
     }
 
     async fn topic0_log_enabled(&self, topic0: &[u8; 32], block_num: u64) -> Result<bool> {
+        if let Ok(cache) = self.topic0_mode_cache.read()
+            && let Some(mode) = cache.get(topic0)
+        {
+            return Ok(mode.log_enabled && block_num >= mode.enabled_from_block);
+        }
+
         let key = topic0_mode_key(topic0);
-        let rec = self.meta_store.get(&key).await?;
-        let Some(rec) = rec else {
-            return Ok(false);
+        let mode = match self.meta_store.get(&key).await? {
+            Some(rec) => decode_topic0_mode(&rec.value)?,
+            None => Topic0Mode {
+                log_enabled: false,
+                enabled_from_block: 0,
+            },
         };
-        let mode = decode_topic0_mode(&rec.value)?;
+
+        if let Ok(mut cache) = self.topic0_mode_cache.write() {
+            cache.insert(*topic0, mode.clone());
+        }
         Ok(mode.log_enabled && block_num >= mode.enabled_from_block)
     }
 
@@ -438,12 +453,15 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         let mode_key = topic0_mode_key(&topic0);
-        let mut mode = match self.meta_store.get(&mode_key).await? {
-            Some(rec) => decode_topic0_mode(&rec.value)?,
-            None => Topic0Mode {
-                log_enabled: false,
-                enabled_from_block: 0,
-            },
+        let (mut mode, mode_exists) = match self.meta_store.get(&mode_key).await? {
+            Some(rec) => (decode_topic0_mode(&rec.value)?, true),
+            None => (
+                Topic0Mode {
+                    log_enabled: false,
+                    enabled_from_block: 0,
+                },
+                false,
+            ),
         };
 
         let denom = u64::min(stats.window_len as u64, block_num.saturating_add(1)).max(1);
@@ -458,7 +476,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             changed = true;
         }
 
-        if changed || self.meta_store.get(&mode_key).await?.is_none() {
+        if changed || !mode_exists {
             let _ = self
                 .meta_store
                 .put(
@@ -468,6 +486,10 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                     FenceToken(epoch),
                 )
                 .await?;
+        }
+
+        if let Ok(mut cache) = self.topic0_mode_cache.write() {
+            cache.insert(topic0, mode);
         }
         Ok(())
     }

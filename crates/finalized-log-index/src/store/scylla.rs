@@ -2,12 +2,15 @@ use bytes::Bytes;
 use scylla::frame::response::result::CqlValue;
 use scylla::{Session, SessionBuilder};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 const DEFAULT_FENCE_KEY: &str = "global";
+const DEFAULT_FENCE_CHECK_INTERVAL_MS: u64 = 1000;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
     "block_meta",
@@ -28,6 +31,9 @@ pub struct ScyllaMetaStore {
     max_retries: u32,
     base_delay_ms: u64,
     max_delay_ms: u64,
+    fence_check_interval_ms: u64,
+    cached_min_epoch: Arc<AtomicU64>,
+    last_fence_check_ms: Arc<AtomicU64>,
 }
 
 impl ScyllaMetaStore {
@@ -97,6 +103,9 @@ impl ScyllaMetaStore {
             max_retries: 4,
             base_delay_ms: 25,
             max_delay_ms: 1000,
+            fence_check_interval_ms: DEFAULT_FENCE_CHECK_INTERVAL_MS,
+            cached_min_epoch: Arc::new(AtomicU64::new(0)),
+            last_fence_check_ms: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -127,10 +136,24 @@ impl ScyllaMetaStore {
             Ok(())
         })
         .await?;
+        self.cached_min_epoch.store(min_epoch, Ordering::Relaxed);
+        self.last_fence_check_ms
+            .store(now_millis_u64(), Ordering::Relaxed);
         Ok(())
     }
 
     async fn validate_fence(&self, fence: FenceToken) -> Result<()> {
+        let cached_min_epoch = self.cached_min_epoch.load(Ordering::Relaxed);
+        if fence.0 < cached_min_epoch {
+            return Err(Error::LeaseLost);
+        }
+
+        let now_ms = now_millis_u64();
+        let last_check_ms = self.last_fence_check_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last_check_ms) < self.fence_check_interval_ms {
+            return Ok(());
+        }
+
         let res = self
             .with_retry("validate_fence", || async {
                 self.session
@@ -144,6 +167,8 @@ impl ScyllaMetaStore {
             .await?;
 
         let min_epoch = first_col_i64(res).map(|v| v as u64).unwrap_or(0);
+        self.cached_min_epoch.store(min_epoch, Ordering::Relaxed);
+        self.last_fence_check_ms.store(now_ms, Ordering::Relaxed);
         if fence.0 < min_epoch {
             return Err(Error::LeaseLost);
         }
@@ -188,10 +213,9 @@ impl MetaStore for ScyllaMetaStore {
         self.validate_fence(fence).await?;
 
         let grp = extract_group(key);
-        let current = self.get(key).await?;
-        let next_version = current.as_ref().map_or(1, |r| r.version + 1);
+        let key_vec = key.to_vec();
 
-        let applied = match cond {
+        match cond {
             PutCond::Any => {
                 self.with_retry("put_any", || async {
                     self.session
@@ -202,9 +226,9 @@ impl MetaStore for ScyllaMetaStore {
                             ),
                             (
                                 grp.as_str(),
-                                key.to_vec(),
+                                key_vec.clone(),
                                 value.to_vec(),
-                                next_version as i64,
+                                now_millis_u64() as i64,
                             ),
                         )
                         .await
@@ -212,7 +236,10 @@ impl MetaStore for ScyllaMetaStore {
                     Ok(())
                 })
                 .await?;
-                true
+                Ok(PutResult {
+                    applied: true,
+                    version: None,
+                })
             }
             PutCond::IfAbsent => {
                 let res = self
@@ -223,13 +250,17 @@ impl MetaStore for ScyllaMetaStore {
                                     "INSERT INTO {} (grp, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
                                     self.table
                                 ),
-                                (grp.as_str(), key.to_vec(), value.to_vec(), 1_i64),
+                                (grp.as_str(), key_vec.clone(), value.to_vec(), 1_i64),
                             )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))
                     })
                     .await?;
-                lwt_applied(res)?
+                let applied = lwt_applied(res)?;
+                Ok(PutResult {
+                    applied,
+                    version: applied.then_some(1),
+                })
             }
             PutCond::IfVersion(v) => {
                 let res = self
@@ -242,9 +273,9 @@ impl MetaStore for ScyllaMetaStore {
                                 ),
                                 (
                                     value.to_vec(),
-                                    next_version as i64,
+                                    (v + 1) as i64,
                                     grp.as_str(),
-                                    key.to_vec(),
+                                    key_vec.clone(),
                                     v as i64,
                                 ),
                             )
@@ -252,12 +283,13 @@ impl MetaStore for ScyllaMetaStore {
                             .map_err(|e| Error::Backend(format!("scylla put if version: {e}")))
                     })
                     .await?;
-                lwt_applied(res)?
+                let applied = lwt_applied(res)?;
+                Ok(PutResult {
+                    applied,
+                    version: applied.then_some(v + 1),
+                })
             }
-        };
-
-        let version = self.get(key).await?.map(|r| r.version);
-        Ok(PutResult { applied, version })
+        }
     }
 
     async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
@@ -433,6 +465,13 @@ fn extract_group(key: &[u8]) -> String {
 fn compute_backoff_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {
     let factor = 1u64 << core::cmp::min(attempt, 8);
     core::cmp::min(base_ms.saturating_mul(factor), max_ms)
+}
+
+fn now_millis_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn is_retryable_backend_error(err: &Error) -> bool {
