@@ -6,7 +6,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-pfill}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-$RM_ROOT/data/archive-mainnet-deu-009-0}"
 START_BLOCK="${START_BLOCK:-56536000}"
 END_BLOCK="${END_BLOCK:-56601535}"
-WORKERS="${WORKERS:-4}"
+WORKERS="${WORKERS:-1}"
 TARGET_GB="${TARGET_GB:-100}"
 TARGET_BYTES="${TARGET_BYTES:-$((TARGET_GB * 1024 * 1024 * 1024))}"
 INGEST_TIMEOUT_SECONDS="${INGEST_TIMEOUT_SECONDS:-7200}"
@@ -16,6 +16,7 @@ TARGET_CHUNK_BYTES="${TARGET_CHUNK_BYTES:-32768}"
 MAINTENANCE_SEAL_SECONDS="${MAINTENANCE_SEAL_SECONDS:-1800}"
 RUN_MAINTENANCE_EVERY_BLOCKS="${RUN_MAINTENANCE_EVERY_BLOCKS:-0}"
 SKIP_FINAL_MAINTENANCE="${SKIP_FINAL_MAINTENANCE:-true}"
+BACKOFF_SECONDS_ON_FAIL="${BACKOFF_SECONDS_ON_FAIL:-20}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -77,7 +78,11 @@ worker_loop() {
     fi
 
     local idx
-    idx="$(next_job_idx)"
+    idx="$(next_job_idx)" || {
+      echo "$(date -u +%FT%TZ) :: parallel-fill worker=$wid failed to allocate next job index" | tee -a "$PROGRESS_LOG"
+      sleep "$BACKOFF_SECONDS_ON_FAIL"
+      continue
+    }
     if (( idx > MAX_JOBS )); then
       touch "$STOP_FILE"
       echo "$(date -u +%FT%TZ) :: parallel-fill max jobs reached idx=$idx run_id=$RUN_ID" | tee -a "$PROGRESS_LOG"
@@ -138,6 +143,7 @@ worker_loop() {
 
     if (( rc != 0 )); then
       echo "$(date -u +%FT%TZ) :: parallel-fill failed worker=$wid job=$idx rc=$rc log=$ingest_log" | tee -a "$PROGRESS_LOG"
+      sleep "$BACKOFF_SECONDS_ON_FAIL"
       continue
     fi
 
@@ -155,11 +161,17 @@ worker_loop() {
   done
 }
 
+worker_pids=()
 for w in $(seq 1 "$WORKERS"); do
-  worker_loop "$w" &
+  ( worker_loop "$w" ) &
+  worker_pids+=($!)
   echo $! >>"$PID_FILE"
 done
 
-wait
+for pid in "${worker_pids[@]}"; do
+  if ! wait "$pid"; then
+    echo "$(date -u +%FT%TZ) :: parallel-fill worker process exited non-zero pid=$pid run_id=$RUN_ID" | tee -a "$PROGRESS_LOG"
+  fi
+done
 
 echo "$(date -u +%FT%TZ) :: parallel-fill finished run_id=$RUN_ID" | tee -a "$PROGRESS_LOG"
