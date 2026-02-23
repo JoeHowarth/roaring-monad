@@ -16,7 +16,13 @@ CHAIN_ID="${CHAIN_ID:-1}"
 
 SCYLLA_NODE="${SCYLLA_NODE:-127.0.0.1:9042}"
 KEYSPACE_PREFIX="${KEYSPACE_PREFIX:-fi_profile}"
-SCYLLA_KEYSPACE="$(echo "${KEYSPACE_PREFIX}_${RUN_TS}_${RUN_TAG}" | tr '[:upper:]-' '[:lower:]_')"
+RAW_KEYSPACE="$(echo "${KEYSPACE_PREFIX}_${RUN_TS}_${RUN_TAG}" | tr '[:upper:]-' '[:lower:]_')"
+if (( ${#RAW_KEYSPACE} > 48 )); then
+  SCYLLA_KEYSPACE="${RAW_KEYSPACE:0:48}"
+  echo "warning: truncated scylla keyspace to 48 chars: $SCYLLA_KEYSPACE" >&2
+else
+  SCYLLA_KEYSPACE="$RAW_KEYSPACE"
+fi
 
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://127.0.0.1:9000}"
 MINIO_REGION="${MINIO_REGION:-us-east-1}"

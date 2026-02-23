@@ -246,3 +246,227 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 
 - Compared to the tuned-concurrency run (`198.33 blocks/s`), stream-state cache reached `202.39 blocks/s` (`+2.0%`).
 - Scylla CPU dropped again (`~105.75%` to `~76.00%`), consistent with fewer manifest/tail read round-trips.
+
+## 20260223T202211Z - Profiling Run locator-pages
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202211Z-locator-pages blocks=4001 logs=160347 elapsed_s=18.674556901 bps=214.248724679821 lps=8586.388466942079 mode=single_writer_fast flush=64 locator_c=256 stream_c=64
+- pid=1123951 cmd=benchmarking samples=19 avg_cpu=61.32 avg_wait=0.26 avg_usr=34.00 avg_sys=27.32
+- pid=213044 cmd=minio samples=19 avg_cpu=20.68 avg_wait=0.00 avg_usr=12.68 avg_sys=8.00
+- pid=213248 cmd=scylla samples=19 avg_cpu=79.74 avg_wait=0.53 avg_usr=51.32 avg_sys=28.42
+- nvme0n1 samples=20 avg_util=20.18 avg_aqu=0.41 avg_wkB_s=42980.08 avg_rkB_s=98.75
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202211Z-locator-pages.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202211Z-locator-pages.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202211Z-locator-pages.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202211Z-locator-pages.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202211Z-locator-pages.env`
+
+## 20260223T202258Z - Profiling Run lps96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202258Z-lps96 blocks=4001 logs=160347 elapsed_s=18.398428448 bps=217.46422588799578 lps=8715.25524330479 mode=single_writer_fast flush=64 locator_c=256 stream_c=96
+- pid=1124883 cmd=benchmarking samples=19 avg_cpu=61.95 avg_wait=0.21 avg_usr=34.05 avg_sys=27.89
+- pid=213044 cmd=minio samples=19 avg_cpu=20.95 avg_wait=0.00 avg_usr=12.95 avg_sys=8.00
+- pid=213248 cmd=scylla samples=19 avg_cpu=80.32 avg_wait=0.47 avg_usr=52.26 avg_sys=28.05
+- nvme0n1 samples=20 avg_util=19.57 avg_aqu=0.28 avg_wkB_s=39447.90 avg_rkB_s=99.34
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202258Z-lps96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202258Z-lps96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202258Z-lps96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202258Z-lps96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202258Z-lps96.env`
+
+## 20260223T202323Z - Profiling Run lps128
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202323Z-lps128 blocks=4001 logs=160347 elapsed_s=18.699052729 bps=213.96805806076614 lps=8575.140266400816 mode=single_writer_fast flush=64 locator_c=256 stream_c=128
+- pid=1125295 cmd=benchmarking samples=19 avg_cpu=61.05 avg_wait=0.26 avg_usr=33.58 avg_sys=27.47
+- pid=213044 cmd=minio samples=19 avg_cpu=20.68 avg_wait=0.00 avg_usr=12.84 avg_sys=7.84
+- pid=213248 cmd=scylla samples=19 avg_cpu=80.95 avg_wait=0.53 avg_usr=52.89 avg_sys=28.05
+- nvme0n1 samples=20 avg_util=19.91 avg_aqu=0.31 avg_wkB_s=41283.73 avg_rkB_s=364.34
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202323Z-lps128.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202323Z-lps128.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202323Z-lps128.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202323Z-lps128.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202323Z-lps128.env`
+
+## 20260223T202346Z - Profiling Run lpc384s96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202346Z-lpc384s96 blocks=4001 logs=160347 elapsed_s=18.92381786 bps=211.42668089493014 lps=8473.290177820387 mode=single_writer_fast flush=64 locator_c=384 stream_c=96
+- pid=1125745 cmd=benchmarking samples=19 avg_cpu=60.58 avg_wait=0.26 avg_usr=33.32 avg_sys=27.26
+- pid=213044 cmd=minio samples=19 avg_cpu=20.58 avg_wait=0.00 avg_usr=12.79 avg_sys=7.79
+- pid=213248 cmd=scylla samples=19 avg_cpu=79.53 avg_wait=0.47 avg_usr=51.89 avg_sys=27.63
+- nvme0n1 samples=20 avg_util=20.77 avg_aqu=0.30 avg_wkB_s=38885.79 avg_rkB_s=109.34
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202346Z-lpc384s96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202346Z-lpc384s96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202346Z-lpc384s96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202346Z-lpc384s96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202346Z-lpc384s96.env`
+
+## 20260223T202411Z - Profiling Run lpc128s96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202411Z-lpc128s96 blocks=4001 logs=160347 elapsed_s=18.782728281 bps=213.01484747811008 lps=8536.938702467512 mode=single_writer_fast flush=64 locator_c=128 stream_c=96
+- pid=1126270 cmd=benchmarking samples=19 avg_cpu=60.89 avg_wait=0.26 avg_usr=34.00 avg_sys=26.89
+- pid=213044 cmd=minio samples=19 avg_cpu=20.84 avg_wait=0.00 avg_usr=12.42 avg_sys=8.42
+- pid=213248 cmd=scylla samples=19 avg_cpu=81.74 avg_wait=0.47 avg_usr=54.42 avg_sys=27.32
+- nvme0n1 samples=20 avg_util=19.57 avg_aqu=0.28 avg_wkB_s=36865.23 avg_rkB_s=446.94
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202411Z-lpc128s96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202411Z-lpc128s96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202411Z-lpc128s96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202411Z-lpc128s96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202411Z-lpc128s96.env`
+
+## 20260223T202725Z - Profiling Run def96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202725Z-def96 blocks=4001 logs=160347 elapsed_s=18.700864714 bps=213.94732602951441 lps=8574.309394365046 mode=single_writer_fast flush=64 locator_c=256 stream_c=96
+- pid=1135742 cmd=benchmarking samples=19 avg_cpu=61.16 avg_wait=0.26 avg_usr=33.79 avg_sys=27.37
+- pid=213044 cmd=minio samples=19 avg_cpu=20.79 avg_wait=0.00 avg_usr=12.89 avg_sys=7.89
+- pid=213248 cmd=scylla samples=19 avg_cpu=79.79 avg_wait=0.53 avg_usr=51.32 avg_sys=28.47
+- nvme0n1 samples=20 avg_util=20.51 avg_aqu=2.86 avg_wkB_s=82484.95 avg_rkB_s=62.94
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202725Z-def96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202725Z-def96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202725Z-def96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202725Z-def96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202725Z-def96.env`
+
+## 20260223T202753Z - Profiling Run a64
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202753Z-a64 blocks=4001 logs=160347 elapsed_s=18.602680421 bps=215.07653249170443 lps=8619.564297787385 mode=single_writer_fast flush=64 locator_c=256 stream_c=64
+- pid=1136296 cmd=benchmarking samples=19 avg_cpu=61.37 avg_wait=0.26 avg_usr=33.74 avg_sys=27.63
+- pid=213044 cmd=minio samples=19 avg_cpu=21.26 avg_wait=0.00 avg_usr=12.84 avg_sys=8.42
+- pid=213248 cmd=scylla samples=19 avg_cpu=79.79 avg_wait=0.47 avg_usr=51.53 avg_sys=28.26
+- nvme0n1 samples=20 avg_util=20.13 avg_aqu=0.28 avg_wkB_s=37130.92 avg_rkB_s=29.14
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202753Z-a64.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202753Z-a64.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202753Z-a64.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202753Z-a64.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202753Z-a64.env`
+
+## 20260223T202815Z - Profiling Run a96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202815Z-a96 blocks=4001 logs=160347 elapsed_s=18.633774831 bps=214.71763162790577 lps=8605.180724478832 mode=single_writer_fast flush=64 locator_c=256 stream_c=96
+- pid=1136690 cmd=benchmarking samples=19 avg_cpu=61.16 avg_wait=0.21 avg_usr=33.26 avg_sys=27.89
+- pid=213044 cmd=minio samples=19 avg_cpu=21.00 avg_wait=0.00 avg_usr=12.79 avg_sys=8.21
+- pid=213248 cmd=scylla samples=19 avg_cpu=79.58 avg_wait=0.53 avg_usr=52.11 avg_sys=27.47
+- nvme0n1 samples=20 avg_util=21.72 avg_aqu=0.40 avg_wkB_s=37972.74 avg_rkB_s=175.94
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202815Z-a96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202815Z-a96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202815Z-a96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202815Z-a96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202815Z-a96.env`
+
+## 20260223T202952Z - Profiling Run locator-pages-c256-s96
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T202952Z-locator-pages-c256-s96 blocks=4001 logs=160347 elapsed_s=21.668991967 bps=184.641722424983 lps=7399.836607267869 mode=single_writer_fast flush=64 locator_c=256 stream_c=64
+- pid=1138410 cmd=benchmarking samples=22 avg_cpu=53.32 avg_wait=0.23 avg_usr=29.41 avg_sys=23.91
+- pid=213044 cmd=minio samples=22 avg_cpu=18.82 avg_wait=0.00 avg_usr=11.09 avg_sys=7.73
+- pid=213248 cmd=scylla samples=22 avg_cpu=69.27 avg_wait=0.41 avg_usr=44.59 avg_sys=24.68
+- nvme0n1 samples=23 avg_util=30.89 avg_aqu=0.42 avg_wkB_s=33199.83 avg_rkB_s=25.85
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T202952Z-locator-pages-c256-s96.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T202952Z-locator-pages-c256-s96.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T202952Z-locator-pages-c256-s96.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T202952Z-locator-pages-c256-s96.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T202952Z-locator-pages-c256-s96.env`
+
+## 2026-02-23T20:30:00Z - Methodology Learnings (Post Locator-Page Rollout)
+
+### Context
+
+- Scope: post-change profiling after moving log locator metadata to paged writes.
+- Goal: isolate the next limiting factor and decide whether to retune write concurrency defaults.
+
+### Findings
+
+- New best run in this batch: `217.46 blocks/s` (`run_id=20260223T202258Z-lps96`).
+- Repeated A/B runs (`stream_c=64` vs `96`) are very close (`~214-215 blocks/s`) and currently within short-run noise.
+- Across steady runs, Scylla remains the largest sustained CPU consumer (`~79-81% avg CPU`), while benchmarking process is lower (`~61% avg CPU`) and MinIO lower (`~20-21% avg CPU`).
+
+### Interpretation
+
+- The dominant bottleneck has shifted from per-log locator write fanout to remaining Scylla metadata pressure (stream tail/manifest/topic0 metadata writes), not MinIO bandwidth.
+- Small tuning deltas should be treated as directional only unless confirmed with repeated medians under quiet host conditions.
+- A single noisy run (`run_id=20260223T202952Z-locator-pages-c256-s96`) demonstrates why one-off numbers should not drive defaults.
+
+### Methodology Updates
+
+- Always run at least 2-3 back-to-back A/B comparisons before changing defaults.
+- Keep run tags short enough for Scylla keyspace limits, or enforce automatic truncation in tooling.
+- Prefer comparing medians and not single maxima when differences are <2%.
+- Continue collecting `pidstat` + `iostat` with each run to distinguish DB CPU pressure from disk saturation.
