@@ -79,6 +79,7 @@ if [[ -f "$STATE_FILE" ]]; then
   source "$STATE_FILE"
 fi
 ATTEMPT="${ATTEMPT:-0}"
+FORCE_SKIP_MIRROR="${FORCE_SKIP_MIRROR:-false}"
 
 while (( ITER < MAX_ITERS )); do
   scylla_bytes=0
@@ -125,6 +126,7 @@ while (( ITER < MAX_ITERS )); do
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
         echo "ATTEMPT=$ATTEMPT"
+        echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
         echo "LAST_RC=$latest_source_rc"
         echo "LAST_TABLE_FILE=$TABLE_FILE"
       } >"$STATE_FILE"
@@ -138,6 +140,7 @@ while (( ITER < MAX_ITERS )); do
       echo "CUR_START_BLOCK=$CUR_START_BLOCK"
       echo "CUR_SPAN=$CUR_SPAN"
       echo "ATTEMPT=$ATTEMPT"
+      echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
       echo "LAST_RC=$latest_source_rc"
       echo "LAST_TABLE_FILE=$TABLE_FILE"
     } >"$STATE_FILE"
@@ -180,6 +183,9 @@ while (( ITER < MAX_ITERS )); do
   echo "$(date -u +%FT%TZ) :: scale iteration start iter=$ITER attempt=$ATTEMPT keyspace=$keyspace range=${CUR_START_BLOCK}-${cur_end_block} span=$CUR_SPAN" | tee -a "$PROGRESS_LOG"
 
   do_mirror="$MIRROR_BEFORE_INGEST"
+  if [[ "$FORCE_SKIP_MIRROR" == "true" ]]; then
+    do_mirror="false"
+  fi
   if [[ "$SKIP_MIRROR_ON_RETRY" == "true" ]] && (( ATTEMPT > 0 )); then
     do_mirror="false"
   fi
@@ -233,6 +239,7 @@ while (( ITER < MAX_ITERS )); do
           echo "CUR_START_BLOCK=$CUR_START_BLOCK"
           echo "CUR_SPAN=$CUR_SPAN"
           echo "ATTEMPT=$ATTEMPT"
+          echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
           echo "LAST_RC=$mirror_rc"
           echo "LAST_TABLE_FILE=$TABLE_FILE"
         } >"$STATE_FILE"
@@ -246,6 +253,7 @@ while (( ITER < MAX_ITERS )); do
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
         echo "ATTEMPT=$ATTEMPT"
+        echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
         echo "LAST_RC=$mirror_rc"
       } >"$STATE_FILE"
       exit "$mirror_rc"
@@ -299,10 +307,12 @@ while (( ITER < MAX_ITERS )); do
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
         echo "ATTEMPT=0"
+        echo "FORCE_SKIP_MIRROR=true"
         echo "LAST_RC=$rc"
         echo "LAST_TABLE_FILE=$TABLE_FILE"
       } >"$STATE_FILE"
       ATTEMPT=0
+      FORCE_SKIP_MIRROR=true
       ITER="$next_iter"
       continue
     fi
@@ -315,6 +325,7 @@ while (( ITER < MAX_ITERS )); do
         echo "CUR_START_BLOCK=$CUR_START_BLOCK"
         echo "CUR_SPAN=$CUR_SPAN"
         echo "ATTEMPT=$ATTEMPT"
+        echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
         echo "LAST_RC=$rc"
         echo "LAST_TABLE_FILE=$TABLE_FILE"
       } >"$STATE_FILE"
@@ -328,6 +339,7 @@ while (( ITER < MAX_ITERS )); do
       echo "CUR_START_BLOCK=$CUR_START_BLOCK"
       echo "CUR_SPAN=$CUR_SPAN"
       echo "ATTEMPT=$ATTEMPT"
+      echo "FORCE_SKIP_MIRROR=$FORCE_SKIP_MIRROR"
       echo "LAST_RC=$rc"
       echo "LAST_TABLE_FILE=$TABLE_FILE"
     } >"$STATE_FILE"
@@ -357,6 +369,7 @@ while (( ITER < MAX_ITERS )); do
     echo "CUR_START_BLOCK=$next_start_block"
     echo "CUR_SPAN=$next_span"
     echo "ATTEMPT=0"
+    echo "FORCE_SKIP_MIRROR=false"
     echo "LAST_RC=0"
     echo "LAST_TOTAL_BYTES=$total_bytes"
     echo "LAST_TABLE_FILE=$TABLE_FILE"
@@ -367,5 +380,6 @@ while (( ITER < MAX_ITERS )); do
   CUR_START_BLOCK="$next_start_block"
   CUR_SPAN="$next_span"
   ATTEMPT=0
+  FORCE_SKIP_MIRROR=false
   ITER=$((ITER + 1))
 done
