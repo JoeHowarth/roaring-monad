@@ -166,6 +166,9 @@ struct IngestDistributedArgs {
     #[arg(long, default_value_t = 250)]
     log_every: u64,
 
+    #[arg(long, default_value_t = false)]
+    skip_final_maintenance: bool,
+
     #[arg(long)]
     output_json: Option<PathBuf>,
 }
@@ -599,7 +602,9 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         }
     }
 
-    let _ = svc.run_maintenance().await;
+    if !args.skip_final_maintenance {
+        let _ = svc.run_maintenance().await;
+    }
 
     let elapsed_seconds = started.elapsed().as_secs_f64();
     let blocks_per_second = if elapsed_seconds > 0.0 {
@@ -776,6 +781,7 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         maintenance_seal_seconds: 600,
         run_maintenance_every_blocks: 500,
         log_every: 250,
+        skip_final_maintenance: false,
         output_json: None,
     })
     .await?;

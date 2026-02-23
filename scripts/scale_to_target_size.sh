@@ -20,6 +20,11 @@ TARGET_BYTES="${TARGET_BYTES:-$((TARGET_GB * 1024 * 1024 * 1024))}"
 INGEST_TIMEOUT_SECONDS="${INGEST_TIMEOUT_SECONDS:-3600}"
 MIRROR_TIMEOUT_SECONDS="${MIRROR_TIMEOUT_SECONDS:-7200}"
 MAX_ITERS="${MAX_ITERS:-10000}"
+TARGET_ENTRIES_PER_CHUNK="${TARGET_ENTRIES_PER_CHUNK:-1950}"
+TARGET_CHUNK_BYTES="${TARGET_CHUNK_BYTES:-32768}"
+MAINTENANCE_SEAL_SECONDS="${MAINTENANCE_SEAL_SECONDS:-1800}"
+RUN_MAINTENANCE_EVERY_BLOCKS="${RUN_MAINTENANCE_EVERY_BLOCKS:-2000}"
+SKIP_FINAL_MAINTENANCE="${SKIP_FINAL_MAINTENANCE:-true}"
 
 LOG_DIR="$RM_ROOT/logs"
 RESULTS_DIR="$LOG_DIR/results"
@@ -135,6 +140,11 @@ while (( ITER < MAX_ITERS )); do
     fi
   fi
 
+  ingest_extra_args=()
+  if [[ "$SKIP_FINAL_MAINTENANCE" == "true" ]]; then
+    ingest_extra_args+=(--skip-final-maintenance)
+  fi
+
   set +e
   timeout "${INGEST_TIMEOUT_SECONDS}s" env \
     TRIEDB_TARGET=triedb_driver \
@@ -157,11 +167,12 @@ while (( ITER < MAX_ITERS )); do
       --minio-bucket finalized-index-bench \
       --minio-prefix "$prefix" \
       --writer-epoch 1 \
-      --target-entries-per-chunk 1950 \
-      --target-chunk-bytes 32768 \
-      --maintenance-seal-seconds 1800 \
-      --run-maintenance-every-blocks 2000 \
+      --target-entries-per-chunk "$TARGET_ENTRIES_PER_CHUNK" \
+      --target-chunk-bytes "$TARGET_CHUNK_BYTES" \
+      --maintenance-seal-seconds "$MAINTENANCE_SEAL_SECONDS" \
+      --run-maintenance-every-blocks "$RUN_MAINTENANCE_EVERY_BLOCKS" \
       --log-every 250 \
+      "${ingest_extra_args[@]}" \
       --output-json "$ingest_json" \
       >"$ingest_log" 2>&1
   rc=$?
