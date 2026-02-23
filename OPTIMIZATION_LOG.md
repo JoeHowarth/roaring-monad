@@ -70,3 +70,25 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - Use fixed block windows and fresh keyspaces to keep runs comparable.
 - Always capture both throughput and wait-state evidence (`pidstat` + `perf stat` + `perf record`) before attributing root cause.
 - Local FS archive removes AWS variability; this is useful for isolating ingest/index/store bottlenecks.
+
+## 20260223T195116Z - Profiling Run script-smoke
+
+### Commands
+
+`scripts/profile_ingest.sh`
+
+### Metrics
+
+- profile_result run_id=20260223T195116Z-script-smoke blocks=101 logs=3412 elapsed_s=1.25385196 bps=80.55177423018903 lps=2721.2143928059895 mode=single_writer_fast flush=64
+- pid=1052533 cmd=benchmarking samples=1 avg_cpu=18.00 avg_wait=1.00 avg_usr=10.00 avg_sys=8.00
+- pid=213044 cmd=minio samples=1 avg_cpu=15.00 avg_wait=0.00 avg_usr=10.00 avg_sys=5.00
+- pid=213248 cmd=scylla samples=1 avg_cpu=225.00 avg_wait=5.00 avg_usr=108.00 avg_sys=117.00
+- nvme0n1 samples=2 avg_util=14.01 avg_aqu=1.00 avg_wkB_s=68117.21 avg_rkB_s=88.73
+
+### Artifacts
+
+- `/home/jhow/roaring-monad/logs/results/profile-ingest-20260223T195116Z-script-smoke.json`
+- `/home/jhow/roaring-monad/logs/profile-pidstat-20260223T195116Z-script-smoke.log`
+- `/home/jhow/roaring-monad/logs/profile-iostat-20260223T195116Z-script-smoke.log`
+- `/home/jhow/roaring-monad/logs/profile-ingest-20260223T195116Z-script-smoke.log`
+- `/home/jhow/roaring-monad/logs/profile-meta-20260223T195116Z-script-smoke.env`
