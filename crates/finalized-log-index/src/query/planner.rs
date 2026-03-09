@@ -132,14 +132,12 @@ pub async fn build_clause_order<M: MetaStore>(
                 to_log_id_inclusive,
             )
             .await?;
-            if estimate > 0 {
-                clauses.push((
-                    ClauseKind::Topic0Log,
-                    ClauseEstimate {
-                        estimated: estimate,
-                    },
-                ));
-            }
+            clauses.push((
+                ClauseKind::Topic0Log,
+                ClauseEstimate {
+                    estimated: estimate,
+                },
+            ));
         }
     }
 
@@ -370,6 +368,29 @@ mod tests {
                 .await
                 .expect("build order");
             assert_eq!(order, vec![ClauseKind::Topic1, ClauseKind::Address]);
+        });
+    }
+
+    #[test]
+    fn topic0_log_clause_is_planned_even_when_estimate_is_zero() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let topic0_value = [7u8; 32];
+            let filter = LogFilter {
+                from_block: None,
+                to_block: None,
+                block_hash: None,
+                address: None,
+                topic0: Some(Clause::One(topic0_value)),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            };
+
+            let order = build_clause_order(&store, &filter, 0, 100)
+                .await
+                .expect("build order");
+            assert_eq!(order, vec![ClauseKind::Topic0Log]);
         });
     }
 

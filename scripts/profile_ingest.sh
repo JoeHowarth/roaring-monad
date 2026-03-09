@@ -37,7 +37,6 @@ TARGET_CHUNK_BYTES="${TARGET_CHUNK_BYTES:-32768}"
 MAINTENANCE_SEAL_SECONDS="${MAINTENANCE_SEAL_SECONDS:-1800}"
 RUN_MAINTENANCE_EVERY_BLOCKS="${RUN_MAINTENANCE_EVERY_BLOCKS:-0}"
 INGEST_MODE="${INGEST_MODE:-single-writer-fast}"
-TOPIC0_STATS_FLUSH_INTERVAL_BLOCKS="${TOPIC0_STATS_FLUSH_INTERVAL_BLOCKS:-64}"
 ASSUME_EMPTY_STREAMS="${ASSUME_EMPTY_STREAMS:-true}"
 LOG_LOCATOR_WRITE_CONCURRENCY="${LOG_LOCATOR_WRITE_CONCURRENCY:-256}"
 STREAM_APPEND_CONCURRENCY="${STREAM_APPEND_CONCURRENCY:-96}"
@@ -73,7 +72,6 @@ MINIO_PID="$(pgrep -f '^minio server' | head -n1 || true)"
   echo "scylla_keyspace=$SCYLLA_KEYSPACE"
   echo "minio_prefix=$MINIO_PREFIX"
   echo "ingest_mode=$INGEST_MODE"
-  echo "topic0_stats_flush_interval_blocks=$TOPIC0_STATS_FLUSH_INTERVAL_BLOCKS"
   echo "assume_empty_streams=$ASSUME_EMPTY_STREAMS"
   echo "log_locator_write_concurrency=$LOG_LOCATOR_WRITE_CONCURRENCY"
   echo "stream_append_concurrency=$STREAM_APPEND_CONCURRENCY"
@@ -113,7 +111,6 @@ env LD_LIBRARY_PATH="$LIB_PATHS:${LD_LIBRARY_PATH:-}" \
   --maintenance-seal-seconds "$MAINTENANCE_SEAL_SECONDS" \
   --run-maintenance-every-blocks "$RUN_MAINTENANCE_EVERY_BLOCKS" \
   --ingest-mode "$INGEST_MODE" \
-  --topic0-stats-flush-interval-blocks "$TOPIC0_STATS_FLUSH_INTERVAL_BLOCKS" \
   --log-locator-write-concurrency "$LOG_LOCATOR_WRITE_CONCURRENCY" \
   --stream-append-concurrency "$STREAM_APPEND_CONCURRENCY" \
   --log-every "$LOG_EVERY" \
@@ -179,7 +176,7 @@ NVME_LINE="$(
 )"
 
 SUMMARY_LINE="$(
-  jq -r '"profile_result run_id='"$RUN_ID"' blocks=\(.blocks_ingested) logs=\(.logs_ingested) elapsed_s=\(.elapsed_seconds) bps=\(.blocks_per_second) lps=\(.logs_per_second) mode=\(.ingest_mode) flush=\(.topic0_stats_flush_interval_blocks) assume_empty=\(.assume_empty_streams) locator_c=\(.log_locator_write_concurrency) stream_c=\(.stream_append_concurrency)"' "$RESULT_JSON"
+  jq -r '"profile_result run_id='"$RUN_ID"' blocks=\(.blocks_ingested) logs=\(.logs_ingested) elapsed_s=\(.elapsed_seconds) bps=\(.blocks_per_second) lps=\(.logs_per_second) mode=\(.ingest_mode) assume_empty=\(.assume_empty_streams) locator_c=\(.log_locator_write_concurrency) stream_c=\(.stream_append_concurrency)"' "$RESULT_JSON"
 )"
 
 echo "$SUMMARY_LINE"

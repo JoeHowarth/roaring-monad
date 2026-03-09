@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 
-use crate::domain::types::{
-    BlockMeta, Log, LogLocator, MetaState, Topic0Mode, Topic0Stats, Topic32,
-};
+use crate::domain::types::{BlockMeta, Log, LogLocator, MetaState, Topic32};
 use crate::error::{Error, Result};
 
 pub fn validate_log(log: &Log) -> bool {
@@ -77,125 +75,6 @@ pub fn decode_u64(bytes: &[u8]) -> Result<u64> {
     let mut v = [0u8; 8];
     v.copy_from_slice(bytes);
     Ok(u64::from_be_bytes(v))
-}
-
-pub fn encode_topic0_mode(mode: &Topic0Mode) -> Bytes {
-    let mut out = Vec::with_capacity(10);
-    out.push(1);
-    out.push(if mode.log_enabled { 1 } else { 0 });
-    out.extend_from_slice(&mode.enabled_from_block.to_be_bytes());
-    Bytes::from(out)
-}
-
-pub fn decode_topic0_mode(bytes: &[u8]) -> Result<Topic0Mode> {
-    if bytes.len() != 10 || bytes[0] != 1 {
-        return Err(Error::Decode("invalid topic0_mode bytes"));
-    }
-    let log_enabled = bytes[1] == 1;
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&bytes[2..10]);
-    Ok(Topic0Mode {
-        log_enabled,
-        enabled_from_block: u64::from_be_bytes(b),
-    })
-}
-
-pub fn encode_topic0_stats(stats: &Topic0Stats) -> Bytes {
-    let mut out = Vec::with_capacity(1 + 4 + 4 + 4 + 8 + 4 + stats.ring_bits.len());
-    out.push(2);
-    out.extend_from_slice(&stats.window_len.to_be_bytes());
-    out.extend_from_slice(&stats.blocks_seen_in_window.to_be_bytes());
-    out.extend_from_slice(&stats.ring_cursor.to_be_bytes());
-    out.extend_from_slice(&stats.last_updated_block.to_be_bytes());
-    out.extend_from_slice(&(stats.ring_bits.len() as u32).to_be_bytes());
-    out.extend_from_slice(&stats.ring_bits);
-    Bytes::from(out)
-}
-
-pub fn decode_topic0_stats(bytes: &[u8]) -> Result<Topic0Stats> {
-    if bytes.is_empty() {
-        return Err(Error::Decode("invalid topic0_stats bytes"));
-    }
-    match bytes[0] {
-        1 => {
-            if bytes.len() < 17 {
-                return Err(Error::Decode("invalid topic0_stats bytes"));
-            }
-            let window_len = u32::from_be_bytes(
-                bytes[1..5]
-                    .try_into()
-                    .map_err(|_| Error::Decode("window_len"))?,
-            );
-            let blocks_seen_in_window = u32::from_be_bytes(
-                bytes[5..9]
-                    .try_into()
-                    .map_err(|_| Error::Decode("blocks_seen"))?,
-            );
-            let ring_cursor = u32::from_be_bytes(
-                bytes[9..13]
-                    .try_into()
-                    .map_err(|_| Error::Decode("ring_cursor"))?,
-            );
-            let ring_len = u32::from_be_bytes(
-                bytes[13..17]
-                    .try_into()
-                    .map_err(|_| Error::Decode("ring_len"))?,
-            ) as usize;
-            if bytes.len() != 17 + ring_len {
-                return Err(Error::Decode("topic0_stats ring length mismatch"));
-            }
-            let ring_bits = bytes[17..].to_vec();
-            Ok(Topic0Stats {
-                window_len,
-                blocks_seen_in_window,
-                ring_cursor,
-                last_updated_block: 0,
-                ring_bits,
-            })
-        }
-        2 => {
-            if bytes.len() < 25 {
-                return Err(Error::Decode("invalid topic0_stats v2 bytes"));
-            }
-            let window_len = u32::from_be_bytes(
-                bytes[1..5]
-                    .try_into()
-                    .map_err(|_| Error::Decode("window_len"))?,
-            );
-            let blocks_seen_in_window = u32::from_be_bytes(
-                bytes[5..9]
-                    .try_into()
-                    .map_err(|_| Error::Decode("blocks_seen"))?,
-            );
-            let ring_cursor = u32::from_be_bytes(
-                bytes[9..13]
-                    .try_into()
-                    .map_err(|_| Error::Decode("ring_cursor"))?,
-            );
-            let last_updated_block = u64::from_be_bytes(
-                bytes[13..21]
-                    .try_into()
-                    .map_err(|_| Error::Decode("last_updated"))?,
-            );
-            let ring_len = u32::from_be_bytes(
-                bytes[21..25]
-                    .try_into()
-                    .map_err(|_| Error::Decode("ring_len"))?,
-            ) as usize;
-            if bytes.len() != 25 + ring_len {
-                return Err(Error::Decode("topic0_stats v2 ring length mismatch"));
-            }
-            let ring_bits = bytes[25..].to_vec();
-            Ok(Topic0Stats {
-                window_len,
-                blocks_seen_in_window,
-                ring_cursor,
-                last_updated_block,
-                ring_bits,
-            })
-        }
-        _ => Err(Error::Decode("unsupported topic0_stats version")),
-    }
 }
 
 pub fn encode_log(log: &Log) -> Bytes {
@@ -487,23 +366,6 @@ mod tests {
         assert_eq!(dec_meta.count, meta.count);
         assert_eq!(dec_meta.block_hash, meta.block_hash);
         assert_eq!(dec_meta.parent_hash, meta.parent_hash);
-
-        let mode = Topic0Mode {
-            log_enabled: true,
-            enabled_from_block: 42,
-        };
-        let dec_mode = decode_topic0_mode(&encode_topic0_mode(&mode)).expect("decode mode");
-        assert_eq!(dec_mode, mode);
-
-        let stats = Topic0Stats {
-            window_len: 50_000,
-            blocks_seen_in_window: 123,
-            ring_cursor: 7,
-            last_updated_block: 500,
-            ring_bits: vec![1, 2, 3],
-        };
-        let dec_stats = decode_topic0_stats(&encode_topic0_stats(&stats)).expect("decode stats");
-        assert_eq!(dec_stats, stats);
     }
 
     #[test]

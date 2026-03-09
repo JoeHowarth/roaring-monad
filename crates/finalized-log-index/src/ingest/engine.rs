@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -7,9 +6,8 @@ use roaring::RoaringBitmap;
 
 use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 use crate::codec::log::{
-    decode_block_meta, decode_log_locator_page, decode_meta_state, decode_topic0_mode,
-    decode_topic0_stats, encode_block_meta, encode_log, encode_log_locator_page, encode_meta_state,
-    encode_topic0_mode, encode_topic0_stats, encode_u64,
+    decode_block_meta, decode_log_locator_page, decode_meta_state, encode_block_meta, encode_log,
+    encode_log_locator_page, encode_meta_state, encode_u64,
 };
 use crate::codec::manifest::{
     ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
@@ -18,27 +16,17 @@ use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_local, block_meta_key, block_shard,
     chunk_blob_key, log_local, log_locator_page_key, log_locator_page_start, log_pack_blob_key,
-    log_shard, manifest_key, stream_id, tail_key, topic0_mode_key, topic0_stats_key,
+    log_shard, manifest_key, stream_id, tail_key,
 };
-use crate::domain::types::{
-    Block, BlockMeta, IngestOutcome, LogLocator, MetaState, Topic0Mode, Topic0Stats,
-};
+use crate::domain::types::{Block, BlockMeta, IngestOutcome, LogLocator, MetaState};
 use crate::error::{Error, Result};
-use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond, Record};
+use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
     pub meta_store: M,
     pub blob_store: B,
-    topic0_mode_cache: RwLock<HashMap<[u8; 32], Topic0Mode>>,
-    topic0_stats_cache: RwLock<HashMap<[u8; 32], CachedTopic0Stats>>,
-    stream_state_cache: RwLock<HashMap<String, CachedStreamState>>,
-}
-
-#[derive(Debug, Clone)]
-struct CachedTopic0Stats {
-    stats: Topic0Stats,
-    version: Option<u64>,
+    stream_state_cache: std::sync::RwLock<HashMap<String, CachedStreamState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,9 +42,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             config,
             meta_store,
             blob_store,
-            topic0_mode_cache: RwLock::new(HashMap::new()),
-            topic0_stats_cache: RwLock::new(HashMap::new()),
-            stream_state_cache: RwLock::new(HashMap::new()),
+            stream_state_cache: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -228,7 +214,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         &self,
         block: &Block,
         first_log_id: u64,
-        epoch: u64,
+        _epoch: u64,
     ) -> Result<BTreeMap<String, Vec<u32>>> {
         let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
         let mut topic0_seen: BTreeSet<[u8; 32]> = BTreeSet::new();
@@ -252,11 +238,9 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                         .insert(local_block_num);
                 }
 
-                if self.topic0_log_enabled(topic0, block.block_num).await? {
-                    out.entry(stream_id("topic0_log", topic0, shard))
-                        .or_default()
-                        .insert(local);
-                }
+                out.entry(stream_id("topic0_log", topic0, shard))
+                    .or_default()
+                    .insert(local);
             }
 
             for (idx, topic) in log.topics.iter().enumerate().skip(1).take(3) {
@@ -271,10 +255,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                     .insert(local);
             }
         }
-
-        // update basic topic0 rolling stats for signatures seen in this block
-        self.update_topic0_modes_for_block(block.block_num, &topic0_seen, epoch)
-            .await?;
 
         let mut flattened = BTreeMap::new();
         for (k, set) in out {
@@ -483,166 +463,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .await?;
         Ok(())
     }
-
-    async fn topic0_log_enabled(&self, topic0: &[u8; 32], block_num: u64) -> Result<bool> {
-        if let Ok(cache) = self.topic0_mode_cache.read()
-            && let Some(mode) = cache.get(topic0)
-        {
-            return Ok(mode.log_enabled && block_num >= mode.enabled_from_block);
-        }
-
-        let key = topic0_mode_key(topic0);
-        let mode = match self.meta_store.get(&key).await? {
-            Some(rec) => decode_topic0_mode(&rec.value)?,
-            None => Topic0Mode {
-                log_enabled: false,
-                enabled_from_block: 0,
-            },
-        };
-
-        if let Ok(mut cache) = self.topic0_mode_cache.write() {
-            cache.insert(*topic0, mode.clone());
-        }
-        Ok(mode.log_enabled && block_num >= mode.enabled_from_block)
-    }
-
-    async fn update_topic0_modes_for_block(
-        &self,
-        block_num: u64,
-        seen_signatures: &BTreeSet<[u8; 32]>,
-        epoch: u64,
-    ) -> Result<()> {
-        for sig in seen_signatures {
-            self.update_one_topic0_stats(*sig, block_num, true, epoch)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn update_one_topic0_stats(
-        &self,
-        topic0: [u8; 32],
-        block_num: u64,
-        seen_in_block: bool,
-        epoch: u64,
-    ) -> Result<()> {
-        let key = topic0_stats_key(&topic0);
-        let cached = self
-            .topic0_stats_cache
-            .write()
-            .ok()
-            .and_then(|mut cache| cache.remove(&topic0));
-        let (mut stats, version): (Topic0Stats, Option<u64>) = if let Some(cached) = cached {
-            (cached.stats, cached.version)
-        } else {
-            match self.meta_store.get(&key).await? {
-                Some(Record { value, version }) => (decode_topic0_stats(&value)?, Some(version)),
-                None => (default_topic0_stats(block_num), None),
-            }
-        };
-
-        if block_num <= stats.last_updated_block {
-            if let Ok(mut cache) = self.topic0_stats_cache.write() {
-                cache.insert(topic0, CachedTopic0Stats { stats, version });
-            }
-            return Ok(());
-        }
-
-        let window = stats.window_len.max(1) as u64;
-        let gap = block_num.saturating_sub(stats.last_updated_block);
-        if gap >= window {
-            stats.blocks_seen_in_window = 0;
-            stats.ring_bits.fill(0);
-            apply_window_step(&mut stats, block_num, seen_in_block);
-        } else if stats.blocks_seen_in_window == 0 {
-            apply_window_step(&mut stats, block_num, seen_in_block);
-        } else {
-            let start = stats.last_updated_block.saturating_add(1);
-            for b in start..=block_num {
-                let seen = b == block_num && seen_in_block;
-                apply_window_step(&mut stats, b, seen);
-            }
-        }
-
-        let mut persisted_version = version;
-        if self.should_flush_topic0_stats(block_num) {
-            let (cond, strict_applied_check) = match self.config.ingest_mode {
-                IngestMode::StrictCas => (
-                    version.map(PutCond::IfVersion).unwrap_or(PutCond::IfAbsent),
-                    true,
-                ),
-                IngestMode::SingleWriterFast => (PutCond::Any, false),
-            };
-            let result = self
-                .meta_store
-                .put(&key, encode_topic0_stats(&stats), cond, FenceToken(epoch))
-                .await?;
-            if strict_applied_check && !result.applied {
-                return Ok(());
-            }
-            persisted_version = result.version.or(persisted_version);
-        }
-
-        let mode_key = topic0_mode_key(&topic0);
-        let mut mode = if let Ok(cache) = self.topic0_mode_cache.read() {
-            cache.get(&topic0).cloned()
-        } else {
-            None
-        }
-        .unwrap_or(match self.meta_store.get(&mode_key).await? {
-            Some(rec) => decode_topic0_mode(&rec.value)?,
-            None => Topic0Mode {
-                log_enabled: false,
-                enabled_from_block: 0,
-            },
-        });
-
-        let denom = u64::min(stats.window_len as u64, block_num.saturating_add(1)).max(1);
-        let ratio = stats.blocks_seen_in_window as f64 / denom as f64;
-        let mut changed = false;
-        if !mode.log_enabled && ratio < 0.001 {
-            mode.log_enabled = true;
-            mode.enabled_from_block = block_num;
-            changed = true;
-        } else if mode.log_enabled && ratio > 0.01 {
-            mode.log_enabled = false;
-            changed = true;
-        }
-
-        if changed {
-            let _ = self
-                .meta_store
-                .put(
-                    &mode_key,
-                    encode_topic0_mode(&mode),
-                    PutCond::Any,
-                    FenceToken(epoch),
-                )
-                .await?;
-        }
-
-        if let Ok(mut cache) = self.topic0_mode_cache.write() {
-            cache.insert(topic0, mode);
-        }
-        if let Ok(mut cache) = self.topic0_stats_cache.write() {
-            cache.insert(
-                topic0,
-                CachedTopic0Stats {
-                    stats,
-                    version: persisted_version,
-                },
-            );
-        }
-        Ok(())
-    }
-
-    fn should_flush_topic0_stats(&self, block_num: u64) -> bool {
-        if !matches!(self.config.ingest_mode, IngestMode::SingleWriterFast) {
-            return true;
-        }
-        let every = self.config.topic0_stats_flush_interval_blocks.max(1);
-        block_num == 1 || block_num.is_multiple_of(every)
-    }
 }
 
 #[allow(dead_code)]
@@ -669,35 +489,6 @@ fn now_unix_sec() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-fn apply_window_step(stats: &mut Topic0Stats, block_num: u64, seen: bool) {
-    let window = stats.window_len.max(1) as usize;
-    let index = (block_num as usize) % window;
-    let byte_idx = index / 8;
-    let mask = 1u8 << (index % 8);
-    let currently_set = (stats.ring_bits[byte_idx] & mask) != 0;
-
-    if currently_set {
-        stats.blocks_seen_in_window = stats.blocks_seen_in_window.saturating_sub(1);
-        stats.ring_bits[byte_idx] &= !mask;
-    }
-    if seen {
-        stats.ring_bits[byte_idx] |= mask;
-        stats.blocks_seen_in_window = stats.blocks_seen_in_window.saturating_add(1);
-    }
-    stats.ring_cursor = ((index + 1) % window) as u32;
-    stats.last_updated_block = block_num;
-}
-
-fn default_topic0_stats(block_num: u64) -> Topic0Stats {
-    Topic0Stats {
-        window_len: 50_000,
-        blocks_seen_in_window: 0,
-        ring_cursor: 0,
-        last_updated_block: block_num.saturating_sub(1),
-        ring_bits: vec![0u8; (50_000usize).div_ceil(8)],
-    }
 }
 
 fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {

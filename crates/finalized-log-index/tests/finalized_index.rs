@@ -5,17 +5,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
-use finalized_log_index::codec::log::{
-    decode_topic0_mode, encode_block_meta, encode_meta_state, encode_topic0_mode,
-};
+use finalized_log_index::codec::log::{encode_block_meta, encode_meta_state};
 use finalized_log_index::codec::manifest::{Manifest, decode_manifest, encode_manifest};
 use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
 use finalized_log_index::domain::keys::{
     MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
-    manifest_key, stream_id, topic0_mode_key,
+    manifest_key, stream_id,
 };
-use finalized_log_index::domain::types::{Block, BlockMeta, Log, MetaState, Topic0Mode};
+use finalized_log_index::domain::types::{Block, BlockMeta, Log, MetaState};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
@@ -444,10 +442,13 @@ fn fs_store_adapter_roundtrip() {
 }
 
 #[test]
-fn topic0_mode_enables_for_cold_signature() {
+fn ingest_always_writes_topic0_log_for_cold_signature() {
     block_on(async {
         let svc = FinalizedIndexService::new(
-            Config::default(),
+            Config {
+                target_entries_per_chunk: 1,
+                ..Config::default()
+            },
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             1,
@@ -466,58 +467,16 @@ fn topic0_mode_enables_for_cold_signature() {
             svc.ingest_finalized_block(block).await.expect("ingest");
         }
 
-        let mode_key = topic0_mode_key(&sig);
+        let sid = stream_id("topic0_log", &sig, log_shard(0));
         let rec = svc
             .ingest
             .meta_store
-            .get(&mode_key)
+            .get(&manifest_key(&sid))
             .await
-            .expect("mode get")
-            .expect("mode exists");
-        let mode = decode_topic0_mode(&rec.value).expect("decode mode");
-        assert!(mode.log_enabled);
-        assert_eq!(mode.enabled_from_block, 3001);
-    });
-}
-
-#[test]
-fn topic0_mode_disables_for_hot_signature() {
-    block_on(async {
-        let svc = FinalizedIndexService::new(
-            Config::default(),
-            InMemoryMetaStore::default(),
-            InMemoryBlobStore::default(),
-            1,
-        );
-        let sig = [0x44; 32];
-        let mode_key = topic0_mode_key(&sig);
-        let _ = svc
-            .ingest
-            .meta_store
-            .put(
-                &mode_key,
-                encode_topic0_mode(&Topic0Mode {
-                    log_enabled: true,
-                    enabled_from_block: 0,
-                }),
-                PutCond::Any,
-                FenceToken(1),
-            )
-            .await
-            .expect("seed mode");
-
-        let b1 = mk_block(1, [0; 32], vec![mk_log(1, sig[0], 20, 1, 0, 0)]);
-        svc.ingest_finalized_block(b1).await.expect("ingest");
-
-        let rec = svc
-            .ingest
-            .meta_store
-            .get(&mode_key)
-            .await
-            .expect("mode get")
-            .expect("mode exists");
-        let mode = decode_topic0_mode(&rec.value).expect("decode mode");
-        assert!(!mode.log_enabled);
+            .expect("manifest get")
+            .expect("manifest exists");
+        let manifest = decode_manifest(&rec.value).expect("decode manifest");
+        assert_eq!(manifest.approx_count, 2);
     });
 }
 
@@ -669,7 +628,7 @@ fn query_only_loads_overlapping_address_chunks() {
 }
 
 #[test]
-fn topic0_block_prefilter_only_loads_overlapping_chunks() {
+fn topic0_queries_use_topic0_log_without_loading_topic0_block_chunks() {
     block_on(async {
         let blob = RecordingBlobStore::default();
         let svc = FinalizedIndexService::new(
@@ -709,13 +668,20 @@ fn topic0_block_prefilter_only_loads_overlapping_chunks() {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].block_num, 2);
 
+        let topic0_log_prefix = b"chunks/topic0_log/";
         let topic0_block_prefix = b"chunks/topic0_block/";
         let log_pack_prefix = b"log_packs/";
         assert_eq!(
             svc.ingest
                 .blob_store
-                .count_gets_with_prefix(topic0_block_prefix),
+                .count_gets_with_prefix(topic0_log_prefix),
             1
+        );
+        assert_eq!(
+            svc.ingest
+                .blob_store
+                .count_gets_with_prefix(topic0_block_prefix),
+            0
         );
         assert_eq!(
             svc.ingest
@@ -1098,7 +1064,7 @@ fn backend_success_clears_throttle() {
 }
 
 #[test]
-fn strict_mode_keeps_cas_for_state_manifest_and_topic0_stats() {
+fn strict_mode_keeps_cas_for_state_and_manifest_writes() {
     block_on(async {
         let svc = FinalizedIndexService::new(
             Config {
@@ -1143,26 +1109,11 @@ fn strict_mode_keeps_cas_for_state_manifest_and_topic0_stats() {
                 .count_puts_with_prefix(b"manifests/", |c| matches!(c, PutCond::Any)),
             0
         );
-
-        assert!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| {
-                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
-                })
-                >= 1
-        );
-        assert_eq!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
-            0
-        );
     });
 }
 
 #[test]
-fn fast_mode_uses_unconditional_writes_for_state_manifest_and_topic0_stats() {
+fn fast_mode_uses_unconditional_writes_for_state_and_manifest() {
     block_on(async {
         let svc = FinalizedIndexService::new(
             Config {
@@ -1206,63 +1157,6 @@ fn fast_mode_uses_unconditional_writes_for_state_manifest_and_topic0_stats() {
                     matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
                 }),
             0
-        );
-
-        assert!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any))
-                >= 1
-        );
-        assert_eq!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| {
-                    matches!(c, PutCond::IfAbsent | PutCond::IfVersion(_))
-                }),
-            0
-        );
-    });
-}
-
-#[test]
-fn fast_mode_topic0_stats_flush_interval_reduces_write_frequency() {
-    block_on(async {
-        let svc = FinalizedIndexService::new(
-            Config {
-                ingest_mode: IngestMode::SingleWriterFast,
-                topic0_stats_flush_interval_blocks: 4,
-                target_entries_per_chunk: 10_000,
-                ..Config::default()
-            },
-            RecordingMetaStore::default(),
-            InMemoryBlobStore::default(),
-            1,
-        );
-
-        let mut parent = [0u8; 32];
-        for block_num in 1..=3u64 {
-            let block = mk_block(block_num, parent, vec![mk_log(7, 8, 9, block_num, 0, 0)]);
-            parent = block.block_hash;
-            svc.ingest_finalized_block(block).await.expect("ingest");
-        }
-
-        assert_eq!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
-            1
-        );
-
-        let block4 = mk_block(4, parent, vec![mk_log(7, 8, 9, 4, 0, 0)]);
-        svc.ingest_finalized_block(block4)
-            .await
-            .expect("ingest block 4");
-        assert_eq!(
-            svc.ingest
-                .meta_store
-                .count_puts_with_prefix(b"topic0_stats/", |c| matches!(c, PutCond::Any)),
-            2
         );
     });
 }

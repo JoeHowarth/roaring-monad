@@ -1,5 +1,3 @@
-use crate::domain::types::Topic32;
-
 pub const META_STATE_KEY: &[u8] = b"meta/state";
 pub const LOG_LOCATOR_PAGE_SIZE: u64 = 1024;
 pub const LOCAL_ID_BITS: u32 = 24;
@@ -128,22 +126,6 @@ pub fn chunk_blob_key(stream_id: &str, chunk_seq: u64) -> Vec<u8> {
     k
 }
 
-pub fn topic0_mode_key(topic0: &Topic32) -> Vec<u8> {
-    let mut k = b"topic0_mode/".to_vec();
-    push_hex(&mut k, topic0);
-    k
-}
-
-pub fn topic0_stats_key(topic0: &Topic32) -> Vec<u8> {
-    let mut k = b"topic0_stats/".to_vec();
-    push_hex(&mut k, topic0);
-    k
-}
-
-pub fn topic0_stats_prefix() -> &'static [u8] {
-    b"topic0_stats/"
-}
-
 pub fn stream_id(index_kind: &str, value: &[u8], shard: u32) -> String {
     let mut s = String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + SHARD_HEX_WIDTH);
     s.push_str(index_kind);
@@ -155,13 +137,6 @@ pub fn stream_id(index_kind: &str, value: &[u8], shard: u32) -> String {
     s.push('/');
     s.push_str(&format!("{shard:0width$x}", width = SHARD_HEX_WIDTH));
     s
-}
-
-fn push_hex(out: &mut Vec<u8>, value: &[u8]) {
-    for b in value {
-        out.push(hex_digit((b >> 4) & 0xf) as u8);
-        out.push(hex_digit(b & 0xf) as u8);
-    }
 }
 
 fn hex_digit(v: u8) -> char {

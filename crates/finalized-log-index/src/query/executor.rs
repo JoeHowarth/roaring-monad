@@ -125,7 +125,10 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
 
     let candidates = intersect_sets(clause_sets, plan.from_log_id, plan.to_log_id_inclusive);
 
-    let topic0_blocks = if let Some(topic_clause) = &plan.filter.topic0 {
+    let topic0_log_applied = plan.clause_order.contains(&ClauseKind::Topic0Log);
+    let topic0_blocks = if topic0_log_applied {
+        None
+    } else if let Some(topic_clause) = &plan.filter.topic0 {
         let values = clause_values_32(topic_clause);
         if values.is_empty() {
             None

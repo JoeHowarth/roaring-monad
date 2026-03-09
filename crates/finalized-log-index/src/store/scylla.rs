@@ -21,8 +21,6 @@ const KNOWN_GROUPS: &[&str] = &[
     "block_hash_to_num",
     "manifests",
     "tails",
-    "topic0_mode",
-    "topic0_stats",
     "log_locators",
 ];
 
