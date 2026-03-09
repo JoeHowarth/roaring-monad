@@ -191,15 +191,17 @@ Mental flow:
 3. compute the log-ID window from block metadata
 4. estimate clause selectivity
 5. either build an ordered clause plan or fall back to block scan
-6. load candidate stream entries within the shard-local query range
-7. intersect candidate sets
-8. fetch full logs by locator
-9. run exact predicate checks
+6. use manifest metadata to find the relevant chunk slice for each shard-local range
+7. load candidate stream entries within that shard-local range
+8. intersect candidate sets
+9. fetch full logs by locator
+10. run exact predicate checks
 
 Questions to answer:
 
 - How is “too broad” decided?
 - Why does the planner estimate overlap from manifests and tails instead of reading every chunk?
+- How do binary search and full-shard shortcuts reduce per-query manifest work?
 - Why does the executor still do `exact_match` after using indexes?
 - How does `topic0_block` narrow blocks independently of `topic0_log`?
 

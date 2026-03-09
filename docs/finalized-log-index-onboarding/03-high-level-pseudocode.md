@@ -416,8 +416,11 @@ def estimate_stream_overlap(meta_store, stream_id, from_log_id, to_log_id, shard
 
     manifest = meta_store.get(f"manifests/{stream_id}")
     if manifest exists:
-        for chunk_ref in manifest.chunk_refs:
-            if chunk_ref overlaps requested local range:
+        if local_from == 0 and local_to == MAX_LOCAL_ID:
+            count += manifest.approx_count
+        else:
+            chunk_refs = overlapping_chunk_refs(manifest.chunk_refs, local_from, local_to)
+            for chunk_ref in chunk_refs:
                 count += chunk_ref.count
 
     tail = meta_store.get(f"tails/{stream_id}")
@@ -430,6 +433,16 @@ def estimate_stream_overlap(meta_store, stream_id, from_log_id, to_log_id, shard
 ```
 
 The planner does not load every chunk body. It uses metadata to estimate which clause is likely to be most selective.
+
+```python
+def overlapping_chunk_refs(chunk_refs, local_from, local_to):
+    if local_from == 0 and local_to == MAX_LOCAL_ID:
+        return chunk_refs
+
+    start = first index where chunk_ref.max_local >= local_from
+    end = first index where chunk_ref.min_local > local_to
+    return chunk_refs[start:end]
+```
 
 ## Executor
 
@@ -506,21 +519,22 @@ def load_stream_entries(meta_store, blob_store, stream_id, local_from, local_to)
 
     manifest = meta_store.get(f"manifests/{stream_id}")
     if manifest exists:
-        for chunk_ref in manifest.chunk_refs:
-            if chunk_ref.max_local < local_from:
-                continue
-            if chunk_ref.min_local > local_to:
-                continue
+        chunk_refs = overlapping_chunk_refs(manifest.chunk_refs, local_from, local_to)
 
+        for chunk_ref in chunk_refs:
             chunk = blob_store.get(f"chunks/{stream_id}/{chunk_ref.chunk_seq}")
             for local_value in decode_bitmap(chunk):
-                if local_from <= local_value <= local_to:
+                if local_from == 0 and local_to == MAX_LOCAL_ID:
+                    out.add(local_value)
+                elif local_from <= local_value <= local_to:
                     out.add(local_value)
 
     tail = meta_store.get(f"tails/{stream_id}")
     if tail exists:
         for local_value in decode_bitmap(tail):
-            if local_from <= local_value <= local_to:
+            if local_from == 0 and local_to == MAX_LOCAL_ID:
+                out.add(local_value)
+            elif local_from <= local_value <= local_to:
                 out.add(local_value)
 
     return out

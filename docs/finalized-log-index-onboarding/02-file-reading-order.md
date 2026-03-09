@@ -130,6 +130,7 @@ You should now be able to explain how one block mutates:
     - `ClauseKind`
     - broad-query policy
     - overlap estimation from manifests and tails
+    - the shared chunk-range helper used by both planner and executor
 
 16. `crates/finalized-log-index/src/query/executor.rs`
     Read this file in this internal order:
@@ -146,7 +147,8 @@ You should now be able to explain how one block mutates:
 Why this order:
 
 - first understand how candidate sets are built
-- then see how shard-local ranges are pushed down so non-overlapping chunks are skipped
+- then see how shard-local ranges are pushed down so binary search can isolate the overlapping chunk slice
+- then note the full-shard fast path, where the planner uses manifest counts directly and the executor skips pointless range checks
 - then understand how actual logs are materialized
 - then look at the fallback scan path
 
