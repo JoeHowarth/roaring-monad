@@ -16,9 +16,9 @@ use crate::codec::manifest::{
 };
 use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
-    log_locator_page_start, log_pack_blob_key, manifest_key, stream_id, tail_key, topic0_mode_key,
-    topic0_stats_key,
+    META_STATE_KEY, block_hash_to_num_key, block_local, block_meta_key, block_shard,
+    chunk_blob_key, log_local, log_locator_page_key, log_locator_page_start, log_pack_blob_key,
+    log_shard, manifest_key, stream_id, tail_key, topic0_mode_key, topic0_stats_key,
 };
 use crate::domain::types::{
     Block, BlockMeta, IngestOutcome, LogLocator, MetaState, Topic0Mode, Topic0Stats,
@@ -235,21 +235,21 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
 
         for (i, log) in block.logs.iter().enumerate() {
             let global = first_log_id + i as u64;
-            let shard = (global >> 32) as u32;
-            let local = global as u32;
+            let shard = log_shard(global);
+            let local = log_local(global);
 
             out.entry(stream_id("addr", &log.address, shard))
                 .or_default()
                 .insert(local);
 
             if let Some(topic0) = log.topics.first() {
-                let bshard = (block.block_num >> 32) as u32;
-                let block_local = block.block_num as u32;
+                let bshard = block_shard(block.block_num);
+                let local_block_num = block_local(block.block_num);
                 // topic0_block always on and deduped once per block/signature
                 if topic0_seen.insert(*topic0) {
                     out.entry(stream_id("topic0_block", topic0, bshard))
                         .or_default()
-                        .insert(block_local);
+                        .insert(local_block_num);
                 }
 
                 if self.topic0_log_enabled(topic0, block.block_num).await? {

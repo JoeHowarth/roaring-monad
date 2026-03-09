@@ -1,7 +1,7 @@
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::config::BroadQueryPolicy;
 use crate::domain::filter::{Clause, LogFilter, QueryOptions};
-use crate::domain::keys::{manifest_key, stream_id, tail_key};
+use crate::domain::keys::{local_range_for_shard, log_shard, manifest_key, stream_id, tail_key};
 use crate::error::Result;
 use crate::store::traits::MetaStore;
 
@@ -170,8 +170,8 @@ async fn estimate_for_values<M: MetaStore>(
     from_log_id: u64,
     to_log_id_inclusive: u64,
 ) -> Result<u64> {
-    let from_shard = (from_log_id >> 32) as u32;
-    let to_shard = (to_log_id_inclusive >> 32) as u32;
+    let from_shard = log_shard(from_log_id);
+    let to_shard = log_shard(to_log_id_inclusive);
 
     let mut sum = 0u64;
     for value in values {
@@ -193,16 +193,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
     to_log_id_inclusive: u64,
     shard: u32,
 ) -> Result<u64> {
-    let local_from = if shard == (from_log_id >> 32) as u32 {
-        from_log_id as u32
-    } else {
-        0
-    };
-    let local_to = if shard == (to_log_id_inclusive >> 32) as u32 {
-        to_log_id_inclusive as u32
-    } else {
-        u32::MAX
-    };
+    let (local_from, local_to) = local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
 
     let mut count = 0u64;
     if let Some(m) = meta_store.get(&manifest_key(stream_id)).await? {
@@ -253,7 +244,7 @@ mod tests {
 
     use super::*;
     use crate::codec::manifest::{ChunkRef, Manifest, encode_manifest, encode_tail};
-    use crate::domain::keys::{manifest_key, stream_id, tail_key};
+    use crate::domain::keys::{LOCAL_ID_BITS, manifest_key, stream_id, tail_key};
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{FenceToken, MetaStore, PutCond};
 
@@ -284,9 +275,9 @@ mod tests {
 
             let addr_value = [1u8; 20];
             let topic1_value = [2u8; 32];
-            let from = 1u64 << 32;
+            let from = 1u64 << LOCAL_ID_BITS;
             let to = from + 1000;
-            let shard = (from >> 32) as u32;
+            let shard = log_shard(from);
 
             let addr_sid = stream_id("addr", &addr_value, shard);
             let topic_sid = stream_id("topic1", &topic1_value, shard);

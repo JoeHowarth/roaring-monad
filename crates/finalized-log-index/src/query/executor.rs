@@ -9,8 +9,9 @@ use crate::codec::log::{
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::domain::filter::{Clause, LogFilter};
 use crate::domain::keys::{
-    block_meta_key, chunk_blob_key, log_locator_key, log_locator_page_key, log_locator_page_start,
-    manifest_key, stream_id, tail_key,
+    block_local, block_meta_key, block_range_for_shard, block_shard, chunk_blob_key,
+    compose_global_log_id, local_range_for_shard, log_locator_key, log_locator_page_key,
+    log_locator_page_start, log_shard, manifest_key, stream_id, tail_key,
 };
 use crate::domain::types::{Log, LogLocator, Topic32};
 use crate::error::{Error, Result};
@@ -161,7 +162,7 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
         }
 
         if let Some(blocks) = &topic0_blocks
-            && !blocks.contains(&(log.block_num as u32))
+            && !blocks.contains(&block_local(log.block_num))
         {
             continue;
         }
@@ -346,23 +347,15 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
     to_log_id_inclusive: u64,
 ) -> Result<BTreeSet<u64>> {
     let mut out = BTreeSet::new();
-    let from_shard = (from_log_id >> 32) as u32;
-    let to_shard = (to_log_id_inclusive >> 32) as u32;
+    let from_shard = log_shard(from_log_id);
+    let to_shard = log_shard(to_log_id_inclusive);
     let mut in_flight = FuturesUnordered::new();
 
     for value in values {
         for shard in from_shard..=to_shard {
             let sid = stream_id(kind, value, shard);
-            let local_from = if shard == from_shard {
-                from_log_id as u32
-            } else {
-                0
-            };
-            let local_to = if shard == to_shard {
-                to_log_id_inclusive as u32
-            } else {
-                u32::MAX
-            };
+            let (local_from, local_to) =
+                local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
             in_flight.push(async move {
                 let entries =
                     load_stream_entries(meta_store, blob_store, &sid, local_from, local_to).await?;
@@ -371,17 +364,17 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
             if in_flight.len() >= STREAM_LOAD_CONCURRENCY
                 && let Some(res) = in_flight.next().await
             {
-                let (shard, local_from, local_to, entries) = res?;
-                for local in entries.range(local_from..=local_to) {
-                    out.insert(((shard as u64) << 32) | (*local as u64));
+                let (shard, _, _, entries) = res?;
+                for local in entries {
+                    out.insert(compose_global_log_id(shard, local));
                 }
             }
         }
     }
     while let Some(res) = in_flight.next().await {
-        let (shard, local_from, local_to, entries) = res?;
-        for local in entries.range(local_from..=local_to) {
-            out.insert(((shard as u64) << 32) | (*local as u64));
+        let (shard, _, _, entries) = res?;
+        for local in entries {
+            out.insert(compose_global_log_id(shard, local));
         }
     }
     Ok(out)
@@ -396,23 +389,14 @@ async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
     to_block: u64,
 ) -> Result<BTreeSet<u32>> {
     let mut out = BTreeSet::new();
-    let from_shard = (from_block >> 32) as u32;
-    let to_shard = (to_block >> 32) as u32;
+    let from_shard = block_shard(from_block);
+    let to_shard = block_shard(to_block);
     let mut in_flight = FuturesUnordered::new();
 
     for value in values {
         for shard in from_shard..=to_shard {
             let sid = stream_id(kind, value, shard);
-            let local_from = if shard == from_shard {
-                from_block as u32
-            } else {
-                0
-            };
-            let local_to = if shard == to_shard {
-                to_block as u32
-            } else {
-                u32::MAX
-            };
+            let (local_from, local_to) = block_range_for_shard(from_block, to_block, shard);
             in_flight.push(async move {
                 let entries =
                     load_stream_entries(meta_store, blob_store, &sid, local_from, local_to).await?;
@@ -421,17 +405,17 @@ async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
             if in_flight.len() >= STREAM_LOAD_CONCURRENCY
                 && let Some(res) = in_flight.next().await
             {
-                let (local_from, local_to, entries) = res?;
-                for local in entries.range(local_from..=local_to) {
-                    out.insert(*local);
+                let (_, _, entries) = res?;
+                for local in entries {
+                    out.insert(local);
                 }
             }
         }
     }
     while let Some(res) = in_flight.next().await {
-        let (local_from, local_to, entries) = res?;
-        for local in entries.range(local_from..=local_to) {
-            out.insert(*local);
+        let (_, _, entries) = res?;
+        for local in entries {
+            out.insert(local);
         }
     }
     Ok(out)
@@ -450,8 +434,11 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     if let Some(mrec) = manifest {
         let m = decode_manifest(&mrec.value)?;
         for cref in m.chunk_refs {
-            if !chunk_overlaps_range(&cref, local_from, local_to) {
+            if cref.max_local < local_from {
                 continue;
+            }
+            if cref.min_local > local_to {
+                break;
             }
             maybe_merge_chunk(blob_store, stream, &cref, &mut out).await?;
         }
@@ -468,11 +455,6 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
 
     Ok(out)
 }
-
-fn chunk_overlaps_range(cref: &ChunkRef, local_from: u32, local_to: u32) -> bool {
-    cref.max_local >= local_from && cref.min_local <= local_to
-}
-
 async fn maybe_merge_chunk<B: BlobStore>(
     blob_store: &B,
     stream: &str,

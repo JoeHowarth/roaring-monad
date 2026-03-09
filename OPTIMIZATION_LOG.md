@@ -261,6 +261,51 @@ cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-feat
 
 - A recording blob store in unit/integration tests is a reliable way to validate query-execution I/O reductions without needing a full external benchmark harness.
 - For query-path optimizations, test-level read counts provide a stable correctness-plus-efficiency regression signal even when end-to-end latency measurements would be noisy.
+
+## 2026-03-09T19:09:05Z - 24-bit Local IDs / 40-bit Shards
+
+### Change Summary
+
+- Changed stream shard/local ID layout from high-32/low-32 to high-40/low-24.
+- Centralized shard/local helpers in `crates/finalized-log-index/src/domain/keys.rs`.
+- Migrated ingest and query code to use the helpers instead of ad hoc bit shifts and casts.
+- Added rollover coverage for ingest/query behavior at the new 24-bit shard boundary.
+- Updated onboarding docs to describe the 24-bit local layout.
+
+### Hypothesis
+
+- Flat per-shard manifests for hot streams would become too large under a 32-bit local ID space.
+- Shrinking the local space to 24 bits should bound manifest growth much more aggressively while keeping the current overall indexing design intact.
+
+### Commands
+
+```bash
+cargo +nightly-2025-12-09 fmt --all
+cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-features -- -D clippy::suspicious -D clippy::style -D clippy::clone_on_copy -D clippy::redundant_clone -D clippy::iter_kv_map -D clippy::iter_nth -D clippy::unnecessary_cast -D clippy::filter_next -D clippy::needless_lifetimes -D clippy::useless_conversion -D clippy::useless_vec -D clippy::needless_question_mark -D clippy::bool_comparison -D unused_imports -D unused_parens -D deprecated -A clippy::type_complexity -A clippy::int_plus_one -A clippy::uninlined-format-args -A clippy::enum-variant-names -A clippy::mutable_key_type -A clippy::large_enum_variant -A clippy::doc-overindented-list-items
+```
+
+### Before/After Metrics
+
+- Local ID capacity per shard:
+  - before: `2^32 = 4,294,967,296`
+  - after: `2^24 = 16,777,216`
+- For a hot stream with `7,776,000,000` entries/year at `1950` entries/chunk:
+  - before: about `2,202,547` chunk refs in one full shard manifest (`~44.1 MB` serialized at `20` bytes/ref)
+  - after: about `8,604` chunk refs in one full shard manifest (`~172 KB` serialized)
+- Verification:
+  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed
+  - includes new rollover test `ingest_and_query_across_24_bit_log_shard_boundary`
+
+### Interpretation
+
+- This is a physical-layout optimization: the system now trades more shard fanout for much smaller per-shard manifests.
+- The change materially improves the growth profile for hot streams without requiring a redesign of manifests/chunks/tails.
+
+### Methodology Learnings
+
+- Once shard/local math is centralized behind helpers, alternative layouts become cheap to reason about and test mechanically.
+- Boundary-focused tests are essential for bit-layout changes; small happy-path tests do not exercise the failure modes that matter.
 - Selected defaults: `log_locator_write_concurrency=256`, `stream_append_concurrency=64`.
 
 ## 20260223T201235Z - Profiling Run stream-cache

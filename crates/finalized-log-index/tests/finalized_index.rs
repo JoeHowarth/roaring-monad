@@ -5,14 +5,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
-use finalized_log_index::codec::log::{decode_topic0_mode, encode_topic0_mode};
+use finalized_log_index::codec::log::{
+    decode_topic0_mode, encode_block_meta, encode_meta_state, encode_topic0_mode,
+};
 use finalized_log_index::codec::manifest::{Manifest, decode_manifest, encode_manifest};
 use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
 use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
 use finalized_log_index::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, manifest_key, stream_id, topic0_mode_key,
+    MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
+    manifest_key, stream_id, topic0_mode_key,
 };
-use finalized_log_index::domain::types::{Block, Log, Topic0Mode};
+use finalized_log_index::domain::types::{Block, BlockMeta, Log, MetaState, Topic0Mode};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
@@ -720,6 +723,116 @@ fn topic0_block_prefilter_only_loads_overlapping_chunks() {
                 .count_gets_with_prefix(log_pack_prefix),
             1
         );
+    });
+}
+
+#[test]
+fn ingest_and_query_across_24_bit_log_shard_boundary() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedIndexService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            meta,
+            blob,
+            1,
+        );
+
+        let previous = BlockMeta {
+            block_hash: [1; 32],
+            parent_hash: [0; 32],
+            first_log_id: 0,
+            count: 0,
+        };
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                META_STATE_KEY,
+                encode_meta_state(&MetaState {
+                    indexed_finalized_head: 1,
+                    next_log_id: u64::from(MAX_LOCAL_ID),
+                    writer_epoch: 1,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed meta state");
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                &finalized_log_index::domain::keys::block_meta_key(1),
+                encode_block_meta(&previous),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed previous block meta");
+
+        let b2 = mk_block(2, previous.block_hash, vec![mk_log(9, 1, 1, 2, 0, 0)]);
+        let b3 = mk_block(3, b2.block_hash, vec![mk_log(9, 2, 2, 3, 0, 0)]);
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+        svc.ingest_finalized_block(b3).await.expect("ingest b3");
+
+        let first_id = u64::from(MAX_LOCAL_ID);
+        let second_id = compose_global_log_id(log_shard(first_id) + 1, 0);
+        let first_sid = stream_id("addr", &[9; 20], log_shard(first_id));
+        let second_sid = stream_id("addr", &[9; 20], log_shard(second_id));
+
+        let first_manifest = svc
+            .ingest
+            .meta_store
+            .get(&manifest_key(&first_sid))
+            .await
+            .expect("first manifest get")
+            .expect("first manifest");
+        let second_manifest = svc
+            .ingest
+            .meta_store
+            .get(&manifest_key(&second_sid))
+            .await
+            .expect("second manifest get")
+            .expect("second manifest");
+        assert_eq!(
+            decode_manifest(&first_manifest.value)
+                .expect("decode first manifest")
+                .chunk_refs
+                .len(),
+            1
+        );
+        assert_eq!(
+            decode_manifest(&second_manifest.value)
+                .expect("decode second manifest")
+                .chunk_refs
+                .len(),
+            1
+        );
+
+        let got = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(2),
+                    to_block: Some(3),
+                    block_hash: None,
+                    address: Some(Clause::One([9; 20])),
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect("query");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].block_num, 2);
+        assert_eq!(got[1].block_num, 3);
     });
 }
 
