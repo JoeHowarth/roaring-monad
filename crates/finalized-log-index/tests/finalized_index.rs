@@ -114,6 +114,55 @@ impl RecordingMetaStore {
     }
 }
 
+#[derive(Default)]
+struct RecordingBlobStore {
+    inner: InMemoryBlobStore,
+    gets: Mutex<Vec<Vec<u8>>>,
+}
+
+impl RecordingBlobStore {
+    fn count_gets_with_prefix(&self, prefix: &[u8]) -> usize {
+        self.gets
+            .lock()
+            .map(|gets| gets.iter().filter(|key| key.starts_with(prefix)).count())
+            .unwrap_or(0)
+    }
+}
+
+#[async_trait::async_trait]
+impl BlobStore for RecordingBlobStore {
+    async fn put_blob(
+        &self,
+        key: &[u8],
+        value: bytes::Bytes,
+    ) -> finalized_log_index::error::Result<()> {
+        self.inner.put_blob(key, value).await
+    }
+
+    async fn get_blob(
+        &self,
+        key: &[u8],
+    ) -> finalized_log_index::error::Result<Option<bytes::Bytes>> {
+        if let Ok(mut gets) = self.gets.lock() {
+            gets.push(key.to_vec());
+        }
+        self.inner.get_blob(key).await
+    }
+
+    async fn delete_blob(&self, key: &[u8]) -> finalized_log_index::error::Result<()> {
+        self.inner.delete_blob(key).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_log_index::error::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
 #[async_trait::async_trait]
 impl MetaStore for RecordingMetaStore {
     async fn get(&self, key: &[u8]) -> finalized_log_index::error::Result<Option<Record>> {
@@ -560,6 +609,117 @@ fn periodic_maintenance_seals_old_tails() {
             .expect("manifest");
         let manifest = decode_manifest(&rec.value).expect("decode manifest");
         assert_eq!(manifest.chunk_refs.len(), 1);
+    });
+}
+
+#[test]
+fn query_only_loads_overlapping_address_chunks() {
+    block_on(async {
+        let blob = RecordingBlobStore::default();
+        let svc = FinalizedIndexService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            blob,
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(9, 1, 1, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(9, 2, 2, 2, 0, 0)]);
+        let b3 = mk_block(3, b2.block_hash, vec![mk_log(9, 3, 3, 3, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+        svc.ingest_finalized_block(b3).await.expect("ingest b3");
+
+        let got = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(2),
+                    to_block: Some(2),
+                    block_hash: None,
+                    address: Some(Clause::One([9; 20])),
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect("query");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].block_num, 2);
+
+        let addr_prefix = b"chunks/addr/";
+        let log_pack_prefix = b"log_packs/";
+        assert_eq!(svc.ingest.blob_store.count_gets_with_prefix(addr_prefix), 1);
+        assert_eq!(
+            svc.ingest
+                .blob_store
+                .count_gets_with_prefix(log_pack_prefix),
+            1
+        );
+    });
+}
+
+#[test]
+fn topic0_block_prefilter_only_loads_overlapping_chunks() {
+    block_on(async {
+        let blob = RecordingBlobStore::default();
+        let svc = FinalizedIndexService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            blob,
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 7, 1, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 7, 2, 2, 0, 0)]);
+        let b3 = mk_block(3, b2.block_hash, vec![mk_log(3, 7, 3, 3, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+        svc.ingest_finalized_block(b3).await.expect("ingest b3");
+
+        let got = svc
+            .query_finalized(
+                LogFilter {
+                    from_block: Some(2),
+                    to_block: Some(2),
+                    block_hash: None,
+                    address: None,
+                    topic0: Some(Clause::One([7; 32])),
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+                QueryOptions::default(),
+            )
+            .await
+            .expect("query");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].block_num, 2);
+
+        let topic0_block_prefix = b"chunks/topic0_block/";
+        let log_pack_prefix = b"log_packs/";
+        assert_eq!(
+            svc.ingest
+                .blob_store
+                .count_gets_with_prefix(topic0_block_prefix),
+            1
+        );
+        assert_eq!(
+            svc.ingest
+                .blob_store
+                .count_gets_with_prefix(log_pack_prefix),
+            1
+        );
     });
 }
 

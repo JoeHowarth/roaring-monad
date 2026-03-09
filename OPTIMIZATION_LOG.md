@@ -218,6 +218,49 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - `128/32`: `195.84 blocks/s` (`logs/results/profile-ingest-20260223T200811Z-concurrency-128x32.json`)
 - `256/64`: `198.33 blocks/s` (`logs/results/profile-ingest-20260223T200845Z-concurrency-256x64.json`)
 - `512/64`: `196.90 blocks/s` (`logs/results/profile-ingest-20260223T200916Z-concurrency-512x64.json`)
+
+## 2026-03-09T18:45:46Z - Query Executor Range-Aware Chunk Loading
+
+### Change Summary
+
+- Made query-time stream loading range-aware in `crates/finalized-log-index/src/query/executor.rs`.
+- `fetch_union_log_level` and `fetch_union_block_level` now pass shard-local bounds into `load_stream_entries`.
+- The executor now skips manifest `ChunkRef`s whose `min_local..=max_local` does not overlap the requested range and only admits tail entries inside the local range.
+- Added regression tests that record blob reads for both address-stream scans and `topic0_block` prefilter scans.
+
+### Hypothesis
+
+- Narrow block-range queries were over-reading sealed chunk blobs because the executor loaded every chunk in each touched stream/shard before filtering by local range.
+- Using existing `ChunkRef` range metadata should reduce unnecessary chunk blob reads without changing query results.
+
+### Commands
+
+```bash
+cargo +nightly-2025-12-09 fmt --all
+cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-features -- -D clippy::suspicious -D clippy::style -D clippy::clone_on_copy -D clippy::redundant_clone -D clippy::iter_kv_map -D clippy::iter_nth -D clippy::unnecessary_cast -D clippy::filter_next -D clippy::needless_lifetimes -D clippy::useless_conversion -D clippy::useless_vec -D clippy::needless_question_mark -D clippy::bool_comparison -D unused_imports -D unused_parens -D deprecated -A clippy::type_complexity -A clippy::int_plus_one -A clippy::uninlined-format-args -A clippy::enum-variant-names -A clippy::mutable_key_type -A clippy::large_enum_variant -A clippy::doc-overindented-list-items
+```
+
+### Before/After Metrics
+
+- Test scenario `query_only_loads_overlapping_address_chunks`:
+  - before: `3` address chunk blob reads were expected from the pre-change executor for a 3-chunk manifest queried over only block `2` because all manifest chunks were loaded eagerly
+  - after: `1` address chunk blob read observed, plus `1` `log_packs/*` read for result materialization
+- Test scenario `topic0_block_prefilter_only_loads_overlapping_chunks`:
+  - before: `3` `topic0_block` chunk blob reads were expected from the pre-change executor for a 3-chunk manifest queried over only block `2`
+  - after: `1` `topic0_block` chunk blob read observed, plus `1` `log_packs/*` read for result materialization
+- Correctness verification:
+  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed, including new regression coverage
+
+### Interpretation
+
+- The executor was doing avoidable blob work for narrow-range queries within a touched shard/stream.
+- The change removes that over-read at the chunk-selection step while preserving the existing query planner and exact-match semantics.
+
+### Methodology Learnings
+
+- A recording blob store in unit/integration tests is a reliable way to validate query-execution I/O reductions without needing a full external benchmark harness.
+- For query-path optimizations, test-level read counts provide a stable correctness-plus-efficiency regression signal even when end-to-end latency measurements would be noisy.
 - Selected defaults: `log_locator_write_concurrency=256`, `stream_append_concurrency=64`.
 
 ## 20260223T201235Z - Profiling Run stream-cache

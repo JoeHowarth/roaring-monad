@@ -364,7 +364,8 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
                 u32::MAX
             };
             in_flight.push(async move {
-                let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
+                let entries =
+                    load_stream_entries(meta_store, blob_store, &sid, local_from, local_to).await?;
                 Ok::<(u32, u32, u32, BTreeSet<u32>), Error>((shard, local_from, local_to, entries))
             });
             if in_flight.len() >= STREAM_LOAD_CONCURRENCY
@@ -413,7 +414,8 @@ async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
                 u32::MAX
             };
             in_flight.push(async move {
-                let entries = load_stream_entries(meta_store, blob_store, &sid).await?;
+                let entries =
+                    load_stream_entries(meta_store, blob_store, &sid, local_from, local_to).await?;
                 Ok::<(u32, u32, BTreeSet<u32>), Error>((local_from, local_to, entries))
             });
             if in_flight.len() >= STREAM_LOAD_CONCURRENCY
@@ -439,6 +441,8 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     stream: &str,
+    local_from: u32,
+    local_to: u32,
 ) -> Result<BTreeSet<u32>> {
     let mut out = BTreeSet::new();
 
@@ -446,6 +450,9 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     if let Some(mrec) = manifest {
         let m = decode_manifest(&mrec.value)?;
         for cref in m.chunk_refs {
+            if !chunk_overlaps_range(&cref, local_from, local_to) {
+                continue;
+            }
             maybe_merge_chunk(blob_store, stream, &cref, &mut out).await?;
         }
     }
@@ -453,11 +460,17 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     if let Some(trec) = meta_store.get(&tail_key(stream)).await? {
         let tail = decode_tail(&trec.value)?;
         for v in &tail {
-            out.insert(v);
+            if v >= local_from && v <= local_to {
+                out.insert(v);
+            }
         }
     }
 
     Ok(out)
+}
+
+fn chunk_overlaps_range(cref: &ChunkRef, local_from: u32, local_to: u32) -> bool {
+    cref.max_local >= local_from && cref.min_local <= local_to
 }
 
 async fn maybe_merge_chunk<B: BlobStore>(
