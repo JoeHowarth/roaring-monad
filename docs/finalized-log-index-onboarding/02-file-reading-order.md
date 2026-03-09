@@ -42,6 +42,7 @@ This is the recommended file order for reading the indexing and query core. The 
    - key naming conventions
    - `stream_id`
    - locator-page and chunk key helpers
+   - how `index_kind`, hex-encoded value, and shard are combined into one physical stream key
 
 Checkpoint:
 
@@ -145,6 +146,7 @@ You should now be able to explain how one block mutates:
 Why this order:
 
 - first understand how candidate sets are built
+- then see how shard-local ranges are pushed down so non-overlapping chunks are skipped
 - then understand how actual logs are materialized
 - then look at the fallback scan path
 
@@ -182,6 +184,7 @@ You should now be able to describe the difference between:
     - broad query policy
     - block-hash mode
     - backend degradation behavior
+    - narrow-range query behavior that only loads overlapping chunks
 
 22. `crates/finalized-log-index/tests/differential_and_gc.rs`
     Read for:

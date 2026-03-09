@@ -8,6 +8,24 @@ The goal is to show:
 - how ingest updates the index
 - how query plans and executes a lookup
 
+## Core Terms
+
+```python
+global_log_id = monotonically increasing 64-bit ID assigned to each ingested log
+shard = high bits of a global_log_id or block number
+local_value = low bits stored inside a shard-local bitmap
+index_kind = one of: "addr", "topic0_block", "topic0_log", "topic1", "topic2", "topic3"
+stream_id = f"{index_kind}/{hex_encoded_index_value}/{shard_hex}"
+```
+
+Examples:
+
+```python
+stream_id("addr", address_20_bytes, shard)
+stream_id("topic0_log", topic0_32_bytes, shard)
+stream_id("topic0_block", topic0_32_bytes, block_shard)
+```
+
 ## Main Data Shapes
 
 ```python
@@ -200,8 +218,8 @@ def collect_stream_appends(block, first_log_id, epoch):
 
     for i, log in enumerate(block.logs):
         global_log_id = first_log_id + i
-        log_shard = high32(global_log_id)
-        local_log_id = low32(global_log_id)
+        log_shard = high40_bits(global_log_id)
+        local_log_id = low24_bits(global_log_id)
 
         # Always index address at log level
         out[f"addr/{log.address}/{log_shard}"].add(local_log_id)
@@ -210,8 +228,8 @@ def collect_stream_appends(block, first_log_id, epoch):
             topic0 = log.topics[0]
 
             # Always index topic0 once per block at block level
-            block_shard = high32(block.block_num)
-            local_block_num = low32(block.block_num)
+            block_shard = high40_bits(block.block_num)
+            local_block_num = low24_bits(block.block_num)
             if topic0 not in topic0_seen_once_per_block:
                 out[f"topic0_block/{topic0}/{block_shard}"].add(local_block_num)
                 topic0_seen_once_per_block.add(topic0)
@@ -468,28 +486,42 @@ def fetch_union_log_level(meta_store, blob_store, clause_kind, values, from_log_
     for value in values:
         for shard in shards_covered_by(from_log_id, to_log_id):
             stream_id = build_stream_id(clause_kind, value, shard)
-            local_entries = load_stream_entries(meta_store, blob_store, stream_id)
             local_from, local_to = local_range_for_this_shard(from_log_id, to_log_id, shard)
+            local_entries = load_stream_entries(
+                meta_store,
+                blob_store,
+                stream_id,
+                local_from,
+                local_to,
+            )
 
             for local_value in local_entries:
-                if local_from <= local_value <= local_to:
-                    out.add(make_global_id(shard, local_value))
+                out.add(make_global_id(shard, local_value))
 
     return out
 
 
-def load_stream_entries(meta_store, blob_store, stream_id):
+def load_stream_entries(meta_store, blob_store, stream_id, local_from, local_to):
     out = set()
 
     manifest = meta_store.get(f"manifests/{stream_id}")
     if manifest exists:
         for chunk_ref in manifest.chunk_refs:
+            if chunk_ref.max_local < local_from:
+                continue
+            if chunk_ref.min_local > local_to:
+                continue
+
             chunk = blob_store.get(f"chunks/{stream_id}/{chunk_ref.chunk_seq}")
-            out |= decode_bitmap(chunk)
+            for local_value in decode_bitmap(chunk):
+                if local_from <= local_value <= local_to:
+                    out.add(local_value)
 
     tail = meta_store.get(f"tails/{stream_id}")
     if tail exists:
-        out |= decode_bitmap(tail)
+        for local_value in decode_bitmap(tail):
+            if local_from <= local_value <= local_to:
+                out.add(local_value)
 
     return out
 ```

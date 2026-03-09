@@ -29,9 +29,27 @@ The main object is `FinalizedIndexService` in `crates/finalized-log-index/src/ap
 
 ## Core Concepts to Learn First
 
+### 0. Key terms
+
+- `global_log_id`:
+  the monotonically increasing 64-bit log sequence number assigned during ingest
+- `shard`:
+  the high bits of a block number or global log ID; used to partition stream storage
+- `local value`:
+  the low bits stored inside a shard-local bitmap for either log IDs or block numbers
+- `stream_id`:
+  the physical identifier for one secondary-index stream, built as:
+  `"<index_kind>/<hex-encoded value>/<shard>"`
+- `index_kind`:
+  one of the logical index families such as `addr`, `topic0_block`, `topic0_log`, `topic1`, `topic2`, or `topic3`
+- `manifest`:
+  the per-`stream_id` metadata record listing sealed chunk blobs for that stream
+- `tail`:
+  the mutable per-`stream_id` bitmap of recently appended local values that have not yet been sealed into a chunk
+
 ### 1. Global log IDs and sharding
 
-Logs are given a monotonically increasing global `log_id`. Many index structures store only the low 32 bits as a local value and derive the shard from the high 32 bits. The helper `stream_id(...)` in `crates/finalized-log-index/src/domain/keys.rs` encodes this.
+Logs are given a monotonically increasing global `log_id`. Many index structures store only the low 24 bits as a local value and derive the shard from the high 40 bits. The helper `stream_id(...)` in `crates/finalized-log-index/src/domain/keys.rs` encodes this.
 
 Why it matters:
 
@@ -173,7 +191,7 @@ Mental flow:
 3. compute the log-ID window from block metadata
 4. estimate clause selectivity
 5. either build an ordered clause plan or fall back to block scan
-6. load candidate stream entries
+6. load candidate stream entries within the shard-local query range
 7. intersect candidate sets
 8. fetch full logs by locator
 9. run exact predicate checks
