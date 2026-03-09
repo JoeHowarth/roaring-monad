@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::LogFilter;
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::error::{Error, Result};
 use finalized_log_index::store::blob::InMemoryBlobStore;
@@ -190,6 +192,34 @@ fn mk_service(
     )
 }
 
+async fn query_range(
+    svc: &FinalizedIndexService<FaultyMetaStore, FaultyBlobStore>,
+    from_block: u64,
+    to_block: u64,
+) -> Vec<Log> {
+    let page = svc
+        .query_logs(
+            QueryLogsRequest {
+                from_block,
+                to_block,
+                order: QueryOrder::Ascending,
+                resume_log_id: None,
+                limit: usize::MAX,
+                filter: LogFilter {
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+            },
+            ExecutionBudget::default(),
+        )
+        .await
+        .expect("query logs");
+    page.items
+}
+
 #[test]
 fn ingest_retry_survives_faults_at_phase_boundaries() {
     block_on(async {
@@ -279,21 +309,26 @@ fn ingest_retry_survives_faults_at_phase_boundaries() {
             );
 
             let logs = svc
-                .query_finalized(
-                    LogFilter {
-                        from_block: Some(1),
-                        to_block: Some(2),
-                        block_hash: None,
-                        address: None,
-                        topic0: None,
-                        topic1: None,
-                        topic2: None,
-                        topic3: None,
+                .query_logs(
+                    QueryLogsRequest {
+                        from_block: 1,
+                        to_block: 2,
+                        order: QueryOrder::Ascending,
+                        resume_log_id: None,
+                        limit: usize::MAX,
+                        filter: LogFilter {
+                            address: None,
+                            topic0: None,
+                            topic1: None,
+                            topic2: None,
+                            topic3: None,
+                        },
                     },
-                    QueryOptions { max_results: None },
+                    ExecutionBudget::default(),
                 )
                 .await
-                .expect("query logs");
+                .expect("query logs")
+                .items;
 
             let mut seen = HashSet::new();
             for l in &logs {
@@ -351,22 +386,7 @@ fn crash_loop_eventually_commits_without_corrupting_state() {
 
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
 
-        let logs = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: None,
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions { max_results: None },
-            )
-            .await
-            .expect("query");
+        let logs = query_range(&svc, 1, 1).await;
         assert_eq!(logs.len(), 2);
 
         let log_page = meta

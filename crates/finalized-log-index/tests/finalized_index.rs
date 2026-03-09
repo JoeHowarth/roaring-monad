@@ -3,12 +3,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::log::{encode_block_meta, encode_meta_state};
 use finalized_log_index::codec::manifest::{Manifest, decode_manifest, encode_manifest};
 use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::keys::{
     MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
     manifest_key, stream_id,
@@ -43,6 +45,44 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
         parent_hash,
         logs,
     }
+}
+
+fn query_request(
+    from_block: u64,
+    to_block: u64,
+    filter: LogFilter,
+    limit: usize,
+    resume_log_id: Option<u64>,
+) -> QueryLogsRequest {
+    QueryLogsRequest {
+        from_block,
+        to_block,
+        order: QueryOrder::Ascending,
+        resume_log_id,
+        limit,
+        filter,
+    }
+}
+
+async fn query_page<M: MetaStore, B: BlobStore>(
+    svc: &FinalizedIndexService<M, B>,
+    from_block: u64,
+    to_block: u64,
+    filter: LogFilter,
+    limit: Option<usize>,
+    resume_log_id: Option<u64>,
+) -> finalized_log_index::Result<finalized_log_index::QueryPage<Log>> {
+    svc.query_logs(
+        query_request(
+            from_block,
+            to_block,
+            filter,
+            limit.unwrap_or(usize::MAX),
+            resume_log_id,
+        ),
+        ExecutionBudget::default(),
+    )
+    .await
 }
 
 struct FlakyMetaStore {
@@ -232,9 +272,6 @@ fn ingest_and_query_with_limits() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
         let filter = LogFilter {
-            from_block: Some(1),
-            to_block: Some(2),
-            block_hash: None,
             address: Some(Clause::One([1; 20])),
             topic0: Some(Clause::One([10; 32])),
             topic1: None,
@@ -242,27 +279,20 @@ fn ingest_and_query_with_limits() {
             topic3: None,
         };
 
-        let all = svc
-            .query_finalized(filter.clone(), QueryOptions { max_results: None })
+        let all = query_page(&svc, 1, 2, filter.clone(), None, None)
             .await
             .expect("query all");
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.items.len(), 2);
 
-        let limited = svc
-            .query_finalized(
-                filter,
-                QueryOptions {
-                    max_results: Some(1),
-                },
-            )
+        let limited = query_page(&svc, 1, 2, filter, Some(1), None)
             .await
             .expect("query limited");
-        assert_eq!(limited.len(), 1);
+        assert_eq!(limited.items.len(), 1);
     });
 }
 
 #[test]
-fn block_hash_mode_and_invalid_params() {
+fn invalid_request_validation() {
     block_on(async {
         let svc = FinalizedIndexService::new(
             Config::default(),
@@ -276,41 +306,257 @@ fn block_hash_mode_and_invalid_params() {
             .await
             .expect("ingest b1");
 
-        let ok = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: None,
-                    to_block: None,
-                    block_hash: Some(b1.block_hash),
-                    address: None,
-                    topic0: Some(Clause::One([10; 32])),
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
+        let err = svc
+            .query_logs(
+                query_request(
+                    1,
+                    1,
+                    LogFilter {
+                        address: None,
+                        topic0: Some(Clause::One([10; 32])),
+                        topic1: None,
+                        topic2: None,
+                        topic3: None,
+                    },
+                    0,
+                    None,
+                ),
+                ExecutionBudget::default(),
             )
             .await
-            .expect("block hash query");
-        assert_eq!(ok.len(), 1);
+            .expect_err("limit validation");
+        assert!(matches!(err, Error::InvalidParams(_)));
 
         let err = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: Some(b1.block_hash),
-                    address: None,
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
+            .query_logs(
+                query_request(
+                    1,
+                    1,
+                    LogFilter {
+                        address: None,
+                        topic0: None,
+                        topic1: None,
+                        topic2: None,
+                        topic3: None,
+                    },
+                    10,
+                    Some(99),
+                ),
+                ExecutionBudget::default(),
             )
             .await
             .expect_err("invalid params expected");
         assert!(matches!(err, Error::InvalidParams(_)));
+    });
+}
+
+#[test]
+fn indexed_same_block_resume_pagination_tracks_page_meta() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let block = mk_block(
+            1,
+            [0; 32],
+            vec![
+                mk_log(1, 10, 20, 1, 0, 0),
+                mk_log(1, 10, 21, 1, 0, 1),
+                mk_log(1, 10, 22, 1, 0, 2),
+            ],
+        );
+        svc.ingest_finalized_block(block).await.expect("ingest");
+
+        let filter = LogFilter {
+            address: Some(Clause::One([1; 20])),
+            topic0: Some(Clause::One([10; 32])),
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        };
+
+        let first = query_page(&svc, 1, 1, filter.clone(), Some(1), None)
+            .await
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_log_id, Some(0));
+        assert_eq!(first.meta.resolved_from_block.number, 1);
+        assert_eq!(first.meta.resolved_to_block.number, 1);
+        assert_eq!(first.meta.cursor_block.number, 1);
+
+        let second = query_page(
+            &svc,
+            1,
+            1,
+            filter.clone(),
+            Some(1),
+            first.meta.next_resume_log_id,
+        )
+        .await
+        .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert!(second.meta.has_more);
+        assert_eq!(second.meta.next_resume_log_id, Some(1));
+        assert_eq!(second.meta.cursor_block.number, 1);
+
+        let third = query_page(&svc, 1, 1, filter, Some(1), second.meta.next_resume_log_id)
+            .await
+            .expect("third page");
+        assert_eq!(third.items.len(), 1);
+        assert!(!third.meta.has_more);
+        assert_eq!(third.meta.next_resume_log_id, None);
+        assert_eq!(third.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn block_scan_same_block_resume_pagination_tracks_page_meta() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                planner_max_or_terms: 1,
+                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let block = mk_block(
+            1,
+            [0; 32],
+            vec![
+                mk_log(1, 10, 20, 1, 0, 0),
+                mk_log(2, 10, 21, 1, 0, 1),
+                mk_log(1, 10, 22, 1, 0, 2),
+            ],
+        );
+        svc.ingest_finalized_block(block).await.expect("ingest");
+
+        let filter = LogFilter {
+            address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
+            topic0: Some(Clause::One([10; 32])),
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        };
+
+        let first = query_page(&svc, 1, 1, filter.clone(), Some(1), None)
+            .await
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_log_id, Some(0));
+
+        let second = query_page(
+            &svc,
+            1,
+            1,
+            filter.clone(),
+            Some(1),
+            first.meta.next_resume_log_id,
+        )
+        .await
+        .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert!(second.meta.has_more);
+        assert_eq!(second.meta.next_resume_log_id, Some(1));
+
+        let third = query_page(&svc, 1, 1, filter, Some(1), second.meta.next_resume_log_id)
+            .await
+            .expect("third page");
+        assert_eq!(third.items.len(), 1);
+        assert!(!third.meta.has_more);
+        assert_eq!(third.meta.next_resume_log_id, None);
+        assert_eq!(third.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn empty_page_metadata_uses_resolved_range_endpoint() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(
+            &svc,
+            1,
+            2,
+            LogFilter {
+                address: Some(Clause::One([9; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            Some(10),
+            None,
+        )
+        .await
+        .expect("empty page");
+
+        assert!(page.items.is_empty());
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+        assert_eq!(page.meta.next_resume_log_id, None);
+    });
+}
+
+#[test]
+fn resume_past_last_match_inside_window_returns_empty_final_page() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let block = mk_block(
+            1,
+            [0; 32],
+            vec![
+                mk_log(1, 10, 20, 1, 0, 0),
+                mk_log(2, 10, 21, 1, 0, 1),
+                mk_log(3, 10, 22, 1, 0, 2),
+            ],
+        );
+        svc.ingest_finalized_block(block).await.expect("ingest");
+
+        let page = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::One([1; 20])),
+                topic0: Some(Clause::One([10; 32])),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            Some(10),
+            Some(2),
+        )
+        .await
+        .expect("empty resume page");
+
+        assert!(page.items.is_empty());
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.cursor_block.number, 1);
+        assert_eq!(page.meta.next_resume_log_id, None);
     });
 }
 
@@ -331,22 +577,22 @@ fn or_guardrail_is_enforced() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
 
-        let err = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: Some(Clause::Or(vec![[1; 20], [2; 20], [3; 20]])),
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect_err("too broad");
+        let err = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::Or(vec![[1; 20], [2; 20], [3; 20]])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect_err("too broad");
 
         assert!(matches!(err, Error::QueryTooBroad { actual: 3, max: 2 }));
     });
@@ -375,24 +621,24 @@ fn broad_query_can_fallback_to_block_scan() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
 
         // Two OR terms exceed max_or_terms=1, but policy says block-scan fallback.
-        let got = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
-                    topic0: Some(Clause::One([10; 32])),
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect("fallback block scan query");
+        let got = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
+                topic0: Some(Clause::One([10; 32])),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("fallback block scan query");
 
-        assert_eq!(got.len(), 2);
+        assert_eq!(got.items.len(), 2);
     });
 }
 
@@ -419,23 +665,23 @@ fn fs_store_adapter_roundtrip() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(9, 5, 4, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
 
-        let got = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: Some(Clause::One([9; 20])),
-                    topic0: Some(Clause::One([5; 32])),
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect("query");
-        assert_eq!(got.len(), 1);
+        let got = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::One([9; 20])),
+                topic0: Some(Clause::One([5; 32])),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(got.items.len(), 1);
 
         let _ = fs::remove_dir_all(root);
     });
@@ -596,24 +842,24 @@ fn query_only_loads_overlapping_address_chunks() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
         svc.ingest_finalized_block(b3).await.expect("ingest b3");
 
-        let got = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(2),
-                    to_block: Some(2),
-                    block_hash: None,
-                    address: Some(Clause::One([9; 20])),
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect("query");
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].block_num, 2);
+        let got = query_page(
+            &svc,
+            2,
+            2,
+            LogFilter {
+                address: Some(Clause::One([9; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(got.items.len(), 1);
+        assert_eq!(got.items[0].block_num, 2);
 
         let addr_prefix = b"chunks/addr/";
         let log_pack_prefix = b"log_packs/";
@@ -649,24 +895,24 @@ fn topic0_queries_use_only_topic0_chunks() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
         svc.ingest_finalized_block(b3).await.expect("ingest b3");
 
-        let got = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(2),
-                    to_block: Some(2),
-                    block_hash: None,
-                    address: None,
-                    topic0: Some(Clause::One([7; 32])),
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect("query");
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].block_num, 2);
+        let got = query_page(
+            &svc,
+            2,
+            2,
+            LogFilter {
+                address: None,
+                topic0: Some(Clause::One([7; 32])),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(got.items.len(), 1);
+        assert_eq!(got.items[0].block_num, 2);
 
         let topic0_prefix = b"chunks/topic0/";
         let log_pack_prefix = b"log_packs/";
@@ -771,25 +1017,25 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
             1
         );
 
-        let got = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(2),
-                    to_block: Some(3),
-                    block_hash: None,
-                    address: Some(Clause::One([9; 20])),
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect("query");
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].block_num, 2);
-        assert_eq!(got[1].block_num, 3);
+        let got = query_page(
+            &svc,
+            2,
+            3,
+            LogFilter {
+                address: Some(Clause::One([9; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("query");
+        assert_eq!(got.items.len(), 2);
+        assert_eq!(got.items[0].block_num, 2);
+        assert_eq!(got.items[1].block_num, 3);
     });
 }
 
@@ -816,22 +1062,22 @@ fn invalid_parent_puts_service_in_degraded_mode() {
         assert!(health.degraded);
         assert!(health.message.contains("degraded"));
 
-        let qerr = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: None,
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect_err("degraded query");
+        let qerr = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: None,
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect_err("degraded query");
         assert!(matches!(qerr, Error::Degraded(_)));
     });
 }
@@ -994,22 +1240,22 @@ fn backend_failures_throttle_then_degrade() {
         let e3 = svc.ingest_finalized_block(b1).await.expect_err("err3");
         assert!(matches!(e3, Error::Throttled(_)));
 
-        let qerr = svc
-            .query_finalized(
-                LogFilter {
-                    from_block: Some(1),
-                    to_block: Some(1),
-                    block_hash: None,
-                    address: None,
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
-                QueryOptions::default(),
-            )
-            .await
-            .expect_err("backend query error");
+        let qerr = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: None,
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect_err("backend query error");
         assert!(matches!(qerr, Error::Backend(_)));
         assert!(svc.health().await.degraded);
     });

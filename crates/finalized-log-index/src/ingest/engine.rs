@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -14,12 +14,12 @@ use crate::codec::manifest::{
 };
 use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_local,
-    log_locator_page_key, log_locator_page_start, log_pack_blob_key, log_shard, manifest_key,
-    stream_id, tail_key,
+    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
+    log_locator_page_start, log_pack_blob_key, manifest_key, tail_key,
 };
 use crate::domain::types::{Block, BlockMeta, IngestOutcome, LogLocator, MetaState};
 use crate::error::{Error, Result};
+use crate::logs::ingest::collect_stream_appends;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
@@ -156,9 +156,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             )
             .await?;
 
-        let appends = self
-            .collect_stream_appends(block, first_log_id, epoch)
-            .await?;
+        let appends = collect_stream_appends(block, first_log_id);
         let mut appends_in_flight = FuturesUnordered::new();
         for (stream_id, values) in appends {
             appends_in_flight
@@ -208,49 +206,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             }
         }
         Ok(stats)
-    }
-
-    async fn collect_stream_appends(
-        &self,
-        block: &Block,
-        first_log_id: u64,
-        _epoch: u64,
-    ) -> Result<BTreeMap<String, Vec<u32>>> {
-        let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-
-        for (i, log) in block.logs.iter().enumerate() {
-            let global = first_log_id + i as u64;
-            let shard = log_shard(global);
-            let local = log_local(global);
-
-            out.entry(stream_id("addr", &log.address, shard))
-                .or_default()
-                .insert(local);
-
-            if let Some(topic0) = log.topics.first() {
-                out.entry(stream_id("topic0", topic0, shard))
-                    .or_default()
-                    .insert(local);
-            }
-
-            for (idx, topic) in log.topics.iter().enumerate().skip(1).take(3) {
-                let kind = match idx {
-                    1 => "topic1",
-                    2 => "topic2",
-                    3 => "topic3",
-                    _ => continue,
-                };
-                out.entry(stream_id(kind, topic, shard))
-                    .or_default()
-                    .insert(local);
-            }
-        }
-
-        let mut flattened = BTreeMap::new();
-        for (k, set) in out {
-            flattened.insert(k, set.into_iter().collect());
-        }
-        Ok(flattened)
     }
 
     async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<bool> {

@@ -2,9 +2,11 @@
 
 use std::process::Command;
 
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::LogFilter;
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::error::Error;
 use finalized_log_index::store::minio::MinioBlobStore;
@@ -97,18 +99,22 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     assert!(matches!(e1, Error::Backend(_)));
 
     let e2 = svc
-        .query_finalized(
-            LogFilter {
-                from_block: Some(1),
-                to_block: Some(1),
-                block_hash: None,
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
+        .query_logs(
+            QueryLogsRequest {
+                from_block: 1,
+                to_block: 1,
+                order: QueryOrder::Ascending,
+                resume_log_id: None,
+                limit: usize::MAX,
+                filter: LogFilter {
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
             },
-            QueryOptions::default(),
+            ExecutionBudget::default(),
         )
         .await
         .expect_err("second backend fail");
@@ -118,18 +124,22 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     assert!(h.degraded, "service should fail-closed after threshold");
 
     let e3 = svc
-        .query_finalized(
-            LogFilter {
-                from_block: Some(1),
-                to_block: Some(2),
-                block_hash: None,
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
+        .query_logs(
+            QueryLogsRequest {
+                from_block: 1,
+                to_block: 2,
+                order: QueryOrder::Ascending,
+                resume_log_id: None,
+                limit: usize::MAX,
+                filter: LogFilter {
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
             },
-            QueryOptions::default(),
+            ExecutionBudget::default(),
         )
         .await
         .expect_err("degraded call blocked");

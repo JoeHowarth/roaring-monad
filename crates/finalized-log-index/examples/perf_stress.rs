@@ -3,9 +3,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
@@ -40,11 +42,12 @@ where
 {
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == name
-            && let Some(value) = args.next()
-            && let Ok(parsed) = value.parse::<T>()
-        {
-            return parsed;
+        if arg == name {
+            if let Some(value) = args.next() {
+                if let Ok(parsed) = value.parse::<T>() {
+                    return parsed;
+                }
+            }
         }
     }
     default
@@ -53,10 +56,10 @@ where
 fn parse_string_arg(name: &str, default: &str) -> String {
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == name
-            && let Some(value) = args.next()
-        {
-            return value;
+        if arg == name {
+            if let Some(value) = args.next() {
+                return value;
+            }
         }
     }
     default.to_string()
@@ -107,62 +110,71 @@ async fn run_queries<M: MetaStore, B: BlobStore>(
     let mut total_returned = 0usize;
     for i in 0..queries {
         let start = Instant::now();
-        let filter = match i % 4 {
-            0 => LogFilter {
-                from_block: Some(blocks.saturating_sub(5_000).max(1)),
-                to_block: Some(blocks),
-                block_hash: None,
-                address: Some(Clause::One([(i % 64) as u8; 20])),
-                topic0: Some(Clause::One([(i % 16) as u8; 32])),
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            1 => LogFilter {
-                from_block: Some(blocks.saturating_sub(8_000).max(1)),
-                to_block: Some(blocks),
-                block_hash: None,
-                address: None,
-                topic0: Some(Clause::One([(i % 32) as u8; 32])),
-                topic1: Some(Clause::One([(i % 64) as u8; 32])),
-                topic2: None,
-                topic3: None,
-            },
+        let (from_block, to_block, filter) = match i % 4 {
+            0 => (
+                blocks.saturating_sub(5_000).max(1),
+                blocks,
+                LogFilter {
+                    address: Some(Clause::One([(i % 64) as u8; 20])),
+                    topic0: Some(Clause::One([(i % 16) as u8; 32])),
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+            ),
+            1 => (
+                blocks.saturating_sub(8_000).max(1),
+                blocks,
+                LogFilter {
+                    address: None,
+                    topic0: Some(Clause::One([(i % 32) as u8; 32])),
+                    topic1: Some(Clause::One([(i % 64) as u8; 32])),
+                    topic2: None,
+                    topic3: None,
+                },
+            ),
             2 => {
                 let list: Vec<[u8; 20]> = (0..32).map(|v| [((v + i) % 96) as u8; 20]).collect();
+                (
+                    blocks.saturating_sub(3_000).max(1),
+                    blocks,
+                    LogFilter {
+                        address: Some(Clause::Or(list)),
+                        topic0: None,
+                        topic1: None,
+                        topic2: None,
+                        topic3: None,
+                    },
+                )
+            }
+            _ => (
+                blocks.saturating_sub(1_000).max(1),
+                blocks,
                 LogFilter {
-                    from_block: Some(blocks.saturating_sub(3_000).max(1)),
-                    to_block: Some(blocks),
-                    block_hash: None,
-                    address: Some(Clause::Or(list)),
+                    address: None,
                     topic0: None,
                     topic1: None,
                     topic2: None,
                     topic3: None,
-                }
-            }
-            _ => LogFilter {
-                from_block: Some(blocks.saturating_sub(1_000).max(1)),
-                to_block: Some(blocks),
-                block_hash: None,
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
+                },
+            ),
         };
 
         let out = svc
-            .query_finalized(
-                filter,
-                QueryOptions {
-                    max_results: Some(max_results),
+            .query_logs(
+                QueryLogsRequest {
+                    from_block,
+                    to_block,
+                    order: QueryOrder::Ascending,
+                    resume_log_id: None,
+                    limit: max_results,
+                    filter,
                 },
+                ExecutionBudget::default(),
             )
             .await
             .expect("query");
-        total_returned += out.len();
+        total_returned += out.items.len();
         latencies.push(start.elapsed().as_micros());
     }
 

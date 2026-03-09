@@ -1,7 +1,9 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::meta::InMemoryMetaStore;
@@ -67,6 +69,29 @@ fn seed_blocks(
     });
 }
 
+fn query_len(
+    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    from_block: u64,
+    to_block: u64,
+    filter: LogFilter,
+    limit: usize,
+) -> usize {
+    block_on(svc.query_logs(
+        QueryLogsRequest {
+            from_block,
+            to_block,
+            order: QueryOrder::Ascending,
+            resume_log_id: None,
+            limit,
+            filter,
+        },
+        ExecutionBudget::default(),
+    ))
+    .expect("query")
+    .items
+    .len()
+}
+
 fn bench_ingest(c: &mut Criterion) {
     let mut group = c.benchmark_group("ingest");
     for logs_per_block in [10u32, 100u32, 1_000u32] {
@@ -111,9 +136,6 @@ fn bench_query_filtered(c: &mut Criterion) {
     seed_blocks(&svc, 200, 100);
 
     let filter = LogFilter {
-        from_block: Some(50),
-        to_block: Some(200),
-        block_hash: None,
         address: Some(Clause::One([5; 20])),
         topic0: Some(Clause::One([1; 32])),
         topic1: Some(Clause::One([5; 32])),
@@ -122,16 +144,7 @@ fn bench_query_filtered(c: &mut Criterion) {
     };
 
     group.bench_function("addr_topic_filtered", |b| {
-        b.iter(|| {
-            let res = block_on(svc.query_finalized(
-                black_box(filter.clone()),
-                QueryOptions {
-                    max_results: Some(1_000),
-                },
-            ))
-            .expect("query");
-            black_box(res.len())
-        })
+        b.iter(|| black_box(query_len(&svc, 50, 200, black_box(filter.clone()), 1_000)))
     });
 
     group.finish();
@@ -145,9 +158,6 @@ fn bench_query_or_list(c: &mut Criterion) {
     for n in [4usize, 32usize, 128usize] {
         let addresses: Vec<[u8; 20]> = (0..n).map(|i| [(i as u8) % 64; 20]).collect();
         let filter = LogFilter {
-            from_block: Some(1),
-            to_block: Some(200),
-            block_hash: None,
             address: Some(Clause::Or(addresses)),
             topic0: None,
             topic1: None,
@@ -155,16 +165,7 @@ fn bench_query_or_list(c: &mut Criterion) {
             topic3: None,
         };
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                let res = block_on(svc.query_finalized(
-                    black_box(filter.clone()),
-                    QueryOptions {
-                        max_results: Some(10_000),
-                    },
-                ))
-                .expect("query");
-                black_box(res.len())
-            })
+            b.iter(|| black_box(query_len(&svc, 1, 200, black_box(filter.clone()), 10_000)))
         });
     }
 
@@ -177,63 +178,66 @@ fn bench_query_mixed_large(c: &mut Criterion) {
     seed_blocks(&svc, 1_000, 200);
 
     let filters = [
-        LogFilter {
-            from_block: Some(300),
-            to_block: Some(1_000),
-            block_hash: None,
-            address: Some(Clause::One([11; 20])),
-            topic0: Some(Clause::One([3; 32])),
-            topic1: None,
-            topic2: None,
-            topic3: None,
-        },
-        LogFilter {
-            from_block: Some(200),
-            to_block: Some(1_000),
-            block_hash: None,
-            address: None,
-            topic0: Some(Clause::One([2; 32])),
-            topic1: Some(Clause::One([2; 32])),
-            topic2: None,
-            topic3: None,
-        },
-        LogFilter {
-            from_block: Some(1),
-            to_block: Some(1_000),
-            block_hash: None,
-            address: Some(Clause::Or(
-                (0..48usize).map(|i| [(i % 64) as u8; 20]).collect(),
-            )),
-            topic0: None,
-            topic1: None,
-            topic2: None,
-            topic3: None,
-        },
-        LogFilter {
-            from_block: Some(800),
-            to_block: Some(1_000),
-            block_hash: None,
-            address: None,
-            topic0: None,
-            topic1: None,
-            topic2: None,
-            topic3: None,
-        },
+        (
+            300,
+            1_000,
+            LogFilter {
+                address: Some(Clause::One([11; 20])),
+                topic0: Some(Clause::One([3; 32])),
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+        ),
+        (
+            200,
+            1_000,
+            LogFilter {
+                address: None,
+                topic0: Some(Clause::One([2; 32])),
+                topic1: Some(Clause::One([2; 32])),
+                topic2: None,
+                topic3: None,
+            },
+        ),
+        (
+            1,
+            1_000,
+            LogFilter {
+                address: Some(Clause::Or(
+                    (0..48usize).map(|i| [(i % 64) as u8; 20]).collect(),
+                )),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+        ),
+        (
+            800,
+            1_000,
+            LogFilter {
+                address: None,
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+        ),
     ];
 
     group.bench_function("mixed_workload_4way", |b| {
         let mut idx = 0usize;
         b.iter(|| {
-            let filter = filters[idx % filters.len()].clone();
+            let (from_block, to_block, filter) = filters[idx % filters.len()].clone();
             idx = idx.wrapping_add(1);
-            let res = block_on(svc.query_finalized(
+            black_box(query_len(
+                &svc,
+                from_block,
+                to_block,
                 black_box(filter),
-                QueryOptions {
-                    max_results: Some(20_000),
-                },
+                20_000,
             ))
-            .expect("query");
-            black_box(res.len())
         })
     });
     group.finish();

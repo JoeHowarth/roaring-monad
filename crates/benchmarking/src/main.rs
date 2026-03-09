@@ -6,9 +6,11 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block as IndexBlock, Log as IndexLog};
 use finalized_log_index::store::minio::MinioBlobStore;
 use finalized_log_index::store::scylla::ScyllaMetaStore;
@@ -739,10 +741,10 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
 
 async fn cmd_benchmark(args: BenchmarkArgs) -> Result<()> {
     let mut traces = load_traces(&args.dataset_dir, &args.profiles)?;
-    if let Some(limit) = args.trace_limit
-        && traces.len() > limit
-    {
-        traces.truncate(limit);
+    if let Some(limit) = args.trace_limit {
+        if traces.len() > limit {
+            traces.truncate(limit);
+        }
     }
     if traces.is_empty() {
         bail!("no traces loaded from {}", args.dataset_dir.display());
@@ -761,18 +763,11 @@ async fn cmd_benchmark(args: BenchmarkArgs) -> Result<()> {
             .entry(trace_profile_name(trace.profile.clone()).to_string())
             .or_default() += 1;
 
-        let filter = trace_to_filter(trace)?;
+        let request = trace_to_request(trace, args.max_results)?;
         let q_start = Instant::now();
-        let out = svc
-            .query_finalized(
-                filter,
-                QueryOptions {
-                    max_results: Some(args.max_results),
-                },
-            )
-            .await?;
+        let out = svc.query_logs(request, ExecutionBudget::default()).await?;
         latencies.push(q_start.elapsed().as_micros());
-        total_results = total_results.saturating_add(out.len());
+        total_results = total_results.saturating_add(out.items.len());
 
         let done = idx + 1;
         if args.log_every > 0 && (done == traces.len() || done % args.log_every == 0) {
@@ -1232,16 +1227,20 @@ fn load_traces(dataset_dir: &Path, profiles: &[TraceProfileArg]) -> Result<Vec<T
     Ok(traces)
 }
 
-fn trace_to_filter(trace: &TraceEntry) -> Result<LogFilter> {
-    Ok(LogFilter {
-        from_block: Some(trace.from_block),
-        to_block: Some(trace.to_block),
-        block_hash: None,
-        address: decode_clause20(&trace.address_or)?,
-        topic0: decode_clause32(&trace.topic0_or)?,
-        topic1: decode_clause32(&trace.topic1_or)?,
-        topic2: decode_clause32(&trace.topic2_or)?,
-        topic3: decode_clause32(&trace.topic3_or)?,
+fn trace_to_request(trace: &TraceEntry, max_results: usize) -> Result<QueryLogsRequest> {
+    Ok(QueryLogsRequest {
+        from_block: trace.from_block,
+        to_block: trace.to_block,
+        order: QueryOrder::Ascending,
+        resume_log_id: None,
+        limit: max_results,
+        filter: LogFilter {
+            address: decode_clause20(&trace.address_or)?,
+            topic0: decode_clause32(&trace.topic0_or)?,
+            topic1: decode_clause32(&trace.topic1_or)?,
+            topic2: decode_clause32(&trace.topic2_or)?,
+            topic3: decode_clause32(&trace.topic3_or)?,
+        },
     })
 }
 

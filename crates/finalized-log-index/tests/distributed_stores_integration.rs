@@ -1,8 +1,10 @@
 #![cfg(feature = "distributed-stores")]
 
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::store::minio::MinioBlobStore;
 use finalized_log_index::store::scylla::ScyllaMetaStore;
@@ -77,9 +79,6 @@ async fn scylla_minio_roundtrip_query() {
     svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
     let filter = LogFilter {
-        from_block: Some(1),
-        to_block: Some(2),
-        block_hash: None,
         address: Some(Clause::One([1; 20])),
         topic0: Some(Clause::One([10; 32])),
         topic1: None,
@@ -88,16 +87,21 @@ async fn scylla_minio_roundtrip_query() {
     };
 
     let got = svc
-        .query_finalized(
-            filter,
-            QueryOptions {
-                max_results: Some(100),
+        .query_logs(
+            QueryLogsRequest {
+                from_block: 1,
+                to_block: 2,
+                order: QueryOrder::Ascending,
+                resume_log_id: None,
+                limit: 100,
+                filter,
             },
+            ExecutionBudget::default(),
         )
         .await
         .expect("query");
 
-    assert_eq!(got.len(), 2);
-    assert_eq!(got[0].block_num, 1);
-    assert_eq!(got[1].block_num, 2);
+    assert_eq!(got.items.len(), 2);
+    assert_eq!(got.items[0].block_num, 1);
+    assert_eq!(got.items[1].block_num, 2);
 }

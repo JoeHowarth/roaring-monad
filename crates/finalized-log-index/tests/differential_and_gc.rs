@@ -1,8 +1,10 @@
-use finalized_log_index::api::{FinalizedIndexService, FinalizedLogIndex};
+use finalized_log_index::api::{
+    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+};
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::manifest::encode_tail;
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter, QueryOptions};
+use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::keys::{chunk_blob_key, stream_id, tail_key};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::gc::worker::GcWorker;
@@ -34,18 +36,17 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
     }
 }
 
-fn naive_query(blocks: &[Block], filter: &LogFilter, max_results: Option<usize>) -> Vec<Log> {
+fn naive_query(
+    blocks: &[Block],
+    from_block: u64,
+    to_block: u64,
+    filter: &LogFilter,
+    max_results: Option<usize>,
+) -> Vec<Log> {
     let mut out = Vec::new();
-    let from = filter.from_block.unwrap_or(0);
-    let to = filter.to_block.unwrap_or(u64::MAX);
 
     for b in blocks {
-        if b.block_num < from || b.block_num > to {
-            continue;
-        }
-        if let Some(h) = filter.block_hash
-            && h != b.block_hash
-        {
+        if b.block_num < from_block || b.block_num > to_block {
             continue;
         }
 
@@ -59,16 +60,40 @@ fn naive_query(blocks: &[Block], filter: &LogFilter, max_results: Option<usize>)
                 continue;
             }
             out.push(l.clone());
-            if let Some(limit) = max_results
-                && out.len() >= limit
-            {
-                return out;
+            if let Some(limit) = max_results {
+                if out.len() >= limit {
+                    return out;
+                }
             }
         }
     }
 
     out.sort_by_key(|l| (l.block_num, l.tx_idx, l.log_idx));
     out
+}
+
+async fn query_range(
+    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    from_block: u64,
+    to_block: u64,
+    filter: LogFilter,
+    max_results: Option<usize>,
+) -> Vec<Log> {
+    let page = svc
+        .query_logs(
+            QueryLogsRequest {
+                from_block,
+                to_block,
+                order: QueryOrder::Ascending,
+                resume_log_id: None,
+                limit: max_results.unwrap_or(usize::MAX),
+                filter,
+            },
+            ExecutionBudget::default(),
+        )
+        .await
+        .expect("query");
+    page.items
 }
 
 fn matches_address(log: &Log, clause: &Option<Clause<[u8; 20]>>) -> bool {
@@ -129,49 +154,44 @@ fn differential_query_matches_naive() {
         }
 
         let filters = vec![
-            LogFilter {
-                from_block: Some(1),
-                to_block: Some(3),
-                block_hash: None,
-                address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
-                topic0: Some(Clause::One([10; 32])),
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            LogFilter {
-                from_block: Some(2),
-                to_block: Some(3),
-                block_hash: None,
-                address: None,
-                topic0: Some(Clause::Or(vec![[12; 32], [13; 32]])),
-                topic1: Some(Clause::Any),
-                topic2: None,
-                topic3: None,
-            },
-            LogFilter {
-                from_block: Some(1),
-                to_block: Some(3),
-                block_hash: None,
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
+            (
+                1,
+                3,
+                LogFilter {
+                    address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
+                    topic0: Some(Clause::One([10; 32])),
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+            ),
+            (
+                2,
+                3,
+                LogFilter {
+                    address: None,
+                    topic0: Some(Clause::Or(vec![[12; 32], [13; 32]])),
+                    topic1: Some(Clause::Any),
+                    topic2: None,
+                    topic3: None,
+                },
+            ),
+            (
+                1,
+                3,
+                LogFilter {
+                    address: None,
+                    topic0: None,
+                    topic1: None,
+                    topic2: None,
+                    topic3: None,
+                },
+            ),
         ];
 
-        for f in filters {
-            let got = svc
-                .query_finalized(
-                    f.clone(),
-                    QueryOptions {
-                        max_results: Some(3),
-                    },
-                )
-                .await
-                .expect("query");
-            let want = naive_query(&blocks, &f, Some(3));
+        for (from_block, to_block, filter) in filters {
+            let got = query_range(&svc, from_block, to_block, filter.clone(), Some(3)).await;
+            let want = naive_query(&blocks, from_block, to_block, &filter, Some(3));
             assert_eq!(got, want);
         }
     });
