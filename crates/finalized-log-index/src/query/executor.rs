@@ -9,9 +9,8 @@ use crate::codec::log::{
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::domain::filter::{Clause, LogFilter};
 use crate::domain::keys::{
-    block_local, block_meta_key, block_range_for_shard, block_shard, chunk_blob_key,
-    compose_global_log_id, local_range_for_shard, log_locator_key, log_locator_page_key,
-    log_locator_page_start, log_shard, manifest_key, stream_id, tail_key,
+    block_meta_key, chunk_blob_key, compose_global_log_id, local_range_for_shard, log_locator_key,
+    log_locator_page_key, log_locator_page_start, log_shard, manifest_key, stream_id, tail_key,
 };
 use crate::domain::types::{Log, LogLocator, Topic32};
 use crate::error::{Error, Result};
@@ -104,7 +103,7 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                 )
                 .await?
             }
-            ClauseKind::Topic0Log => {
+            ClauseKind::Topic0 => {
                 let Some(clause) = &plan.filter.topic0 else {
                     continue;
                 };
@@ -125,30 +124,6 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
 
     let candidates = intersect_sets(clause_sets, plan.from_log_id, plan.to_log_id_inclusive);
 
-    let topic0_log_applied = plan.clause_order.contains(&ClauseKind::Topic0Log);
-    let topic0_blocks = if topic0_log_applied {
-        None
-    } else if let Some(topic_clause) = &plan.filter.topic0 {
-        let values = clause_values_32(topic_clause);
-        if values.is_empty() {
-            None
-        } else {
-            Some(
-                fetch_union_block_level(
-                    meta_store,
-                    blob_store,
-                    "topic0_block",
-                    &values,
-                    plan.clipped_from_block,
-                    plan.clipped_to_block,
-                )
-                .await?,
-            )
-        }
-    } else {
-        None
-    };
-
     let mut out = Vec::new();
     for id in candidates {
         let Some(log) = load_log_by_id(
@@ -164,12 +139,6 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
         };
 
         if log.block_num < plan.clipped_from_block || log.block_num > plan.clipped_to_block {
-            continue;
-        }
-
-        if let Some(blocks) = &topic0_blocks
-            && !blocks.contains(&block_local(log.block_num))
-        {
             continue;
         }
 
@@ -381,47 +350,6 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
         let (shard, _, _, entries) = res?;
         for local in entries {
             out.insert(compose_global_log_id(shard, local));
-        }
-    }
-    Ok(out)
-}
-
-async fn fetch_union_block_level<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
-    kind: &str,
-    values: &[Vec<u8>],
-    from_block: u64,
-    to_block: u64,
-) -> Result<BTreeSet<u32>> {
-    let mut out = BTreeSet::new();
-    let from_shard = block_shard(from_block);
-    let to_shard = block_shard(to_block);
-    let mut in_flight = FuturesUnordered::new();
-
-    for value in values {
-        for shard in from_shard..=to_shard {
-            let sid = stream_id(kind, value, shard);
-            let (local_from, local_to) = block_range_for_shard(from_block, to_block, shard);
-            in_flight.push(async move {
-                let entries =
-                    load_stream_entries(meta_store, blob_store, &sid, local_from, local_to).await?;
-                Ok::<(u32, u32, BTreeSet<u32>), Error>((local_from, local_to, entries))
-            });
-            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
-                && let Some(res) = in_flight.next().await
-            {
-                let (_, _, entries) = res?;
-                for local in entries {
-                    out.insert(local);
-                }
-            }
-        }
-    }
-    while let Some(res) = in_flight.next().await {
-        let (_, _, entries) = res?;
-        for local in entries {
-            out.insert(local);
         }
     }
     Ok(out)

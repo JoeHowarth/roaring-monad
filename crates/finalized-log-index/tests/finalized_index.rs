@@ -628,7 +628,7 @@ fn query_only_loads_overlapping_address_chunks() {
 }
 
 #[test]
-fn topic0_queries_use_topic0_log_without_loading_topic0_block_chunks() {
+fn topic0_queries_use_only_topic0_log_chunks() {
     block_on(async {
         let blob = RecordingBlobStore::default();
         let svc = FinalizedIndexService::new(
@@ -669,19 +669,12 @@ fn topic0_queries_use_topic0_log_without_loading_topic0_block_chunks() {
         assert_eq!(got[0].block_num, 2);
 
         let topic0_log_prefix = b"chunks/topic0_log/";
-        let topic0_block_prefix = b"chunks/topic0_block/";
         let log_pack_prefix = b"log_packs/";
         assert_eq!(
             svc.ingest
                 .blob_store
                 .count_gets_with_prefix(topic0_log_prefix),
             1
-        );
-        assert_eq!(
-            svc.ingest
-                .blob_store
-                .count_gets_with_prefix(topic0_block_prefix),
-            0
         );
         assert_eq!(
             svc.ingest

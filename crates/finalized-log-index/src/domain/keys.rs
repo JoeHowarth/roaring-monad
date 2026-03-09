@@ -68,14 +68,6 @@ pub fn log_local(global_log_id: u64) -> u32 {
     (global_log_id & LOCAL_ID_MASK) as u32
 }
 
-pub fn block_shard(block_num: u64) -> u32 {
-    (block_num >> LOCAL_ID_BITS) as u32
-}
-
-pub fn block_local(block_num: u64) -> u32 {
-    (block_num & LOCAL_ID_MASK) as u32
-}
-
 pub fn compose_global_log_id(shard: u32, local: u32) -> u64 {
     (u64::from(shard) << LOCAL_ID_BITS) | u64::from(local)
 }
@@ -90,22 +82,6 @@ pub fn local_range_for_shard(from: u64, to_inclusive: u64, shard: u32) -> (u32, 
     };
     let local_to = if shard == to_shard {
         log_local(to_inclusive)
-    } else {
-        MAX_LOCAL_ID
-    };
-    (local_from, local_to)
-}
-
-pub fn block_range_for_shard(from: u64, to_inclusive: u64, shard: u32) -> (u32, u32) {
-    let from_shard = block_shard(from);
-    let to_shard = block_shard(to_inclusive);
-    let local_from = if shard == from_shard {
-        block_local(from)
-    } else {
-        0
-    };
-    let local_to = if shard == to_shard {
-        block_local(to_inclusive)
     } else {
         MAX_LOCAL_ID
     };

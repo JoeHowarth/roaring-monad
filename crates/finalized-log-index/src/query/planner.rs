@@ -10,7 +10,7 @@ use crate::store::traits::MetaStore;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClauseKind {
     Address,
-    Topic0Log,
+    Topic0,
     Topic1,
     Topic2,
     Topic3,
@@ -133,7 +133,7 @@ pub async fn build_clause_order<M: MetaStore>(
             )
             .await?;
             clauses.push((
-                ClauseKind::Topic0Log,
+                ClauseKind::Topic0,
                 ClauseEstimate {
                     estimated: estimate,
                 },
@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn topic0_log_clause_is_planned_even_when_estimate_is_zero() {
+    fn topic0_clause_is_planned_even_when_estimate_is_zero() {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let topic0_value = [7u8; 32];
@@ -390,7 +390,7 @@ mod tests {
             let order = build_clause_order(&store, &filter, 0, 100)
                 .await
                 .expect("build order");
-            assert_eq!(order, vec![ClauseKind::Topic0Log]);
+            assert_eq!(order, vec![ClauseKind::Topic0]);
         });
     }
 
