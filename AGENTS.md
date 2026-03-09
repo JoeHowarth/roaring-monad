@@ -45,3 +45,9 @@ Optimization and Profiling Log Discipline:
 - Continuously capture methodology learnings:
   what produced reliable measurements, what was noisy/misleading, and how to avoid false conclusions.
 - For performance-related commits, include the profile/benchmark deltas in the commit message body.
+
+Onboarding Docs Discipline:
+
+- Keep the onboarding docs in `docs/finalized-log-index-onboarding/` updated when architecture, terminology, storage layout, or core query/indexing behavior changes.
+- Treat those docs as clean current-state documentation, not as a changelog or historical narrative.
+- Write them as they should read if authored at that moment in time; do not add retrospective notes such as "this was changed from X" unless the comparison is part of the architecture itself.
