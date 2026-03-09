@@ -15,7 +15,9 @@ use crate::domain::keys::{
 };
 use crate::domain::types::{Log, LogLocator, Topic32};
 use crate::error::{Error, Result};
-use crate::query::planner::{ClauseKind, QueryPlan, clause_values_20, clause_values_32};
+use crate::query::planner::{
+    ClauseKind, QueryPlan, clause_values_20, clause_values_32, overlapping_chunk_refs,
+};
 use crate::store::traits::{BlobStore, MetaStore};
 
 const STREAM_LOAD_CONCURRENCY: usize = 32;
@@ -433,14 +435,8 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     let manifest = meta_store.get(&manifest_key(stream)).await?;
     if let Some(mrec) = manifest {
         let m = decode_manifest(&mrec.value)?;
-        for cref in m.chunk_refs {
-            if cref.max_local < local_from {
-                continue;
-            }
-            if cref.min_local > local_to {
-                break;
-            }
-            maybe_merge_chunk(blob_store, stream, &cref, &mut out).await?;
+        for cref in overlapping_chunk_refs(&m.chunk_refs, local_from, local_to) {
+            maybe_merge_chunk(blob_store, stream, cref, &mut out).await?;
         }
     }
 
@@ -455,6 +451,7 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
 
     Ok(out)
 }
+
 async fn maybe_merge_chunk<B: BlobStore>(
     blob_store: &B,
     stream: &str,

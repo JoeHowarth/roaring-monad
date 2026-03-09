@@ -198,10 +198,8 @@ async fn estimate_stream_overlap<M: MetaStore>(
     let mut count = 0u64;
     if let Some(m) = meta_store.get(&manifest_key(stream_id)).await? {
         let manifest = decode_manifest(&m.value)?;
-        for c in manifest.chunk_refs {
-            if overlaps(&c, local_from, local_to) {
-                count = count.saturating_add(c.count as u64);
-            }
+        for c in overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to) {
+            count = count.saturating_add(c.count as u64);
         }
     }
 
@@ -217,8 +215,14 @@ async fn estimate_stream_overlap<M: MetaStore>(
     Ok(count)
 }
 
-fn overlaps(c: &ChunkRef, local_from: u32, local_to: u32) -> bool {
-    c.max_local >= local_from && c.min_local <= local_to
+pub(crate) fn overlapping_chunk_refs(
+    chunk_refs: &[ChunkRef],
+    local_from: u32,
+    local_to: u32,
+) -> &[ChunkRef] {
+    let start = chunk_refs.partition_point(|c| c.max_local < local_from);
+    let end = chunk_refs.partition_point(|c| c.min_local <= local_to);
+    &chunk_refs[start..end]
 }
 
 pub fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
@@ -354,5 +358,34 @@ mod tests {
                 .expect("build order");
             assert_eq!(order, vec![ClauseKind::Topic1, ClauseKind::Address]);
         });
+    }
+
+    #[test]
+    fn overlapping_chunk_refs_uses_sorted_bounds() {
+        let chunk_refs = vec![
+            ChunkRef {
+                chunk_seq: 1,
+                min_local: 0,
+                max_local: 9,
+                count: 10,
+            },
+            ChunkRef {
+                chunk_seq: 2,
+                min_local: 10,
+                max_local: 19,
+                count: 10,
+            },
+            ChunkRef {
+                chunk_seq: 3,
+                min_local: 20,
+                max_local: 29,
+                count: 10,
+            },
+        ];
+
+        let overlap = overlapping_chunk_refs(&chunk_refs, 12, 24);
+        assert_eq!(overlap.len(), 2);
+        assert_eq!(overlap[0].chunk_seq, 2);
+        assert_eq!(overlap[1].chunk_seq, 3);
     }
 }
