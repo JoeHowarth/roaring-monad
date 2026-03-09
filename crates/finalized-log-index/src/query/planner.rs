@@ -1,7 +1,9 @@
 use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::config::BroadQueryPolicy;
 use crate::domain::filter::{Clause, LogFilter, QueryOptions};
-use crate::domain::keys::{local_range_for_shard, log_shard, manifest_key, stream_id, tail_key};
+use crate::domain::keys::{
+    MAX_LOCAL_ID, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
+};
 use crate::error::Result;
 use crate::store::traits::MetaStore;
 
@@ -198,15 +200,19 @@ async fn estimate_stream_overlap<M: MetaStore>(
     let mut count = 0u64;
     if let Some(m) = meta_store.get(&manifest_key(stream_id)).await? {
         let manifest = decode_manifest(&m.value)?;
-        for c in overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to) {
-            count = count.saturating_add(c.count as u64);
+        if is_full_shard_range(local_from, local_to) {
+            count = count.saturating_add(manifest.approx_count);
+        } else {
+            for c in overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to) {
+                count = count.saturating_add(c.count as u64);
+            }
         }
     }
 
     if let Some(t) = meta_store.get(&tail_key(stream_id)).await? {
         let tail = decode_tail(&t.value)?;
         for v in &tail {
-            if v >= local_from && v <= local_to {
+            if is_full_shard_range(local_from, local_to) || (v >= local_from && v <= local_to) {
                 count = count.saturating_add(1);
             }
         }
@@ -220,9 +226,16 @@ pub(crate) fn overlapping_chunk_refs(
     local_from: u32,
     local_to: u32,
 ) -> &[ChunkRef] {
+    if is_full_shard_range(local_from, local_to) {
+        return chunk_refs;
+    }
     let start = chunk_refs.partition_point(|c| c.max_local < local_from);
     let end = chunk_refs.partition_point(|c| c.min_local <= local_to);
     &chunk_refs[start..end]
+}
+
+pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
+    local_from == 0 && local_to == MAX_LOCAL_ID
 }
 
 pub fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
@@ -387,5 +400,27 @@ mod tests {
         assert_eq!(overlap.len(), 2);
         assert_eq!(overlap[0].chunk_seq, 2);
         assert_eq!(overlap[1].chunk_seq, 3);
+    }
+
+    #[test]
+    fn overlapping_chunk_refs_short_circuits_full_shard() {
+        let chunk_refs = vec![
+            ChunkRef {
+                chunk_seq: 1,
+                min_local: 0,
+                max_local: 9,
+                count: 10,
+            },
+            ChunkRef {
+                chunk_seq: 2,
+                min_local: 10,
+                max_local: 19,
+                count: 10,
+            },
+        ];
+
+        let overlap = overlapping_chunk_refs(&chunk_refs, 0, MAX_LOCAL_ID);
+        assert_eq!(overlap.len(), 2);
+        assert!(is_full_shard_range(0, MAX_LOCAL_ID));
     }
 }

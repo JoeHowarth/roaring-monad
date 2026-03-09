@@ -304,6 +304,46 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 - Boundary-focused tests are essential for bit-layout changes; small happy-path tests do not exercise the failure modes that matter.
 - Selected defaults: `log_locator_write_concurrency=256`, `stream_append_concurrency=64`.
 
+## 2026-03-09T19:14:49Z - Full-Shard Query Range Short-Circuits
+
+### Change Summary
+
+- Added a full-shard range helper to the query planner/executor path.
+- `overlapping_chunk_refs(...)` now immediately returns the entire slice when the requested local range spans the whole shard.
+- Planner overlap estimation now short-circuits to `manifest.approx_count` for full-shard ranges instead of summing chunk refs individually.
+- Executor tail loading now bypasses per-entry range checks for full-shard ranges.
+
+### Hypothesis
+
+- After switching chunk-range selection to binary search, interior shards in wide queries still paid unnecessary per-chunk and per-tail-entry range checks even though the requested range covered the whole shard.
+- Detecting the whole-shard case should remove that avoidable work on both the planner and executor paths.
+
+### Commands
+
+```bash
+cargo +nightly-2025-12-09 test -p finalized-log-index
+```
+
+### Before/After Metrics
+
+- Planner full-shard overlap estimation:
+  - before: binary-search to the full `chunk_refs` slice, then sum `count` across every chunk ref in the shard
+  - after: constant-time shortcut via `manifest.approx_count`
+- Executor full-shard tail handling:
+  - before: check every tail entry against `local_from..=local_to` even when the range was `0..=MAX_LOCAL_ID`
+  - after: insert the tail entries directly without range comparisons
+- Correctness verification:
+  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed, including new full-shard helper coverage
+
+### Interpretation
+
+- Wide queries still need to read the relevant chunk blobs, but the full-shard case no longer spends extra CPU on range filtering that cannot exclude anything.
+- The change is small but matches the new 24-bit layout better because wide multi-shard scans now encounter many interior shards that are fully covered by the query range.
+
+### Methodology Learnings
+
+- Once a range helper is shared between planner and executor, the next optimization step is usually to recognize degenerate cases such as empty or full-domain ranges and short-circuit them explicitly.
+
 ## 20260223T201235Z - Profiling Run stream-cache
 
 ### Commands

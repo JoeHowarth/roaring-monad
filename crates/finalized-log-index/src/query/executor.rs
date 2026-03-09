@@ -16,7 +16,8 @@ use crate::domain::keys::{
 use crate::domain::types::{Log, LogLocator, Topic32};
 use crate::error::{Error, Result};
 use crate::query::planner::{
-    ClauseKind, QueryPlan, clause_values_20, clause_values_32, overlapping_chunk_refs,
+    ClauseKind, QueryPlan, clause_values_20, clause_values_32, is_full_shard_range,
+    overlapping_chunk_refs,
 };
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -442,9 +443,15 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
 
     if let Some(trec) = meta_store.get(&tail_key(stream)).await? {
         let tail = decode_tail(&trec.value)?;
-        for v in &tail {
-            if v >= local_from && v <= local_to {
+        if is_full_shard_range(local_from, local_to) {
+            for v in &tail {
                 out.insert(v);
+            }
+        } else {
+            for v in &tail {
+                if v >= local_from && v <= local_to {
+                    out.insert(v);
+                }
             }
         }
     }
