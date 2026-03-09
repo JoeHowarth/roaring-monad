@@ -65,7 +65,7 @@ There are two index levels:
 - block-level stream:
   `topic0_block`
 
-`topic0_block` is a coarse prefilter by block number. `topic0_log` is a finer log-level filter, but it is only enabled for sparse signatures through the `topic0_mode` / `topic0_stats` mechanism in ingest.
+`topic0_block` is a coarse prefilter by block number. `topic0_log` is an always-on exact log-level filter. `topic0_block` is still maintained once per `(topic0, block)`, but normal indexed topic0 queries rely on `topic0_log` and do not need to prefilter through `topic0_block`.
 
 ### 3. Tail vs sealed chunks
 
@@ -171,14 +171,13 @@ Focus especially on these regions:
 - `apply_stream_appends`
 - `should_seal`
 - `store_state` / `store_manifest`
-- `update_one_topic0_stats`
 
 Questions to answer:
 
 - What must be written before the finalized head can advance?
 - Why does stream data use local IDs while block metadata uses global ranges?
 - How does `StrictCas` differ from `SingleWriterFast`?
-- Why does topic0 have both block-level and log-level indexes?
+- Why is `topic0_block` still persisted even though `topic0_log` is exact and always available?
 
 ### Stage 5. Walk query end to end
 
@@ -203,7 +202,7 @@ Questions to answer:
 - Why does the planner estimate overlap from manifests and tails instead of reading every chunk?
 - How do binary search and full-shard shortcuts reduce per-query manifest work?
 - Why does the executor still do `exact_match` after using indexes?
-- How does `topic0_block` narrow blocks independently of `topic0_log`?
+- Why can the executor skip `topic0_block` work once `Topic0Log` is already part of the candidate plan?
 
 ### Stage 6. Learn the storage abstraction
 
@@ -238,7 +237,7 @@ If you only remember five facts, remember these:
 2. Full logs live in packed blobs; queries usually reason about bitmap streams first.
 3. Each secondary index stream is split into mutable tail plus immutable chunk history.
 4. Query planning is mainly about choosing the cheapest clause order or falling back to block scan.
-5. Topic0 is special: it has a block-level always-on index and a selectively enabled log-level index.
+5. Topic0 is special: it has both a block-level stream and an always-on exact log-level stream, but ordinary indexed topic0 queries are driven by `topic0_log`.
 
 ## What To Read After the Core
 

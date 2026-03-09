@@ -104,8 +104,6 @@ meta_store:
     "log_locator_pages/<page_start_log_id>" -> {slot -> LogLocator}
     "manifests/<stream_id>" -> Manifest
     "tails/<stream_id>" -> roaring_bitmap_of_local_ids
-    "topic0_mode/<topic0>" -> Topic0Mode
-    "topic0_stats/<topic0>" -> Topic0Stats
 
 blob_store:
     "log_packs/<first_log_id>" -> packed_log_bytes
@@ -234,9 +232,8 @@ def collect_stream_appends(block, first_log_id, epoch):
                 out[f"topic0_block/{topic0}/{block_shard}"].add(local_block_num)
                 topic0_seen_once_per_block.add(topic0)
 
-            # Only sometimes index topic0 at log level
-            if topic0_log_enabled(topic0, block.block_num):
-                out[f"topic0_log/{topic0}/{log_shard}"].add(local_log_id)
+            # Always index topic0 at log level
+            out[f"topic0_log/{topic0}/{log_shard}"].add(local_log_id)
 
         # Index topic1/topic2/topic3 at log level
         for topic_index in [1, 2, 3]:
@@ -244,7 +241,6 @@ def collect_stream_appends(block, first_log_id, epoch):
                 topic = log.topics[topic_index]
                 out[f"topic{topic_index}/{topic}/{log_shard}"].add(local_log_id)
 
-    update_topic0_modes_for_block(block.block_num, topic0_seen_once_per_block, epoch)
     return convert_sets_to_sorted_lists(out)
 ```
 
@@ -294,40 +290,21 @@ def should_seal(tail, last_seal_time, now_time):
     return False
 ```
 
-## Topic0 Adaptive Indexing
+## Topic0 Indexing
 
 ```python
-def update_topic0_modes_for_block(block_num, seen_signatures, epoch):
-    for topic0 in seen_signatures:
-        update_one_topic0_stats(topic0, block_num, seen_in_block=True, epoch=epoch)
+topic0_block:
+    one bitmap entry per matching block
 
-
-def update_one_topic0_stats(topic0, block_num, seen_in_block, epoch):
-    stats = load_topic0_stats(topic0) or default_topic0_stats()
-    mode = load_topic0_mode(topic0) or Topic0Mode(log_enabled=False, enabled_from_block=0)
-
-    stats.advance_window_to(block_num, seen_in_block)
-
-    if should_flush_stats(block_num):
-        store_topic0_stats(topic0, stats, epoch)
-
-    frequency_ratio = stats.blocks_seen_in_window / effective_window_size(stats, block_num)
-
-    if mode.log_enabled is False and frequency_ratio < 0.001:
-        mode.log_enabled = True
-        mode.enabled_from_block = block_num
-        store_topic0_mode(topic0, mode, epoch)
-
-    elif mode.log_enabled is True and frequency_ratio > 0.01:
-        mode.log_enabled = False
-        store_topic0_mode(topic0, mode, epoch)
+topic0_log:
+    one bitmap entry per matching log
 ```
 
 Interpretation:
 
-- rare topic0 signatures get a dedicated log-level index
-- common topic0 signatures do not, because their stream would be too large and not selective enough
-- block-level `topic0_block` is still always maintained
+- `topic0_log` is the exact topic0 filter used by normal indexed queries
+- `topic0_block` remains available as a coarser per-block stream
+- both indexes share the same manifest/tail/chunk lifecycle as the other streams
 
 ## Query Flow
 
@@ -466,7 +443,8 @@ def execute_plan(meta_store, blob_store, plan):
         clause_sets.append(candidate_ids)
 
     candidates = intersect_all_sets(clause_sets)
-    topic0_blocks = maybe_fetch_topic0_block_prefilter(meta_store, blob_store, plan)
+    topic0_blocks = None if "topic0_log" in plan.clause_order else \
+        maybe_fetch_topic0_block_prefilter(meta_store, blob_store, plan)
 
     out = []
     for log_id in candidates:

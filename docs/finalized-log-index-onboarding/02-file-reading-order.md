@@ -28,7 +28,6 @@ This is the recommended file order for reading the indexing and query core. The 
    - `Block`
    - `BlockMeta`
    - `MetaState`
-   - `Topic0Mode` and `Topic0Stats`
 
 5. `crates/finalized-log-index/src/domain/filter.rs`
    Look for:
@@ -87,15 +86,12 @@ You should now understand what the ingest path writes and what the query path la
     - `should_seal`
     - `load_state` / `store_state`
     - `load_manifest` / `store_manifest`
-    - `topic0_log_enabled`
-    - `update_topic0_modes_for_block`
-    - `update_one_topic0_stats`
 
     Questions to hold while reading:
     - How are global log IDs assigned?
     - Why are locator pages written before stream appends complete?
     - When does a tail become a chunk?
-    - What governs whether `topic0_log` exists for a signature?
+    - Why are both `topic0_block` and `topic0_log` still written for topic0?
 
 12. `crates/finalized-log-index/src/ingest/chunk_manager.rs`
     Purpose: older/smaller extraction of the seal logic. Useful as a simplified conceptual version, even though `engine.rs` carries the full active path.
@@ -149,6 +145,7 @@ Why this order:
 - first understand how candidate sets are built
 - then see how shard-local ranges are pushed down so binary search can isolate the overlapping chunk slice
 - then note the full-shard fast path, where the planner uses manifest counts directly and the executor skips pointless range checks
+- then notice that indexed topic0 queries can skip `topic0_block` reads once `Topic0Log` is in the clause plan
 - then understand how actual logs are materialized
 - then look at the fallback scan path
 

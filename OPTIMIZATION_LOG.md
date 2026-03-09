@@ -827,3 +827,35 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 - Scylla remains the largest single backend consumer, but no longer dominates as heavily as earlier runs.
 - Current run averages: benchmarking process `~46.67%` CPU, Scylla `~56.78%` CPU, MinIO `~21.28%` CPU.
 - Practical interpretation: ingest pressure is now split between app-side stream/index work and Scylla meta writes, with less acute DB hotspot behavior than earlier stages.
+
+## 2026-03-09T20:01:47Z - Always-On `topic0_log`
+
+### Summary
+
+- Removed adaptive `topic0_mode` / `topic0_stats` state and now write `topic0_log` unconditionally for every observed `topic0`.
+- The planner now treats `topic0_log` like the other exact log-level clauses, even when the estimated overlap is zero.
+- The executor skips `topic0_block` prefilter reads when `Topic0Log` is already in the clause plan.
+
+### Hypothesis
+
+- Always-on `topic0_log` should make topic0 query semantics simpler and avoid partial-coverage ambiguity.
+- Indexed topic0 queries should no longer spend work on redundant `topic0_block` reads.
+
+### Commands
+
+```bash
+cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p benchmarking
+```
+
+### Metrics
+
+- Correctness verification only in this change set.
+- `finalized-log-index`: `40` tests passed.
+- `benchmarking`: crate compiled and test target completed with no test failures.
+- No before/after performance benchmark has been run yet for always-on `topic0_log`.
+
+### Interpretation
+
+- The semantic simplification is implemented and covered by regression tests.
+- Performance impact still needs a dedicated ingest/query benchmark before deciding whether `topic0_block` remains worthwhile.
