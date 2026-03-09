@@ -236,9 +236,7 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 fmt --all
 cargo +nightly-2025-12-09 test -p finalized-log-index
-cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-features -- -D clippy::suspicious -D clippy::style -D clippy::clone_on_copy -D clippy::redundant_clone -D clippy::iter_kv_map -D clippy::iter_nth -D clippy::unnecessary_cast -D clippy::filter_next -D clippy::needless_lifetimes -D clippy::useless_conversion -D clippy::useless_vec -D clippy::needless_question_mark -D clippy::bool_comparison -D unused_imports -D unused_parens -D deprecated -A clippy::type_complexity -A clippy::int_plus_one -A clippy::uninlined-format-args -A clippy::enum-variant-names -A clippy::mutable_key_type -A clippy::large_enum_variant -A clippy::doc-overindented-list-items
 ```
 
 ### Before/After Metrics
@@ -280,9 +278,7 @@ cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-feat
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 fmt --all
 cargo +nightly-2025-12-09 test -p finalized-log-index
-cargo +nightly-2025-12-09 clippy -p finalized-log-index --all-targets --all-features -- -D clippy::suspicious -D clippy::style -D clippy::clone_on_copy -D clippy::redundant_clone -D clippy::iter_kv_map -D clippy::iter_nth -D clippy::unnecessary_cast -D clippy::filter_next -D clippy::needless_lifetimes -D clippy::useless_conversion -D clippy::useless_vec -D clippy::needless_question_mark -D clippy::bool_comparison -D unused_imports -D unused_parens -D deprecated -A clippy::type_complexity -A clippy::int_plus_one -A clippy::uninlined-format-args -A clippy::enum-variant-names -A clippy::mutable_key_type -A clippy::large_enum_variant -A clippy::doc-overindented-list-items
 ```
 
 ### Before/After Metrics

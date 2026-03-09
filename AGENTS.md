@@ -39,6 +39,7 @@ Optimization and Profiling Log Discipline:
 - Keep a running log in the repo root at `OPTIMIZATION_LOG.md`.
 - After each optimization attempt, append:
   timestamp, change summary, hypothesis, exact commands, and before/after metrics.
+- Do not include routine verification commands such as `fmt` or `clippy` in optimization-log command lists; only include commands that materially measure, profile, or exercise the optimization itself.
 - After each profiling run, append:
   workload range/shape, environment settings, tooling used, bottleneck evidence, and interpretation.
 - Continuously capture methodology learnings:
