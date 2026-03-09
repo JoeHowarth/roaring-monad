@@ -12,19 +12,18 @@ It also outlines a concrete implementation plan for moving to always-on `topic0_
 
 ## Current Decision
 
-The current implementation keeps both `topic0_block` and `topic0_log`, and `topic0_log` is always indexed.
+The current implementation treats `topic0` exactly like the other topic filters and indexes only `topic0_log`.
 
 That means:
 
 - topic0 queries have a stable exact log-level stream
-- the planner can treat `topic0_log` like the other exact log-level clauses
-- the executor can skip `topic0_block` prefilter work when `Topic0Log` is already part of the plan
+- the planner can treat `topic0` exactly like `topic1`, `topic2`, and `topic3`
+- the executor no longer carries a separate block-level topic0 prefilter path
 
 ## Cost Framing
 
-- `topic0_block` is always indexed once per `(topic0, block)` when a signature appears in a block.
-- `topic0_log` is always indexed once per matching log.
-- the main cost tradeoff is no longer correctness complexity; it is write and storage amplification for hot signatures.
+- `topic0_log` is indexed once per matching log.
+- the main tradeoff is write and storage amplification for hot signatures versus simpler exact-query semantics.
 
 ## Cost Model
 
@@ -61,7 +60,7 @@ Notes:
 - The main storage cost of always-on `topic0_log` is chunk blobs, not manifests.
 - The `24`-bit local layout keeps per-shard manifests reasonable even for hot signatures. One completely full shard is about `8604` chunks and about `172 KB` of manifest refs.
 
-## Comparison With `topic0_block`
+## Historical Comparison With `topic0_block`
 
 `topic0_block` stores one entry per block, not one entry per matching log.
 
@@ -135,14 +134,13 @@ Always-on `topic0_log` is unattractive if:
 
 ## Follow-Up Options
 
-### 1. Revisit whether `topic0_block` should remain
+### 1. Measure the cost of removing `topic0_block`
 
-After unconditional `topic0_log` is working:
+The remaining question is operational rather than architectural:
 
-- measure whether `topic0_block` still improves any important workloads
-- if not, consider removing `topic0_block` as a second cleanup step
-
-This should be a separate decision. Keeping it at first reduces migration risk and preserves optional block-level planning heuristics.
+- how much ingest write volume dropped
+- whether any broad topic0 workload regressed materially
+- whether the simpler query path changes candidate or materialization costs in practice
 
 ## Testing Plan
 
@@ -153,8 +151,8 @@ This should be a separate decision. Keeping it at first reduces migration risk a
 
 ### Cleanup
 
-- add planner tests showing `Topic0Log` is used like any other exact clause
-- add executor tests showing `topic0_block` is skipped when `Topic0Log` is already applied
+- add planner tests showing `topic0` is used like any other exact clause
+- add executor tests showing topic0 queries load only `topic0_log` chunks
 
 ### Performance
 
@@ -170,4 +168,4 @@ This should be a separate decision. Keeping it at first reduces migration risk a
 
 1. Measure ingest throughput with a workload that has hot `topic0` signatures at `1`, `10`, and `100` matching logs per block.
 2. Measure per-signature manifest and chunk growth over fixed block windows.
-3. Compare query latency for topic0-heavy workloads before deciding whether `topic0_block` is still worth keeping.
+3. Compare query latency for topic0-heavy workloads against the previous hybrid design.

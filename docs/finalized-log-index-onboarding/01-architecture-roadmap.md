@@ -41,7 +41,7 @@ The main object is `FinalizedIndexService` in `crates/finalized-log-index/src/ap
   the physical identifier for one secondary-index stream, built as:
   `"<index_kind>/<hex-encoded value>/<shard>"`
 - `index_kind`:
-  one of the logical index families such as `addr`, `topic0_block`, `topic0_log`, `topic1`, `topic2`, or `topic3`
+  one of the logical index families such as `addr`, `topic0_log`, `topic1`, `topic2`, or `topic3`
 - `manifest`:
   the per-`stream_id` metadata record listing sealed chunk blobs for that stream
 - `tail`:
@@ -58,14 +58,15 @@ Why it matters:
 
 ### 2. Two kinds of query acceleration
 
-There are two index levels:
+The query path uses log-level streams:
 
-- log-level streams:
-  `addr`, `topic0_log`, `topic1`, `topic2`, `topic3`
-- block-level stream:
-  `topic0_block`
+- `addr`
+- `topic0_log`
+- `topic1`
+- `topic2`
+- `topic3`
 
-`topic0_block` is a coarse prefilter by block number. `topic0_log` is an always-on exact log-level filter. `topic0_block` is still maintained once per `(topic0, block)`, but normal indexed topic0 queries rely on `topic0_log` and do not need to prefilter through `topic0_block`.
+`topic0` is handled the same way as the other topic filters: it is an exact log-level stream, not a separate block-level special case.
 
 ### 3. Tail vs sealed chunks
 
@@ -177,7 +178,7 @@ Questions to answer:
 - What must be written before the finalized head can advance?
 - Why does stream data use local IDs while block metadata uses global ranges?
 - How does `StrictCas` differ from `SingleWriterFast`?
-- Why is `topic0_block` still persisted even though `topic0_log` is exact and always available?
+- Why is `topic0` now just another log-level stream instead of a special hybrid path?
 
 ### Stage 5. Walk query end to end
 
@@ -202,7 +203,7 @@ Questions to answer:
 - Why does the planner estimate overlap from manifests and tails instead of reading every chunk?
 - How do binary search and full-shard shortcuts reduce per-query manifest work?
 - Why does the executor still do `exact_match` after using indexes?
-- Why can the executor skip `topic0_block` work once `Topic0Log` is already part of the candidate plan?
+- Why does `topic0` now fit the same mental model as `topic1`, `topic2`, and `topic3`?
 
 ### Stage 6. Learn the storage abstraction
 
@@ -237,7 +238,7 @@ If you only remember five facts, remember these:
 2. Full logs live in packed blobs; queries usually reason about bitmap streams first.
 3. Each secondary index stream is split into mutable tail plus immutable chunk history.
 4. Query planning is mainly about choosing the cheapest clause order or falling back to block scan.
-5. Topic0 is special: it has both a block-level stream and an always-on exact log-level stream, but ordinary indexed topic0 queries are driven by `topic0_log`.
+5. Topic0 now behaves like the other topic clauses: it is an exact log-level stream that participates in candidate intersection.
 
 ## What To Read After the Core
 

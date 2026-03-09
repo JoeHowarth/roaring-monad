@@ -91,7 +91,7 @@ You should now understand what the ingest path writes and what the query path la
     - How are global log IDs assigned?
     - Why are locator pages written before stream appends complete?
     - When does a tail become a chunk?
-    - Why are both `topic0_block` and `topic0_log` still written for topic0?
+    - Why is `topic0` now just another log-level stream?
 
 12. `crates/finalized-log-index/src/ingest/chunk_manager.rs`
     Purpose: older/smaller extraction of the seal logic. Useful as a simplified conceptual version, even though `engine.rs` carries the full active path.
@@ -132,7 +132,6 @@ You should now be able to explain how one block mutates:
     Read this file in this internal order:
     - `execute_plan`
     - `fetch_union_log_level`
-    - `fetch_union_block_level`
     - `load_stream_entries`
     - `maybe_merge_chunk`
     - `intersect_sets`
@@ -145,7 +144,7 @@ Why this order:
 - first understand how candidate sets are built
 - then see how shard-local ranges are pushed down so binary search can isolate the overlapping chunk slice
 - then note the full-shard fast path, where the planner uses manifest counts directly and the executor skips pointless range checks
-- then notice that indexed topic0 queries can skip `topic0_block` reads once `Topic0Log` is in the clause plan
+- then notice that `topic0` uses the same indexed path as the other topic clauses
 - then understand how actual logs are materialized
 - then look at the fallback scan path
 

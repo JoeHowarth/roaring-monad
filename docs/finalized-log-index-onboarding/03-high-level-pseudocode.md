@@ -14,7 +14,7 @@ The goal is to show:
 global_log_id = monotonically increasing 64-bit ID assigned to each ingested log
 shard = high bits of a global_log_id or block number
 local_value = low bits stored inside a shard-local bitmap
-index_kind = one of: "addr", "topic0_block", "topic0_log", "topic1", "topic2", "topic3"
+index_kind = one of: "addr", "topic0_log", "topic1", "topic2", "topic3"
 stream_id = f"{index_kind}/{hex_encoded_index_value}/{shard_hex}"
 ```
 
@@ -23,7 +23,6 @@ Examples:
 ```python
 stream_id("addr", address_20_bytes, shard)
 stream_id("topic0_log", topic0_32_bytes, shard)
-stream_id("topic0_block", topic0_32_bytes, block_shard)
 ```
 
 ## Main Data Shapes
@@ -212,8 +211,6 @@ class IngestEngine:
 ```python
 def collect_stream_appends(block, first_log_id, epoch):
     out = {}  # stream_id -> set(local_ids)
-    topic0_seen_once_per_block = set()
-
     for i, log in enumerate(block.logs):
         global_log_id = first_log_id + i
         log_shard = high40_bits(global_log_id)
@@ -224,13 +221,6 @@ def collect_stream_appends(block, first_log_id, epoch):
 
         if log.topics has at least one item:
             topic0 = log.topics[0]
-
-            # Always index topic0 once per block at block level
-            block_shard = high40_bits(block.block_num)
-            local_block_num = low24_bits(block.block_num)
-            if topic0 not in topic0_seen_once_per_block:
-                out[f"topic0_block/{topic0}/{block_shard}"].add(local_block_num)
-                topic0_seen_once_per_block.add(topic0)
 
             # Always index topic0 at log level
             out[f"topic0_log/{topic0}/{log_shard}"].add(local_log_id)
@@ -293,9 +283,6 @@ def should_seal(tail, last_seal_time, now_time):
 ## Topic0 Indexing
 
 ```python
-topic0_block:
-    one bitmap entry per matching block
-
 topic0_log:
     one bitmap entry per matching log
 ```
@@ -303,8 +290,7 @@ topic0_log:
 Interpretation:
 
 - `topic0_log` is the exact topic0 filter used by normal indexed queries
-- `topic0_block` remains available as a coarser per-block stream
-- both indexes share the same manifest/tail/chunk lifecycle as the other streams
+- `topic0` now shares the same manifest/tail/chunk lifecycle as the other topic streams
 
 ## Query Flow
 
@@ -443,9 +429,6 @@ def execute_plan(meta_store, blob_store, plan):
         clause_sets.append(candidate_ids)
 
     candidates = intersect_all_sets(clause_sets)
-    topic0_blocks = None if "topic0_log" in plan.clause_order else \
-        maybe_fetch_topic0_block_prefilter(meta_store, blob_store, plan)
-
     out = []
     for log_id in candidates:
         log = load_log_by_id(meta_store, blob_store, log_id)
@@ -455,8 +438,6 @@ def execute_plan(meta_store, blob_store, plan):
         if log.block_num < plan.clipped_from_block:
             continue
         if log.block_num > plan.clipped_to_block:
-            continue
-        if topic0_blocks is not None and log.block_num not in topic0_blocks:
             continue
         if not exact_match(log, plan.filter):
             continue
@@ -603,6 +584,6 @@ The real Rust code adds:
 
 - async concurrency
 - CAS and fencing behavior
-- caches for stream and topic0 state
+- caches for stream state
 - degradation/throttling logic
 - error handling and codec validation

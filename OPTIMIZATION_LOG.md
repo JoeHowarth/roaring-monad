@@ -859,3 +859,34 @@ cargo +nightly-2025-12-09 test -p benchmarking
 
 - The semantic simplification is implemented and covered by regression tests.
 - Performance impact still needs a dedicated ingest/query benchmark before deciding whether `topic0_block` remains worthwhile.
+
+## 2026-03-09T20:01:47Z - Remove `topic0_block`
+
+### Summary
+
+- Removed `topic0_block` from ingest and query execution.
+- `topic0` now behaves like the other topic clauses and is backed only by the `topic0_log` stream.
+- The executor no longer carries a separate block-level topic0 prefilter path.
+
+### Hypothesis
+
+- Removing `topic0_block` should reduce ingest/storage overhead and simplify the query model without changing indexed topic0 query results.
+
+### Commands
+
+```bash
+cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p benchmarking
+```
+
+### Metrics
+
+- Correctness verification only in this change set.
+- `finalized-log-index`: `40` tests passed after removing the block-level topic0 path.
+- `benchmarking`: crate compiled and test target completed with no test failures.
+- No before/after performance benchmark has been run yet for the removal.
+
+### Interpretation
+
+- The codebase now has one exact topic0 path instead of a hybrid topic0 design.
+- A dedicated ingest benchmark is still needed to quantify the write-volume reduction.
