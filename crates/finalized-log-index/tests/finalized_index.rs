@@ -442,7 +442,7 @@ fn fs_store_adapter_roundtrip() {
 }
 
 #[test]
-fn ingest_always_writes_topic0_log_for_cold_signature() {
+fn ingest_always_writes_topic0_for_cold_signature() {
     block_on(async {
         let svc = FinalizedIndexService::new(
             Config {
@@ -467,7 +467,7 @@ fn ingest_always_writes_topic0_log_for_cold_signature() {
             svc.ingest_finalized_block(block).await.expect("ingest");
         }
 
-        let sid = stream_id("topic0_log", &sig, log_shard(0));
+        let sid = stream_id("topic0", &sig, log_shard(0));
         let rec = svc
             .ingest
             .meta_store
@@ -628,7 +628,7 @@ fn query_only_loads_overlapping_address_chunks() {
 }
 
 #[test]
-fn topic0_queries_use_only_topic0_log_chunks() {
+fn topic0_queries_use_only_topic0_chunks() {
     block_on(async {
         let blob = RecordingBlobStore::default();
         let svc = FinalizedIndexService::new(
@@ -668,12 +668,10 @@ fn topic0_queries_use_only_topic0_log_chunks() {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].block_num, 2);
 
-        let topic0_log_prefix = b"chunks/topic0_log/";
+        let topic0_prefix = b"chunks/topic0/";
         let log_pack_prefix = b"log_packs/";
         assert_eq!(
-            svc.ingest
-                .blob_store
-                .count_gets_with_prefix(topic0_log_prefix),
+            svc.ingest.blob_store.count_gets_with_prefix(topic0_prefix),
             1
         );
         assert_eq!(

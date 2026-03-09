@@ -828,17 +828,17 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 - Current run averages: benchmarking process `~46.67%` CPU, Scylla `~56.78%` CPU, MinIO `~21.28%` CPU.
 - Practical interpretation: ingest pressure is now split between app-side stream/index work and Scylla meta writes, with less acute DB hotspot behavior than earlier stages.
 
-## 2026-03-09T20:01:47Z - Always-On `topic0_log`
+## 2026-03-09T20:01:47Z - Always-On `topic0`
 
 ### Summary
 
-- Removed adaptive `topic0_mode` / `topic0_stats` state and now write `topic0_log` unconditionally for every observed `topic0`.
-- The planner now treats `topic0_log` like the other exact log-level clauses, even when the estimated overlap is zero.
+- Removed adaptive `topic0_mode` / `topic0_stats` state and now write `topic0` unconditionally for every observed `topic0`.
+- The planner now treats `topic0` like the other exact log-level clauses, even when the estimated overlap is zero.
 - The executor skips `topic0_block` prefilter reads when `Topic0Log` is already in the clause plan.
 
 ### Hypothesis
 
-- Always-on `topic0_log` should make topic0 query semantics simpler and avoid partial-coverage ambiguity.
+- Always-on `topic0` should make topic0 query semantics simpler and avoid partial-coverage ambiguity.
 - Indexed topic0 queries should no longer spend work on redundant `topic0_block` reads.
 
 ### Commands
@@ -853,7 +853,7 @@ cargo +nightly-2025-12-09 test -p benchmarking
 - Correctness verification only in this change set.
 - `finalized-log-index`: `40` tests passed.
 - `benchmarking`: crate compiled and test target completed with no test failures.
-- No before/after performance benchmark has been run yet for always-on `topic0_log`.
+- No before/after performance benchmark has been run yet for always-on `topic0`.
 
 ### Interpretation
 
@@ -865,7 +865,7 @@ cargo +nightly-2025-12-09 test -p benchmarking
 ### Summary
 
 - Removed `topic0_block` from ingest and query execution.
-- `topic0` now behaves like the other topic clauses and is backed only by the `topic0_log` stream.
+- `topic0` now behaves like the other topic clauses and is backed only by the `topic0` stream.
 - The executor no longer carries a separate block-level topic0 prefilter path.
 
 ### Hypothesis

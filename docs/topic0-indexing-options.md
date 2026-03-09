@@ -5,14 +5,14 @@
 This note compares the cost and semantics of three `topic0` indexing choices:
 
 1. `topic0_block` only
-2. adaptive `topic0_log` plus always-on `topic0_block`
-3. always-on `topic0_log` plus always-on `topic0_block`
+2. adaptive `topic0` plus always-on `topic0_block`
+3. always-on `topic0` plus always-on `topic0_block`
 
-It also outlines a concrete implementation plan for moving to always-on `topic0_log`.
+It also outlines a concrete implementation plan for moving to always-on `topic0`.
 
 ## Current Decision
 
-The current implementation treats `topic0` exactly like the other topic filters and indexes only `topic0_log`.
+The current implementation treats `topic0` exactly like the other topic filters and indexes only `topic0`.
 
 That means:
 
@@ -22,7 +22,7 @@ That means:
 
 ## Cost Framing
 
-- `topic0_log` is indexed once per matching log.
+- `topic0` is indexed once per matching log.
 - the main tradeoff is write and storage amplification for hot signatures versus simpler exact-query semantics.
 
 ## Cost Model
@@ -35,7 +35,7 @@ Assumptions:
 - manifest `ChunkRef` size: `20` bytes
 - local ID layout: `24` local bits, so one full shard holds `16,777,216` entries
 
-Derived formulas for always-on `topic0_log` for one signature:
+Derived formulas for always-on `topic0` for one signature:
 
 - `entries/year = logs_per_block * 77,760,000`
 - `chunks/year ~= entries/year / 1950`
@@ -47,7 +47,7 @@ Derived formulas for always-on `topic0_log` for one signature:
 
 The table below is for one hot `topic0` signature that appears in every block.
 
-| Matching logs per block | `topic0_log` entries/year | Chunks/year | Manifest refs/year | Chunk blob target/year | Shards/year |
+| Matching logs per block | `topic0` entries/year | Chunks/year | Manifest refs/year | Chunk blob target/year | Shards/year |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 1 | 77.76M | 39.9k | 0.80 MB | 1.31 GB | 4.6 |
 | 10 | 777.60M | 398.8k | 7.98 MB | 13.07 GB | 46.3 |
@@ -57,7 +57,7 @@ The table below is for one hot `topic0` signature that appears in every block.
 Notes:
 
 - The chunk-blob column uses the configured `32 KiB` target as a rough upper-budget estimate, not a guaranteed exact byte count.
-- The main storage cost of always-on `topic0_log` is chunk blobs, not manifests.
+- The main storage cost of always-on `topic0` is chunk blobs, not manifests.
 - The `24`-bit local layout keeps per-shard manifests reasonable even for hot signatures. One completely full shard is about `8604` chunks and about `172 KB` of manifest refs.
 
 ## Historical Comparison With `topic0_block`
@@ -71,7 +71,7 @@ For a signature that appears in every block:
 - `topic0_block` manifest refs/year: `0.80 MB`
 - `topic0_block` chunk blob target/year: `1.31 GB`
 
-So the multiplier from `topic0_block` to always-on `topic0_log` is approximately the number of matching logs per matching block:
+So the multiplier from `topic0_block` to always-on `topic0` is approximately the number of matching logs per matching block:
 
 - `1` log/block: same order of magnitude
 - `10` logs/block: about `10x`
@@ -93,7 +93,7 @@ Cons:
 - weaker topic0 selectivity
 - more exact log materialization for topic0-heavy queries
 
-### adaptive `topic0_log`
+### adaptive `topic0`
 
 Pros:
 
@@ -103,14 +103,14 @@ Cons:
 
 - hard to reason about historical coverage
 - planner and executor need coverage-aware logic
-- easy to make `topic0_log` behave like a partial exact index
+- easy to make `topic0` behave like a partial exact index
 
-### always-on `topic0_log`
+### always-on `topic0`
 
 Pros:
 
 - simplest exact-query semantics
-- `topic0_log` is always safe to use as a normal clause
+- `topic0` is always safe to use as a normal clause
 - planner and executor become easier to reason about
 
 Cons:
@@ -120,13 +120,13 @@ Cons:
 
 ## Recommendation Framing
 
-Always-on `topic0_log` is attractive if:
+Always-on `topic0` is attractive if:
 
 - exact topic0 filtering is important for many queries
 - the hottest signatures do not reach extreme `100+ logs/block` regimes often
 - correctness and planner simplicity are worth extra write and storage cost
 
-Always-on `topic0_log` is unattractive if:
+Always-on `topic0` is unattractive if:
 
 - one or more signatures are expected to behave like chain-wide `Transfer`-style firehoses
 - storage budget is tight
@@ -146,17 +146,17 @@ The remaining question is operational rather than architectural:
 
 ### Correctness
 
-- add ingest tests proving `topic0_log` is written for all seen `topic0` values
+- add ingest tests proving `topic0` is written for all seen `topic0` values
 - add query tests proving `topic0` clauses return correct results across the entire range without any adaptive-mode assumptions
 
 ### Cleanup
 
 - add planner tests showing `topic0` is used like any other exact clause
-- add executor tests showing topic0 queries load only `topic0_log` chunks
+- add executor tests showing topic0 queries load only `topic0` chunks
 
 ### Performance
 
-- benchmark ingest before and after unconditional `topic0_log`
+- benchmark ingest before and after unconditional `topic0`
 - measure:
   - blocks/sec
   - logs/sec

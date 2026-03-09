@@ -111,7 +111,7 @@ pub async fn execute_plan<M: MetaStore, B: BlobStore>(
                 fetch_union_log_level(
                     meta_store,
                     blob_store,
-                    "topic0_log",
+                    "topic0",
                     &values,
                     plan.from_log_id,
                     plan.to_log_id_inclusive,

@@ -139,8 +139,6 @@ Keys:
 2. `manifest_segments/{stream_id}/{segment_id}` -> chunk refs segment
 3. `tails/{stream_id}` -> mutable roaring tail checkpoint
 4. `chunks/{stream_id}/{chunk_seq}` -> immutable chunk blob
-5. `topic0_mode/{sig}` -> hot/cold policy state
-6. `topic0_stats/{sig}` -> rolling-window counters/bitset for hot/cold mode transitions
 
 Required `ChunkRef` fields in manifest segments/header:
 
@@ -223,9 +221,7 @@ For finalized block `B`:
 6. Write canonical log records (`logs/*`).
 7. Write block metadata (`block_meta/*`, `block_hash_to_num/*`).
 8. Produce stream appends from each log:
-   - `addr`, `topic1`, `topic2`, `topic3` at log-level.
-   - `topic0_block` (dedup per block).
-   - `topic0_log` only if enabled for signature.
+   - `addr`, `topic0`, `topic1`, `topic2`, `topic3` at log-level.
 9. Apply appends to in-memory tails.
 10. Seal tails hitting thresholds into immutable chunks.
 11. Publish manifest updates via CAS.
@@ -292,21 +288,14 @@ Readers only trust chunk references reachable from current manifest.
 5. Resolve clipped range to log-id interval via `block_meta` endpoints.
 6. Compute shard fan-out:
    - log-level shards: `[from_log_id >> 32, to_log_id >> 32]`
-   - block-level shards for `topic0_block`: `[from_block >> 32, to_block >> 32]`
 7. For each clause value, discover overlapping streams across shard range, load overlapping chunks/tails, and union per-value bitmaps.
 8. Estimate per-clause selectivity from overlap-aware metadata:
    - sum `ChunkRef.count` for overlapping chunk refs
    - add overlap-aware tail counts
 9. Intersect clauses in estimated-selectivity order.
-10. Apply `topic0_block` as late block-membership filter over surviving candidates.
-11. Point-read candidate logs and exact-match filter.
-12. Stop early when `max_results` is reached.
-13. Return stable sorted output.
-
-Rationale for late `topic0_block` filtering:
-
-1. Avoids materializing block-expanded log-id masks.
-2. Cost is proportional to surviving candidate logs rather than `matched_blocks * logs_per_block`.
+10. Point-read candidate logs and exact-match filter.
+11. Stop early when `max_results` is reached.
+12. Return stable sorted output.
 
 OR-list guardrail:
 

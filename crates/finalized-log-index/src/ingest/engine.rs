@@ -228,7 +228,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
                 .insert(local);
 
             if let Some(topic0) = log.topics.first() {
-                out.entry(stream_id("topic0_log", topic0, shard))
+                out.entry(stream_id("topic0", topic0, shard))
                     .or_default()
                     .insert(local);
             }

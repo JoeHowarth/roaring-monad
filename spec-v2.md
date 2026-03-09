@@ -49,7 +49,7 @@ This crate assumes it is fed a finalized canonical block stream by an upstream c
 1. Roaring inverted indexes are the primary access path.
 2. Chunk blobs are immutable; manifests are mutable visibility pointers.
 3. Global log IDs are `uint64` and indexed as sharded roaring32 (`hi32` shard + `lo32` value).
-4. `topic0` is hybrid: always block-level, optional log-level for cold signatures.
+4. `topic0` is an exact log-level clause like the other topic filters.
 5. This crate indexes and serves finalized range only (`<= meta/state.indexed_finalized_head`).
 
 ---
@@ -118,8 +118,7 @@ Index kinds:
 - `topic1` (log-level)
 - `topic2` (log-level)
 - `topic3` (log-level)
-- `topic0_block` (block-level; shard by block_hi32)
-- `topic0_log` (log-level, enabled for cold signatures)
+- `topic0` (log-level)
 
 ### 6.1 Immutable Sealed Chunks
 
@@ -194,43 +193,13 @@ Persist tails at least:
 
 ### 7.3 Why Chunk Size Stays Large
 
-Small chunk sizes to force frequent seals cause severe metadata/read amplification, especially for block-level `topic0` streams with low append rate. Keep chunk size near page-efficient target and rely on tail persistence.
+Small chunk sizes to force frequent seals cause severe metadata/read amplification. Keep chunk size near page-efficient target and rely on tail persistence.
 
 ---
 
-## 8. `topic0` Hybrid Strategy
+## 8. `topic0` Exact Stream
 
-### 8.1 Always-On Block-Level
-
-Every `topic0` signature is indexed in `topic0_block` with per-block dedup.
-
-### 8.2 Optional Log-Level for Cold Signatures
-
-```
-topic0_mode/{sig} -> {
-  log_enabled: bool,
-  enabled_from_block: uint64
-}
-```
-
-Rolling-window bookkeeping state (for 50k-block policy) is persisted in:
-
-```
-topic0_stats/{sig} -> {
-  window_len: uint32,             // default 50_000
-  blocks_seen_in_window: uint32,  // count of blocks containing sig
-  ring_cursor: uint32,            // position in rolling ring
-  ring_bits: bytes                // one bit per block slot
-}
-```
-
-This state can be rebuilt from `topic0_block` if missing, but normal startup uses persisted state.
-
-Policy:
-
-- Enable log-level when signature appears in `< 0.1%` of blocks over rolling `50k` blocks.
-- Disable when it exceeds `1.0%` over rolling `50k` blocks.
-- Hysteresis prevents flapping.
+`topic0` is indexed exactly once per matching log and participates in the same planner and executor path as `topic1`, `topic2`, and `topic3`.
 
 ---
 
@@ -253,28 +222,17 @@ Policy:
 5. Resolve clipped block range to log-id interval via `BlockMeta` endpoints.
 6. Compute shard ranges from clipped log-id interval:
    - log-level shard range: `[from_log_id >> 32, to_log_id >> 32]`
-   - block-level shard range for `topic0_block`: `[from_block >> 32, to_block >> 32]`
 7. For each clause value, discover and read all overlapping shards in range, then union per-value bitmaps.
 8. Estimate clause cardinality from overlapping `ChunkRef.count` sums plus tail counts in range.
 9. Intersect clauses in ascending estimated cardinality.
-10. Apply block-level predicates (`topic0_block`) as late block-membership filter on surviving candidates.
-11. Fetch candidate `Logs`, run exact filter, return sorted `(block_num, tx_idx, log_idx)`.
-
-Rationale for Step 10:
-
-- Late `topic0_block` checking avoids materializing block-expanded log-id masks.
-- Complexity is proportional to surviving candidate logs, not `matched_blocks * logs_per_block`.
+10. Fetch candidate `Logs`, run exact filter, return sorted `(block_num, tx_idx, log_idx)`.
 
 Large OR-list guardrail:
 
 - If OR-list cardinality for any clause exceeds `planner.max_or_terms`, planner may return `query too broad` or switch to block-driven scan policy (operator-configured).
 - Default `planner.max_or_terms` is implementation-defined and must be surfaced in config/metrics.
 
-### 9.3 Topic0-Only Queries
-
-If query has only block-level `topic0` predicates and no selective log-level clauses, run block-driven scan over matched finalized blocks and exact-filter logs.
-
-### 9.4 `blockHash` Execution
+### 9.3 `blockHash` Execution
 
 1. If `fromBlock` or `toBlock` is also present: return `-32602` (invalid params).
 2. Lookup `BlockHashToNum[blockHash]`.

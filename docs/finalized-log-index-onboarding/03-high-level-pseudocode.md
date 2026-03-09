@@ -14,7 +14,7 @@ The goal is to show:
 global_log_id = monotonically increasing 64-bit ID assigned to each ingested log
 shard = high bits of a global_log_id or block number
 local_value = low bits stored inside a shard-local bitmap
-index_kind = one of: "addr", "topic0_log", "topic1", "topic2", "topic3"
+index_kind = one of: "addr", "topic0", "topic1", "topic2", "topic3"
 stream_id = f"{index_kind}/{hex_encoded_index_value}/{shard_hex}"
 ```
 
@@ -22,7 +22,7 @@ Examples:
 
 ```python
 stream_id("addr", address_20_bytes, shard)
-stream_id("topic0_log", topic0_32_bytes, shard)
+stream_id("topic0", topic0_32_bytes, shard)
 ```
 
 ## Main Data Shapes
@@ -223,7 +223,7 @@ def collect_stream_appends(block, first_log_id, epoch):
             topic0 = log.topics[0]
 
             # Always index topic0 at log level
-            out[f"topic0_log/{topic0}/{log_shard}"].add(local_log_id)
+            out[f"topic0/{topic0}/{log_shard}"].add(local_log_id)
 
         # Index topic1/topic2/topic3 at log level
         for topic_index in [1, 2, 3]:
@@ -283,13 +283,13 @@ def should_seal(tail, last_seal_time, now_time):
 ## Topic0 Indexing
 
 ```python
-topic0_log:
+topic0:
     one bitmap entry per matching log
 ```
 
 Interpretation:
 
-- `topic0_log` is the exact topic0 filter used by normal indexed queries
+- `topic0` is the exact topic0 filter used by normal indexed queries
 - `topic0` now shares the same manifest/tail/chunk lifecycle as the other topic streams
 
 ## Query Flow
@@ -351,7 +351,7 @@ class QueryEngine:
 def build_clause_order(meta_store, filter, from_log_id, to_log_id):
     estimates = []
 
-    for clause_kind in ["address", "topic1", "topic2", "topic3", "topic0_log"]:
+    for clause_kind in ["address", "topic1", "topic2", "topic3", "topic0"]:
         values = extract_values_for_clause(filter, clause_kind)
         if values is empty:
             continue

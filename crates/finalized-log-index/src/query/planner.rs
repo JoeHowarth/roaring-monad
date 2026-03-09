@@ -126,7 +126,7 @@ pub async fn build_clause_order<M: MetaStore>(
         if !values.is_empty() {
             let estimate = estimate_for_values(
                 meta_store,
-                "topic0_log",
+                "topic0",
                 &values,
                 from_log_id,
                 to_log_id_inclusive,

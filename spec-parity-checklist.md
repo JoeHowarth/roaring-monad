@@ -20,7 +20,7 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Binary codecs with decode validation: `MetaState`, `BlockMeta`, `Log`, `Manifest`, `ChunkBlob`, tails.
 - `Done` Stream identity includes shard dimension.
 - `Done` `ChunkRef` includes `{chunk_seq,min_local,max_local,count}`.
-- `Done` `topic0_mode/*` + `topic0_stats/*` persisted with versioned codecs.
+- `Done` `topic0` uses the same exact log-level stream model as the other topic filters.
 
 ## 3. Chunking and Tail Lifecycle
 
@@ -52,11 +52,9 @@ Implementation target: `crates/finalized-log-index`
 - `Done` Tail re-append idempotency via roaring set semantics.
 - `Partial` Lease/fencing semantics are enforced by in-memory/fs adapters but not by a distributed lease service.
 
-## 6. Topic0 Hybrid Strategy
+## 6. Topic0 Exact Stream
 
-- `Done` Always-on `topic0_block` append path.
-- `Done` Optional `topic0_log` path controlled by mode record.
-- `Done` Rolling-window hysteresis transitions implemented and tested (`<0.1%` enable, `>1.0%` disable).
+- `Done` Exact `topic0` path controlled like the other topic filters.
 
 ## 7. Recovery and Degraded Mode
 

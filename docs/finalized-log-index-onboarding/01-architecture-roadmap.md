@@ -41,7 +41,7 @@ The main object is `FinalizedIndexService` in `crates/finalized-log-index/src/ap
   the physical identifier for one secondary-index stream, built as:
   `"<index_kind>/<hex-encoded value>/<shard>"`
 - `index_kind`:
-  one of the logical index families such as `addr`, `topic0_log`, `topic1`, `topic2`, or `topic3`
+  one of the logical index families such as `addr`, `topic0`, `topic1`, `topic2`, or `topic3`
 - `manifest`:
   the per-`stream_id` metadata record listing sealed chunk blobs for that stream
 - `tail`:
@@ -61,7 +61,7 @@ Why it matters:
 The query path uses log-level streams:
 
 - `addr`
-- `topic0_log`
+- `topic0`
 - `topic1`
 - `topic2`
 - `topic3`
