@@ -12,13 +12,13 @@ It also outlines a concrete implementation plan for moving to always-on `topic0`
 
 ## Current Decision
 
-The current implementation treats `topic0` exactly like the other topic filters and indexes only `topic0`.
+The implementation indexes `topic0` as an exact log-level stream.
 
 That means:
 
 - topic0 queries have a stable exact log-level stream
-- the planner can treat `topic0` exactly like `topic1`, `topic2`, and `topic3`
-- the executor no longer carries a separate block-level topic0 prefilter path
+- the planner uses `topic0` as an exact clause
+- the executor uses a single topic0 stream path
 
 ## Cost Framing
 
@@ -136,7 +136,7 @@ Always-on `topic0` is unattractive if:
 
 ### 1. Measure the cost of removing `topic0_block`
 
-The remaining question is operational rather than architectural:
+The remaining questions are operational:
 
 - how much ingest write volume dropped
 - whether any broad topic0 workload regressed materially
@@ -168,4 +168,4 @@ The remaining question is operational rather than architectural:
 
 1. Measure ingest throughput with a workload that has hot `topic0` signatures at `1`, `10`, and `100` matching logs per block.
 2. Measure per-signature manifest and chunk growth over fixed block windows.
-3. Compare query latency for topic0-heavy workloads against the previous hybrid design.
+3. Compare query latency for topic0-heavy workloads across representative ranges and selectivities.

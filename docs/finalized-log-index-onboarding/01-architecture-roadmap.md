@@ -66,8 +66,6 @@ The query path uses log-level streams:
 - `topic2`
 - `topic3`
 
-`topic0` is handled the same way as the other topic filters: it is an exact log-level stream, not a separate block-level special case.
-
 ### 3. Tail vs sealed chunks
 
 Each stream has:
@@ -178,7 +176,7 @@ Questions to answer:
 - What must be written before the finalized head can advance?
 - Why does stream data use local IDs while block metadata uses global ranges?
 - How does `StrictCas` differ from `SingleWriterFast`?
-- Why is `topic0` now just another log-level stream instead of a special hybrid path?
+- What streams are written for each log during ingest?
 
 ### Stage 5. Walk query end to end
 
@@ -203,7 +201,7 @@ Questions to answer:
 - Why does the planner estimate overlap from manifests and tails instead of reading every chunk?
 - How do binary search and full-shard shortcuts reduce per-query manifest work?
 - Why does the executor still do `exact_match` after using indexes?
-- Why does `topic0` now fit the same mental model as `topic1`, `topic2`, and `topic3`?
+- How does `topic0` participate in candidate generation?
 
 ### Stage 6. Learn the storage abstraction
 
@@ -238,7 +236,7 @@ If you only remember five facts, remember these:
 2. Full logs live in packed blobs; queries usually reason about bitmap streams first.
 3. Each secondary index stream is split into mutable tail plus immutable chunk history.
 4. Query planning is mainly about choosing the cheapest clause order or falling back to block scan.
-5. Topic0 now behaves like the other topic clauses: it is an exact log-level stream that participates in candidate intersection.
+5. Topic clauses participate in candidate intersection through exact log-level streams.
 
 ## What To Read After the Core
 

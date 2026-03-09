@@ -91,7 +91,7 @@ You should now understand what the ingest path writes and what the query path la
     - How are global log IDs assigned?
     - Why are locator pages written before stream appends complete?
     - When does a tail become a chunk?
-    - Why is `topic0` now just another log-level stream?
+    - Which streams are appended for each log?
 
 12. `crates/finalized-log-index/src/ingest/chunk_manager.rs`
     Purpose: older/smaller extraction of the seal logic. Useful as a simplified conceptual version, even though `engine.rs` carries the full active path.
