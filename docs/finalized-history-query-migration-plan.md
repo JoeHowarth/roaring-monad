@@ -117,8 +117,8 @@ For wave 1 that means a transport-free `query_logs` API shaped around `eth_query
 - resolved block range
 - explicit traversal order, with ascending-only support in wave 1
 - requested primary-object limit
-- optional continuation from a prior page using a log-ID token
-- page metadata containing resolved `fromBlock`, `toBlock`, `cursorBlock`, a continuation token, and an explicit completion signal
+- optional resume from a declarative log-ID boundary
+- page metadata containing resolved `fromBlock`, `toBlock`, `cursorBlock`, a next-page resume token, and an explicit completion signal
 
 This layer should not parse JSON strings, assign JSON-RPC error codes, or build the final normalized response envelope.
 
@@ -158,7 +158,7 @@ pub struct QueryLogsRequest {
     pub from_block: u64,
     pub to_block: u64,
     pub order: QueryOrder,
-    pub after_log_id: Option<u64>,
+    pub resume_log_id: Option<u64>,
     pub limit: usize,
     pub filter: LogFilter,
 }
@@ -178,7 +178,7 @@ pub struct QueryPageMeta {
     pub resolved_to_block: BlockRef,
     pub cursor_block: BlockRef,
     pub has_more: bool,
-    pub continuation_log_id: Option<u64>,
+    pub next_resume_log_id: Option<u64>,
 }
 
 pub struct QueryPage<T> {
@@ -206,14 +206,18 @@ Important notes:
 - `QueryLogsRequest` is transport-free. The RPC crate is responsible for mapping JSON-RPC input into it.
 - `ExecutionBudget` is server-side control, not part of the RPC method request.
 - Wave 1 should keep `ExecutionBudget` minimal and only include controls the engine actually enforces now, namely result count.
+- `limit` must be at least `1`. `limit = 0` is invalid in wave 1.
 - The effective primary-object page size is `min(request.limit, budget.max_results.unwrap_or(request.limit))`.
 - If the caller wants stricter policy for oversized requests, that should be enforced before calling this crate rather than hidden inside the engine.
 - Wave 1 only supports `QueryOrder::Ascending`. The enum is present now so descending traversal can be added later without reshaping the request type.
-- `after_log_id` is an exclusive continuation token. When present, the next page resumes strictly after that finalized log ID inside the resolved block window.
+- `resume_log_id` is a declarative resume boundary, not an opaque session token.
+- In wave 1 ascending mode, when `resume_log_id` is present, the query resumes strictly after that finalized log ID.
+- The engine validates that `resume_log_id`, if present, lies within the resolved block window. Otherwise the request is invalid.
+- Requests are stateless. If the caller reuses the same `from_block`, `to_block`, `order`, and `filter`, then feeding `next_resume_log_id` into the next request yields exact page continuation. If those fields change, the request is simply a new query with a different lower bound.
 - `has_more` is the authoritative completion signal. `has_more = false` means the caller has exhausted the resolved query window.
-- `continuation_log_id` is only present when `has_more = true`, and it is the last returned log ID from the page.
+- `next_resume_log_id` is only present when `has_more = true`, and it is the last returned log ID from the page.
 - `cursor_block` is the block containing the last returned primary object. If the page is empty, it falls back to the resolved range endpoint that the engine actually examined. It remains block-scoped metadata for client-side reorg handling and is not the pagination token.
-- `QueryPageMeta` exists so the RPC crate can construct the future `fromBlock`, `toBlock`, `cursorBlock`, and continuation fields without re-querying storage.
+- `QueryPageMeta` exists so the RPC crate can construct the future `fromBlock`, `toBlock`, `cursorBlock`, and resume fields without re-querying storage.
 - `block_hash` query mode is outside this crate's wave-1 query surface.
 - The engine must determine `has_more` exactly, for example by collecting up to `effective_limit + 1` matching primary IDs or by an equivalent lookahead strategy before final result trimming.
 
@@ -459,7 +463,7 @@ Changes:
 - move `Clause<T>` into a shared `core` module
 - replace `QueryOptions` with transport-free request and budget types aligned to `query_logs`
 - add shared page metadata types such as `BlockRef`, `QueryPageMeta`, `QueryPage<T>`, and `QueryOrder`
-- add the log-ID continuation token fields needed for pagination
+- add the log-ID resume-token fields needed for pagination
 - move runtime health state out of `api.rs`
 
 Acceptance:
@@ -521,7 +525,7 @@ Changes:
 - extract finalized block-window normalization from `query/engine.rs`
 - extract candidate intersection and candidate-driven execution from `query/executor.rs`
 - introduce `RangeResolver` and `PrimaryMaterializer`-style boundaries
-- preserve primary IDs alongside materialized items long enough to emit `continuation_log_id`
+- preserve primary IDs alongside materialized items long enough to emit `next_resume_log_id`
 - add exact pagination completion detection, using one-item lookahead or an equivalent mechanism to set `has_more` correctly
 - keep broad-query block scan family-specific in wave 1
 
@@ -529,7 +533,7 @@ Acceptance:
 
 - shared executor code does not import `Log`
 - shared code works on candidate IDs and page metadata
-- pagination metadata is exact at the page boundary, including `has_more` and `continuation_log_id`
+- pagination metadata is exact at the page boundary, including `has_more` and `next_resume_log_id`
 - family-specific block-scan logic remains outside the shared executor
 
 ### Phase 5: Move Log Query Logic Behind A Log Family Adapter
@@ -590,11 +594,13 @@ Changes:
   - range resolution
   - page metadata construction
   - ascending-order request handling
-  - continuation-token pagination, including exact end-of-results detection
+  - resume-token pagination, including exact end-of-results detection
   - empty-page pagination edge cases:
     - no matches in the resolved block window
-    - `after_log_id` already beyond the last matching log
-    - `limit = 0`, if wave 1 chooses to permit it
+    - `resume_log_id` already beyond the last matching log while still inside the resolved block window
+  - invalid request validation for:
+    - `limit = 0`
+    - `resume_log_id` outside the resolved block window
   - same-block multi-page pagination on the indexed path
   - same-block multi-page pagination on the broad-query block-scan path
   - stream writer behavior
@@ -656,7 +662,7 @@ The first migration wave is complete when all of the following are true:
 - the logs family lives in a dedicated family-specific module tree
 - the primary service surface is transport-free and aligned to `query_logs`, not `eth_getLogs`
 - the wave-1 service surface supports ascending traversal explicitly through `QueryOrder`
-- the query result includes page metadata, an explicit `has_more` signal, and a log-ID continuation token sufficient to construct the future RPC response envelope and resume pagination
+- the query result includes page metadata, an explicit `has_more` signal, and a log-ID resume token sufficient to construct the future RPC response envelope and resume pagination
 - shared code no longer depends on log topic semantics
 - log-specific block-window and broad-query fallback logic remain correctly isolated
 - observable range-based log-query correctness is unchanged aside from intentional API renaming, result wrapping, and removal of out-of-scope `block_hash` mode
