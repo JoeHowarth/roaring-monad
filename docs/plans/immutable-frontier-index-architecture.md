@@ -106,6 +106,10 @@ The architecture should bound ungrouped work by fixed window sizes:
 
 If the frontier is still too expensive in some cases, readers may fall back to direct recent block metadata and payload reads for that bounded region.
 
+This bounded-frontier claim applies to the not-yet-sealed region.
+
+If compaction lags behind for already sealed pages or sub-buckets, readers may still need fragment-based fallback outside the live frontier. That does not change correctness, but it does change latency and object-count behavior. Production use therefore still needs a compaction SLO even though correctness does not depend on immediate compaction.
+
 ## Persisted Model
 
 ### Shared authoritative records that stay unchanged
@@ -327,6 +331,30 @@ For each touched stream:
 
 No manifest or tail rewrite occurs.
 
+### Publication ordering and failure semantics
+
+Because the new frontier fragments are authoritative for the visible tip, `meta/state` must not advance past a block until every authoritative artifact for that block has already been written successfully.
+
+Required ordering for block `N`:
+
+1. write `block_logs/<block_num>`
+2. write `block_log_headers/<block_num>`
+3. write `block_meta/<block_num>`
+4. write `block_hash_to_num/<block_hash>`
+5. write every authoritative `log_dir_frag/*` record for the block
+6. write every authoritative `stream_frag_meta/*` and `stream_frag_blob/*` pair for the block
+7. optionally write any derived compaction artifacts that were eagerly produced in the same step
+8. only then write `meta/state` with the new `indexed_finalized_head` and `next_log_id`
+
+If any required authoritative write fails:
+
+- the ingest step fails
+- `meta/state` must not advance
+
+This is the publication rule that makes frontier fragments safe as the authoritative source for the latest visible finalized block.
+
+For backend profiles with stronger visibility guarantees, the writer should also use a publication protocol strong enough that readers observing the new `meta/state` can observe the authoritative frontier artifacts written before it. The exact backend-specific contract should follow the same pattern described in the sealing plan: publish dependent artifacts first, then publish `meta/state` last.
+
 ### Compaction ordering
 
 Compaction artifacts are derived from immutable source fragments.
@@ -337,7 +365,7 @@ That means compaction may be:
 - deferred to a maintenance worker
 - retried idempotently
 
-Correctness does not depend on compaction finishing immediately, as long as the source fragments are already published.
+Correctness does not depend on compaction finishing immediately, as long as the source fragments are already published and retained.
 
 ## Query Model
 
@@ -395,6 +423,8 @@ The important invariant is:
 
 - direct recent-block reads are acceptable only because the ungrouped frontier is bounded by design
 
+Compaction lag for already sealed regions is a separate operational concern. When lag exists, readers may need fragment-based fallback outside the live frontier. The architecture permits that for correctness, but production operation should keep the lag small enough that the common case still hits compacted summaries.
+
 ## Why This Removes Writer-Handoff Complexity
 
 This design does not require the next writer to inherit any persisted mutable summary.
@@ -405,6 +435,25 @@ The next writer only needs:
 - immutable frontier fragments already published by earlier writers
 
 If the next writer wants process-local batching, it can rebuild that in-memory state from immutable inputs. No persisted mutable manifest, tail, or open bucket needs to be trusted or merged.
+
+## Source Retention and GC
+
+In this document, immutable frontier fragments remain the authoritative source of truth even after grouped summaries are written.
+
+That means:
+
+- `stream_page_*`, `log_dir_sub/*`, optional `log_dir/*`, and optional `stream_shard_summary/*` do not replace source fragments for correctness
+- readers must always be allowed to fall back to the source fragments
+- source-fragment deletion is out of scope for this plan
+
+Deleting source fragments safely would require a separate publication and verification design that answers:
+
+- how completeness of a grouped summary is proven
+- how that proof is published
+- how readers distinguish "summary is present" from "summary is complete and source replacement is now safe"
+- how crashes during compaction or publication are recovered
+
+Until that separate design exists, grouped summaries are acceleration-only and source fragments stay retained.
 
 ## Blob and Metadata Inventory
 
@@ -467,7 +516,8 @@ Costs:
 - more small objects in the open frontier
 - more reliance on deterministic fixed window sizing
 - tip queries may need bounded direct block reads before higher-level summaries exist
-- compaction and GC need explicit design for the immutable fragments
+- compaction lag still needs operational control even though correctness does not depend on immediate compaction
+- source-fragment GC is intentionally deferred to a later design
 
 ## Open Parameters
 
@@ -499,7 +549,11 @@ The architecture depends on tuning choices, not open correctness questions:
 
 - add optional sealed 1M-log bucket compaction
 - add optional per-stream shard summaries
-- add GC rules for obsolete source fragments after grouped summaries are trusted
+- define compaction SLOs and observability targets for keeping sealed-region fallback rare
+
+### Deferred follow-on
+
+- design source-fragment GC only after grouped-summary publication and completeness proofs are specified
 
 ## Relationship To Other Plans
 
