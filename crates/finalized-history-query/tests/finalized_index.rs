@@ -1020,6 +1020,47 @@ fn any_only_query_is_invalid() {
 }
 
 #[test]
+fn empty_or_query_returns_empty_page() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(
+            1,
+            [0; 32],
+            vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 10, 21, 1, 0, 1)],
+        );
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+
+        let page = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::Or(Vec::new())),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            Some(10),
+            None,
+        )
+        .await
+        .expect("empty OR query should return empty page");
+
+        assert!(page.items.is_empty());
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.next_resume_log_id, None);
+        assert_eq!(page.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
 fn fs_store_adapter_roundtrip() {
     block_on(async {
         let root = std::env::temp_dir().join(format!(

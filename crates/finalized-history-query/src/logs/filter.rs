@@ -81,11 +81,9 @@ fn match_topic(topic: Option<Topic32>, clause: &Option<Clause<Topic32>>) -> bool
 }
 
 fn has_indexed_value_20(clause: &Option<Clause<[u8; 20]>>) -> bool {
-    matches!(clause, Some(Clause::One(_)))
-        || matches!(clause, Some(Clause::Or(values)) if !values.is_empty())
+    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
 }
 
 fn has_indexed_value_32(clause: &Option<Clause<Topic32>>) -> bool {
-    matches!(clause, Some(Clause::One(_)))
-        || matches!(clause, Some(Clause::Or(values)) if !values.is_empty())
+    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
 }
