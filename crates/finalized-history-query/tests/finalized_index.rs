@@ -1521,6 +1521,165 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
 }
 
 #[test]
+fn clause_free_resume_pagination_crosses_24_bit_log_shard_boundary() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedHistoryService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            meta,
+            blob,
+            1,
+        );
+
+        let previous = BlockMeta {
+            block_hash: [1; 32],
+            parent_hash: [0; 32],
+            first_log_id: 0,
+            count: 0,
+        };
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                META_STATE_KEY,
+                encode_meta_state(&MetaState {
+                    indexed_finalized_head: 1,
+                    next_log_id: u64::from(MAX_LOCAL_ID),
+                    writer_epoch: 1,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed meta state");
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                &finalized_history_query::domain::keys::block_meta_key(1),
+                encode_block_meta(&previous),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed previous block meta");
+
+        let b2 = mk_block(2, previous.block_hash, vec![mk_log(9, 1, 1, 2, 0, 0)]);
+        let b3 = mk_block(3, b2.block_hash, vec![mk_log(8, 2, 2, 3, 0, 0)]);
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+        svc.ingest_finalized_block(b3).await.expect("ingest b3");
+
+        let first = query_page(&svc, 2, 3, LogFilter::default(), Some(1), None)
+            .await
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].block_num, 2);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_log_id, Some(u64::from(MAX_LOCAL_ID)));
+
+        let second = query_page(
+            &svc,
+            2,
+            3,
+            LogFilter::default(),
+            Some(1),
+            first.meta.next_resume_log_id,
+        )
+        .await
+        .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].block_num, 3);
+        assert!(!second.meta.has_more);
+        assert_eq!(second.meta.next_resume_log_id, None);
+    });
+}
+
+#[test]
+fn indexed_resume_pagination_crosses_24_bit_log_shard_boundary() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedHistoryService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            meta,
+            blob,
+            1,
+        );
+
+        let previous = BlockMeta {
+            block_hash: [1; 32],
+            parent_hash: [0; 32],
+            first_log_id: 0,
+            count: 0,
+        };
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                META_STATE_KEY,
+                encode_meta_state(&MetaState {
+                    indexed_finalized_head: 1,
+                    next_log_id: u64::from(MAX_LOCAL_ID),
+                    writer_epoch: 1,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed meta state");
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                &finalized_history_query::domain::keys::block_meta_key(1),
+                encode_block_meta(&previous),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed previous block meta");
+
+        let b2 = mk_block(2, previous.block_hash, vec![mk_log(9, 1, 1, 2, 0, 0)]);
+        let b3 = mk_block(3, b2.block_hash, vec![mk_log(9, 2, 2, 3, 0, 0)]);
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+        svc.ingest_finalized_block(b3).await.expect("ingest b3");
+
+        let filter = LogFilter {
+            address: Some(Clause::One([9; 20])),
+            topic0: None,
+            topic1: None,
+            topic2: None,
+            topic3: None,
+        };
+
+        let first = query_page(&svc, 2, 3, filter.clone(), Some(1), None)
+            .await
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].block_num, 2);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_log_id, Some(u64::from(MAX_LOCAL_ID)));
+
+        let second = query_page(&svc, 2, 3, filter, Some(1), first.meta.next_resume_log_id)
+            .await
+            .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].block_num, 3);
+        assert!(!second.meta.has_more);
+        assert_eq!(second.meta.next_resume_log_id, None);
+    });
+}
+
+#[test]
 fn indexed_query_for_high_shard_ids_does_not_alias_to_low_shard_results() {
     block_on(async {
         let svc = FinalizedHistoryService::new(

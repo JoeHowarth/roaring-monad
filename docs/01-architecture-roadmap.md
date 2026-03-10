@@ -57,7 +57,7 @@ The shared layer owns:
 
 - range resolution against finalized head
 - page and resume metadata types
-- candidate execution on primary IDs
+- shard-streaming indexed execution on primary IDs
 - runtime degraded / throttled state
 - stream tail / manifest / chunk lifecycle
 - shared finalized-state and block-identity reads
@@ -104,12 +104,12 @@ The code treats those bytes through cleaner shared and family-local helpers inst
 
 - `RangeResolver` clips the request to the indexed finalized head.
 - `LogWindowResolver` maps the resolved block range to a log-ID range.
-- indexed queries execute through shared candidate execution on primary IDs.
+- indexed queries execute one shard at a time in ascending `log_id` order.
 - broad queries can fall back to log-family block scan.
 - pagination uses `resume_log_id` as a declarative lower bound.
 - responses return `cursor_block` separately from `next_resume_log_id`.
 
-The executor preserves primary IDs through page assembly so `has_more`, `next_resume_log_id`, and `cursor_block` are exact.
+The executor preserves primary IDs through page assembly so `has_more`, `next_resume_log_id`, and `cursor_block` are exact. It does not load full-window clause sets up front.
 
 ## Ingest Semantics
 

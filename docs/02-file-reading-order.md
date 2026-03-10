@@ -34,7 +34,7 @@ Look for:
 9. `crates/finalized-history-query/src/core/range.rs`
    Read this to understand block-range validation and clipping against the indexed finalized head, including empty-range behavior.
 10. `crates/finalized-history-query/src/core/execution.rs`
-    Read this for the generic primary-ID executor that intersects candidate sets, materializes items, and preserves IDs for pagination metadata.
+    Read this for the shared matched-primary vocabulary that the query path still uses for pagination metadata and benchmark helpers.
 11. `crates/finalized-history-query/src/core/runtime.rs`
     Read this for the in-memory degraded/throttled state machine driven by backend failures and guardrails.
 12. `crates/finalized-history-query/src/streams/keys.rs`
@@ -48,7 +48,7 @@ Look for:
 
 - shared finalized-head and block-identity helpers
 - block-range clipping against finalized head
-- candidate execution on primary IDs
+- shard-streaming candidate execution on primary IDs
 - runtime degraded vs throttled handling
 - shared stream append / seal lifecycle
 
@@ -67,7 +67,7 @@ Look for:
 20. `crates/finalized-history-query/src/logs/block_scan.rs`
     Read this for the block-scan fallback that decodes whole block payloads sequentially when indexed execution is skipped.
 21. `crates/finalized-history-query/src/logs/query.rs`
-    Read this for the main query engine: request validation, range/window resolution, broad-query policy, stream loading, candidate execution, and page assembly.
+    Read this for the main query engine: request validation, range/window resolution, broad-query policy, shard-streaming indexed execution, clause-free sequential traversal, and page assembly.
 22. `crates/finalized-history-query/src/logs/ingest.rs`
     Read this for the logs-family ingest details: block-keyed payload/header writes, directory-bucket maintenance, block metadata, and stream fanout collection.
 

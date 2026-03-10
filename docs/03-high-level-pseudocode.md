@@ -155,16 +155,16 @@ async def query_logs(request, budget):
             filter=request.filter,
             take=effective_limit + 1,
         )
-    else:
-        clause_plan = logs.build_clause_plan(
+    elif logs.has_no_indexed_clauses(request.filter):
+        matching = await logs.sequential_scan.execute(
+            log_window=log_window,
             filter=request.filter,
-            id_window=log_window,
+            take=effective_limit + 1,
         )
-        matching = await shared_candidate_executor.execute(
-            clause_plan=clause_plan,
-            id_window=log_window,
+    else:
+        matching = await logs.shard_streaming_executor.execute(
             filter=request.filter,
-            materializer=logs.materializer,
+            id_window=log_window,
             take=effective_limit + 1,
         )
 
@@ -183,32 +183,47 @@ async def query_logs(request, budget):
     )
 ```
 
-## Shared Candidate Execution
+## Shard-Streaming Indexed Execution
 
-The shared executor works on primary IDs, not directly on `Log`.
+The indexed executor works on one shard at a time and preserves primary IDs long enough to emit exact pagination metadata.
 
 ```python
-async def execute(clause_plan, id_window, filter, materializer, take):
-    candidate_ids = intersect_stream_candidates(clause_plan, id_window)
-
+async def execute(filter, id_window, take):
     out = []
-    for id in candidate_ids:
-        item = await materializer.load_by_id(id)
-        if item is None:
-            continue
-        if not materializer.exact_match(item, filter):
-            continue
 
-        out.append(
-            MatchedPrimary(
-                id=id,
-                item=item,
-                block_ref=await materializer.block_ref_for(item),
+    for shard in overlapping_shards(id_window):
+        local_range = local_range_for_shard(id_window, shard)
+        clauses = await prepare_shard_clauses(filter, shard, local_range)
+        clauses.sort_by(sealed_estimate)
+
+        shard_accumulator = None
+        for clause in clauses:
+            bitmap = await load_clause_bitmap_for_one_shard(clause, local_range)
+            if shard_accumulator is None:
+                shard_accumulator = bitmap
+            else:
+                shard_accumulator &= bitmap
+            if shard_accumulator.is_empty():
+                break
+
+        for local_id in shard_accumulator:
+            id = compose_global_log_id(shard, local_id)
+            item = await materializer.load_by_id(id)
+            if item is None:
+                continue
+            if not materializer.exact_match(item, filter):
+                continue
+
+            out.append(
+                MatchedPrimary(
+                    id=id,
+                    item=item,
+                    block_ref=await materializer.block_ref_for(item),
+                )
             )
-        )
 
-        if len(out) >= take:
-            break
+            if len(out) >= take:
+                return out
 
     return out
 ```
