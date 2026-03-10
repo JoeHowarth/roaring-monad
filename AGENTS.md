@@ -10,6 +10,8 @@ cargo clippy --all-targets --all-features -- -D clippy::suspicious -D clippy::st
 
 Make sure to lint and format after every commit and also run cargo test -p <crate being changed>
 
+Commit after each major code change so the working tree is clean. You can break work into smaller commits, but unless we are actively discussing or you are mid-implementation, leave the tree clean.
+
 When amending commits, use `git am` (alias for `git commit --amend --no-edit`).
 
 When force pushing, use `git fp` (alias for `git push --force-with-lease`).
