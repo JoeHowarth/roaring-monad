@@ -201,3 +201,100 @@ fn now_unix_sec() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::RwLock;
+
+    use futures::executor::block_on;
+
+    use super::*;
+    use crate::config::Config;
+    use crate::store::blob::InMemoryBlobStore;
+    use crate::store::meta::InMemoryMetaStore;
+    use crate::store::traits::{BlobStore, MetaStore};
+    use crate::streams::keys::{chunk_blob_key, manifest_key};
+
+    #[test]
+    fn apply_appends_seals_when_entry_threshold_is_reached() {
+        block_on(async {
+            let config = Config {
+                target_entries_per_chunk: 2,
+                ..Config::default()
+            };
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let cache = RwLock::new(HashMap::new());
+            let writer = StreamWriter::new(&config, &meta, &blob, &cache);
+
+            let sealed = writer
+                .apply_appends("addr/aa/00000000", &[11, 12], 7)
+                .await
+                .expect("apply appends");
+
+            assert!(sealed);
+
+            let manifest = meta
+                .get(&manifest_key("addr/aa/00000000"))
+                .await
+                .expect("manifest get")
+                .expect("manifest");
+            let manifest = decode_manifest(&manifest.value).expect("decode manifest");
+            assert_eq!(manifest.last_chunk_seq, 1);
+            assert_eq!(manifest.approx_count, 2);
+            assert_eq!(manifest.chunk_refs.len(), 1);
+
+            let chunk = blob
+                .get_blob(&chunk_blob_key("addr/aa/00000000", 1))
+                .await
+                .expect("chunk get")
+                .expect("chunk");
+            let chunk = crate::streams::chunk::decode_chunk(&chunk).expect("decode chunk");
+            assert_eq!(chunk.count, 2);
+            assert!(chunk.bitmap.contains(11));
+            assert!(chunk.bitmap.contains(12));
+        });
+    }
+
+    #[test]
+    fn apply_appends_keeps_tail_when_threshold_not_reached() {
+        block_on(async {
+            let config = Config {
+                target_entries_per_chunk: 10,
+                ..Config::default()
+            };
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let cache = RwLock::new(HashMap::new());
+            let writer = StreamWriter::new(&config, &meta, &blob, &cache);
+
+            let sealed = writer
+                .apply_appends("addr/bb/00000000", &[21], 7)
+                .await
+                .expect("apply appends");
+
+            assert!(!sealed);
+
+            let tail = meta
+                .get(b"tails/addr/bb/00000000")
+                .await
+                .expect("tail get")
+                .expect("tail");
+            let tail = crate::streams::manifest::decode_tail(&tail.value).expect("decode tail");
+            assert!(tail.contains(21));
+
+            let manifest = meta
+                .get(&manifest_key("addr/bb/00000000"))
+                .await
+                .expect("manifest get");
+            assert!(manifest.is_none());
+
+            let chunk = blob
+                .get_blob(&chunk_blob_key("addr/bb/00000000", 1))
+                .await
+                .expect("chunk get");
+            assert!(chunk.is_none());
+        });
+    }
+}

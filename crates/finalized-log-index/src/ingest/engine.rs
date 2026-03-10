@@ -16,6 +16,7 @@ use crate::error::{Error, Result};
 use crate::logs::ingest::collect_stream_appends;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use crate::streams::chunk::{ChunkBlob, decode_chunk};
+use crate::streams::keys::parse_stream_from_tail_key;
 use crate::streams::writer::{CachedStreamState, StreamWriter};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
@@ -273,14 +274,6 @@ async fn load_chunk_if_present<B: BlobStore>(
 pub struct MaintenanceStats {
     pub flushed_streams: u64,
     pub sealed_streams: u64,
-}
-
-fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {
-    let prefix = b"tails/";
-    if !key.starts_with(prefix) {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&key[prefix.len()..]).to_string())
 }
 
 fn encode_log_pack(logs: &[crate::domain::types::Log]) -> (bytes::Bytes, Vec<(u32, u32)>) {

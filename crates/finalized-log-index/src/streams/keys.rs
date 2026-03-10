@@ -5,3 +5,11 @@ pub use crate::domain::keys::{
     log_locator_page_start, log_locator_pages_prefix, log_locators_prefix, log_pack_blob_key,
     log_shard, manifest_key, read_u64_be, stream_id, tail_key, u64_be,
 };
+
+pub fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {
+    let prefix = b"tails/";
+    if !key.starts_with(prefix) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&key[prefix.len()..]).to_string())
+}
