@@ -4,14 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
-use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 use crate::codec::finalized_state::{
     decode_block_meta, decode_meta_state, encode_block_meta, encode_meta_state, encode_u64,
 };
 use crate::codec::log::{decode_log_locator_page, encode_log, encode_log_locator_page};
-use crate::codec::manifest::{
-    ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
-};
 use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
@@ -21,6 +17,10 @@ use crate::domain::types::{Block, BlockMeta, IngestOutcome, LogLocator, MetaStat
 use crate::error::{Error, Result};
 use crate::logs::ingest::collect_stream_appends;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
+use crate::streams::manifest::{
+    ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
+};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,

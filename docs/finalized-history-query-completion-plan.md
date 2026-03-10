@@ -17,7 +17,10 @@ The remaining work is mostly architectural convergence and ownership cleanup rat
 - keep wave 1 log-only
 - do not pull in relation hydration, future families, tag parsing, or storage redesign
 - remove duplicate architectures quickly rather than maintaining both old and new paths
+- remove dead compatibility shims quickly once callers have moved
 - prefer shared/log-specific view splits over persisted-byte redesign
+- split ownership cleanup into codec/module cleanup first, then view adoption in shared read paths
+- treat examples and benches as part of cleanup acceptance, not as optional follow-up
 - keep each PR narrow and leave the tree green after each step
 
 ## Finish Sequence
@@ -51,7 +54,13 @@ Exit criteria:
 
 ### 3. Extract a real stream substrate
 
-Expand `streams/` so it owns:
+Do this in the following order:
+
+1. move manifest / tail / chunk types and codecs under `streams/`
+2. extract append + seal operations behind a stream writer component
+3. leave ingest orchestration in `ingest/engine.rs` until the stream writer is stable
+
+The end state is that `streams/` owns:
 
 - manifest/tail/chunk types and codecs
 - append + seal lifecycle

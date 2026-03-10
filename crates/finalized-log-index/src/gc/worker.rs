@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
 use crate::codec::finalized_state::decode_u64;
-use crate::codec::manifest::decode_manifest;
 use crate::config::Config;
 use crate::domain::keys::{chunk_blob_key, manifest_key};
 use crate::error::Result;
 use crate::store::traits::{BlobStore, DelCond, FenceToken, MetaStore};
+use crate::streams::manifest::decode_manifest;
 
 #[derive(Debug, Default, Clone)]
 pub struct GcStats {

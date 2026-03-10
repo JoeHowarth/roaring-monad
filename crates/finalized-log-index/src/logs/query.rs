@@ -3,8 +3,6 @@ use std::collections::BTreeSet;
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
-use crate::codec::chunk::decode_chunk;
-use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::config::{BroadQueryPolicy, Config};
 use crate::core::execution::{MatchedPrimary, execute_candidates};
 use crate::core::page::{QueryPage, QueryPageMeta};
@@ -24,6 +22,8 @@ use crate::logs::materialize::LogMaterializer;
 use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::streams::chunk::decode_chunk;
+use crate::streams::manifest::{ChunkRef, decode_manifest, decode_tail};
 
 const STREAM_LOAD_CONCURRENCY: usize = 32;
 

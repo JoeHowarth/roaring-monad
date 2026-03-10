@@ -57,8 +57,8 @@ Look for:
 19. `crates/finalized-log-index/src/domain/types.rs`
 20. `crates/finalized-log-index/src/codec/finalized_state.rs`
 21. `crates/finalized-log-index/src/codec/log.rs`
-22. `crates/finalized-log-index/src/codec/manifest.rs`
-23. `crates/finalized-log-index/src/codec/chunk.rs`
+22. `crates/finalized-log-index/src/streams/manifest.rs`
+23. `crates/finalized-log-index/src/streams/chunk.rs`
 24. `crates/finalized-log-index/src/store/traits.rs`
 
 Look for:

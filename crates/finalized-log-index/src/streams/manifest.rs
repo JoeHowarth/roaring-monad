@@ -21,7 +21,7 @@ pub struct Manifest {
 
 pub fn encode_manifest(manifest: &Manifest) -> Bytes {
     let mut out = Vec::with_capacity(40 + manifest.chunk_refs.len() * 20);
-    out.push(2); // codec version
+    out.push(2);
     out.extend_from_slice(&manifest.version.to_be_bytes());
     out.extend_from_slice(&manifest.last_chunk_seq.to_be_bytes());
     out.extend_from_slice(&manifest.approx_count.to_be_bytes());

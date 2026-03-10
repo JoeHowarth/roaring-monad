@@ -1,4 +1,3 @@
-use crate::codec::manifest::{ChunkRef, decode_manifest, decode_tail};
 use crate::config::BroadQueryPolicy;
 use crate::core::clause::Clause;
 use crate::domain::keys::{
@@ -7,6 +6,7 @@ use crate::domain::keys::{
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::store::traits::MetaStore;
+use crate::streams::manifest::{ChunkRef, decode_manifest, decode_tail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClauseKind {

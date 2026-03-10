@@ -21,7 +21,7 @@ pub fn encode_chunk(blob: &ChunkBlob) -> Result<Bytes> {
         .map_err(|e| Error::Backend(format!("serialize chunk bitmap: {e}")))?;
 
     let mut out = Vec::with_capacity(1 + 4 * 4 + payload.len());
-    out.push(1); // codec version
+    out.push(1);
     out.extend_from_slice(&blob.min_local.to_be_bytes());
     out.extend_from_slice(&blob.max_local.to_be_bytes());
     out.extend_from_slice(&blob.count.to_be_bytes());
@@ -66,7 +66,6 @@ pub fn decode_chunk(bytes: &[u8]) -> Result<ChunkBlob> {
 }
 
 fn crc32_like(bytes: &[u8]) -> u32 {
-    // Non-cryptographic checksum for corruption detection in this scaffold.
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);
     (h.finish() & 0xffff_ffff) as u32

@@ -1,11 +1,11 @@
 use roaring::RoaringBitmap;
 
-use crate::codec::chunk::{ChunkBlob, encode_chunk};
-use crate::codec::manifest::{ChunkRef, Manifest, encode_manifest};
 use crate::config::Config;
 use crate::domain::keys::{chunk_blob_key, manifest_key};
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use crate::streams::chunk::{ChunkBlob, encode_chunk};
+use crate::streams::manifest::{ChunkRef, Manifest, encode_manifest};
 
 #[derive(Debug, Clone)]
 pub struct ChunkManager {

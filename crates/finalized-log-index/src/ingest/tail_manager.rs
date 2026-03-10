@@ -1,9 +1,9 @@
 use roaring::RoaringBitmap;
 
-use crate::codec::manifest::{decode_tail, encode_tail};
 use crate::domain::keys::tail_key;
 use crate::error::Result;
 use crate::store::traits::{FenceToken, MetaStore, PutCond};
+use crate::streams::manifest::{decode_tail, encode_tail};
 
 #[derive(Debug, Default)]
 pub struct TailManager;
