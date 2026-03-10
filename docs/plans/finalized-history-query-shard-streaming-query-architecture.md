@@ -19,9 +19,9 @@ This document is intentionally about executor shape, not cache hierarchy.
 
 Unless stated otherwise, the indexed-path discussion in this document applies to queries that remain within the current OR guardrails. Queries that exceed `planner_max_or_terms` still follow the existing error-or-block-scan policy.
 
-Cross-request metadata caching is a separate architectural concern and is covered only as an assumption and dependency here. A separate stub plan now exists at:
+Cross-request metadata caching is a separate architectural concern and is covered only as an assumption and dependency here. A separate plan exists at:
 
-- `docs/plans/finalized-history-query-metadata-caching-architecture.md`
+- `docs/plans/metadata-caching-architecture.md`
 
 ## Problem Statement
 
