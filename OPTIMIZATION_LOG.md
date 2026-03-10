@@ -890,3 +890,99 @@ cargo +nightly-2025-12-09 test -p benchmarking
 
 - The codebase now has one exact topic0 path instead of a hybrid topic0 design.
 - A dedicated ingest benchmark is still needed to quantify the write-volume reduction.
+
+## 2026-03-10T13:50:59-04:00 - Finalized History Query Benchmark Smoke Run
+
+### Summary
+
+- Ran the new Criterion benchmark split for `finalized-history-query` to validate result shape after introducing execution, clause-loading, materialization, and end-to-end query benches.
+- Goal was not absolute performance gating; it was to check whether relative scaling across shards, OR width, cache warmth, and locality looks coherent.
+
+### Hypothesis
+
+- Candidate execution should scale sharply with shard fanout and dense many-shard intersections.
+- Clause loading should scale with shard count and OR width, while high-shard IDs should behave similarly to low-shard IDs when shard count is held constant.
+- Materialization should show a clear warm-vs-cold and same-block-vs-cross-block locality gap.
+- End-to-end query results should broadly track the microbench cost curves without exposing obvious inversions.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench execution_bench
+cargo bench -p finalized-history-query --bench query_clause_loading_bench
+cargo bench -p finalized-history-query --bench materialize_bench
+cargo bench -p finalized-history-query --bench query_end_to_end_bench
+```
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+- Four benches were launched concurrently, so there was initial cargo file-lock contention before the timed Criterion sections started.
+
+### Workload Shape
+
+- Execution: single-clause iteration over `1`, `8`, `64`, and high shard IDs; sparse/dense intersections; many-shard union-like intersections; empty clause set; edge clipping.
+- Clause loading: manifest-only, tail-only, manifest+tail, high-shard manifest-only, OR widths `1/4/16/64/256`, sparse vs dense chunks.
+- Materialization: cold vs warm caches, same-block vs cross-block locality, multi-bucket block lookup, high-shard point lookup.
+- End-to-end: narrow indexed query, indexed intersection, indexed OR widths `4/16/64/256`, pagination-heavy resume walk.
+
+### Metrics
+
+- `execution_single_clause/one_shard`: `54.6 us`
+- `execution_single_clause/eight_shards`: `451.8 us`
+- `execution_single_clause/sixty_four_shards`: `19.87 ms`
+- `execution_single_clause/high_shard`: `64.7 us`
+- `execution_intersection/sparse`: `136.3 us`
+- `execution_intersection/dense`: `1.794 ms`
+- `execution_intersection/union_like_many_shards`: `41.47 ms`
+- `execution_clip_and_empty/empty_clause_set_full_range`: `99.2 us`
+- `execution_clip_and_empty/first_edge`: `13.28 ms`
+- `execution_clip_and_empty/last_edge`: `13.18 ms`
+- `execution_clip_and_empty/both_edges`: `1.785 ms`
+
+- `clause_loading_storage_shape/manifest_only_one_shard`: `4.72 us`
+- `clause_loading_storage_shape/tail_only_many_shards`: `412 us`
+- `clause_loading_storage_shape/manifest_plus_tail_many_shards_narrow`: `525 us`
+- `clause_loading_storage_shape/high_shard_manifest_only`: `4.84 us`
+- `clause_loading_or_width/1`: `241 us`
+- `clause_loading_or_width/4`: `1.437 ms`
+- `clause_loading_or_width/16`: `6.301 ms`
+- `clause_loading_or_width/64`: `23.18 ms`
+- `clause_loading_or_width/256`: `89.98 ms`
+- `clause_loading_density/sparse_chunks`: `15.8 us`
+- `clause_loading_density/dense_chunks`: `7.45 us`
+
+- `materialize_cache_shape/cold_cache`: `403 ns`
+- `materialize_cache_shape/warm_bucket_cold_header`: `186 ns`
+- `materialize_cache_shape/warm_bucket_warm_header`: `186 ns`
+- `materialize_locality/same_block_warm`: `1.49 us`
+- `materialize_locality/cross_block_warm`: `6.13 us`
+- `materialize_boundary_cases/block_spans_multiple_directory_buckets_warm`: `193 ns`
+- `materialize_boundary_cases/high_shard_cold`: `408 ns`
+
+- `query_end_to_end_narrow/address_and_topics`: `198 us`
+- `query_end_to_end_indexed_mix/multi_clause_intersection`: `662 us`
+- `query_end_to_end_indexed_mix/4`: `3.38 ms`
+- `query_end_to_end_indexed_mix/16`: `9.39 ms`
+- `query_end_to_end_indexed_mix/64`: `10.15 ms`
+- `query_end_to_end_indexed_mix/256`: `12.68 ms`
+- `query_end_to_end_pagination/resume_token_walk`: `835 us`
+
+### Bottleneck Evidence
+
+- Execution cost grows dramatically with shard fanout: `1 shard -> 8 shards` is about `8.3x`, and `8 shards -> 64 shards` is about `44x`.
+- Many-shard union/intersection work (`41.47 ms`) is substantially more expensive than dense two-set intersection (`1.794 ms`), which is consistent with shard-heavy regression sensitivity.
+- Clause-loading OR width scales near-linearly on a log-log view from `1` through `256`, reaching `89.98 ms` at width `256`.
+- High-shard-only clause loading (`4.84 us`) is essentially identical to low-shard manifest-only loading (`4.72 us`), which suggests shard-ID width itself is not causing aliasing or pathological overhead.
+- Materialization shows strong locality effects: same-block warm (`1.49 us`) is roughly `4x` faster than cross-block warm (`6.13 us`), while cold and high-shard cold point loads both remain around `0.4 us`.
+- End-to-end indexed OR queries increase from `3.38 ms` at width `4` to `12.68 ms` at width `256`, but not as steeply as clause-loading microbenches, implying other fixed query costs amortize part of the loading overhead.
+
+### Interpretation
+
+- Most measured shapes look expected.
+- High-shard-ID behavior looks healthy: high-shard execution and clause-loading cases were close to their low-shard counterparts when shard count was held constant.
+- Materialization numbers are suspiciously fast in absolute terms because the benches use in-memory stores and very small synthetic payloads; these results are still useful for relative warm/cold and locality comparisons, but not for absolute latency expectations.
+- The most suspicious result is `execution_clip_and_empty/{first_edge,last_edge}` being much slower than `both_edges`. That likely reflects the synthetic fixture keeping nearly full bitmaps alive for many shards and only clipping one side, so the executor still iterates a very large surviving set. This is plausible, but it is the first result worth double-checking if future changes affect clipping behavior.
+- `clause_loading_density/dense_chunks` being faster than `sparse_chunks` is plausible here because the dense case uses one contiguous bitmap that deserializes/merges efficiently, while the sparse case pays more per-entry overhead. It is not obviously a bug.
+- The OR-width results are large but not surprising; `256` terms already reaches `~90 ms` in clause loading alone, so very wide indexed OR filters are clearly expensive even before full query execution.
