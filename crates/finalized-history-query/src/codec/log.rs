@@ -92,11 +92,11 @@ pub fn decode_log(bytes: &[u8]) -> Result<Log> {
 }
 
 pub fn encode_log_directory_bucket(bucket: &LogDirectoryBucket) -> Bytes {
-    assert!(u16::try_from(bucket.first_log_ids.len()).is_ok());
-    let mut out = Vec::with_capacity(1 + 8 + 2 + bucket.first_log_ids.len() * 8);
+    assert!(u32::try_from(bucket.first_log_ids.len()).is_ok());
+    let mut out = Vec::with_capacity(1 + 8 + 4 + bucket.first_log_ids.len() * 8);
     out.push(1);
     out.extend_from_slice(&bucket.start_block.to_be_bytes());
-    out.extend_from_slice(&(bucket.first_log_ids.len() as u16).to_be_bytes());
+    out.extend_from_slice(&(bucket.first_log_ids.len() as u32).to_be_bytes());
     for first_log_id in &bucket.first_log_ids {
         out.extend_from_slice(&first_log_id.to_be_bytes());
     }
@@ -104,7 +104,7 @@ pub fn encode_log_directory_bucket(bucket: &LogDirectoryBucket) -> Bytes {
 }
 
 pub fn decode_log_directory_bucket(bytes: &[u8]) -> Result<LogDirectoryBucket> {
-    if bytes.len() < 1 + 8 + 2 + 8 {
+    if bytes.len() < 1 + 8 + 4 + 8 {
         return Err(Error::Decode("log directory bucket too short"));
     }
     if bytes[0] != 1 {
@@ -115,20 +115,20 @@ pub fn decode_log_directory_bucket(bytes: &[u8]) -> Result<LogDirectoryBucket> {
             .try_into()
             .map_err(|_| Error::Decode("log directory bucket start_block"))?,
     );
-    let count = u16::from_be_bytes(
-        bytes[9..11]
+    let count = u32::from_be_bytes(
+        bytes[9..13]
             .try_into()
             .map_err(|_| Error::Decode("log directory bucket count"))?,
     ) as usize;
     if count < 2 {
         return Err(Error::Decode("log directory bucket missing sentinel"));
     }
-    let expected_len = 1 + 8 + 2 + count * 8;
+    let expected_len = 1 + 8 + 4 + count * 8;
     if bytes.len() != expected_len {
         return Err(Error::Decode("invalid log directory bucket length"));
     }
     let mut first_log_ids = Vec::with_capacity(count);
-    let mut pos = 11usize;
+    let mut pos = 13usize;
     for _ in 0..count {
         first_log_ids.push(u64::from_be_bytes(
             bytes[pos..pos + 8]
@@ -144,10 +144,10 @@ pub fn decode_log_directory_bucket(bytes: &[u8]) -> Result<LogDirectoryBucket> {
 }
 
 pub fn encode_block_log_header(header: &BlockLogHeader) -> Bytes {
-    assert!(u16::try_from(header.offsets.len()).is_ok());
-    let mut out = Vec::with_capacity(1 + 2 + header.offsets.len() * 4);
+    assert!(u32::try_from(header.offsets.len()).is_ok());
+    let mut out = Vec::with_capacity(1 + 4 + header.offsets.len() * 4);
     out.push(1);
-    out.extend_from_slice(&(header.offsets.len() as u16).to_be_bytes());
+    out.extend_from_slice(&(header.offsets.len() as u32).to_be_bytes());
     for offset in &header.offsets {
         out.extend_from_slice(&offset.to_be_bytes());
     }
@@ -155,26 +155,26 @@ pub fn encode_block_log_header(header: &BlockLogHeader) -> Bytes {
 }
 
 pub fn decode_block_log_header(bytes: &[u8]) -> Result<BlockLogHeader> {
-    if bytes.len() < 1 + 2 + 4 {
+    if bytes.len() < 1 + 4 + 4 {
         return Err(Error::Decode("block log header too short"));
     }
     if bytes[0] != 1 {
         return Err(Error::Decode("unsupported block log header version"));
     }
-    let count = u16::from_be_bytes(
-        bytes[1..3]
+    let count = u32::from_be_bytes(
+        bytes[1..5]
             .try_into()
             .map_err(|_| Error::Decode("block log header count"))?,
     ) as usize;
     if count < 2 {
         return Err(Error::Decode("block log header missing sentinel"));
     }
-    let expected_len = 1 + 2 + count * 4;
+    let expected_len = 1 + 4 + count * 4;
     if bytes.len() != expected_len {
         return Err(Error::Decode("invalid block log header length"));
     }
     let mut offsets = Vec::with_capacity(count);
-    let mut pos = 3usize;
+    let mut pos = 5usize;
     for _ in 0..count {
         offsets.push(u32::from_be_bytes(
             bytes[pos..pos + 4]
@@ -230,6 +230,37 @@ mod tests {
         };
         let enc = encode_block_log_header(&header);
         let dec = decode_block_log_header(&enc).expect("decode block log header");
+        assert_eq!(dec, header);
+    }
+
+    #[test]
+    fn roundtrip_large_log_directory_bucket() {
+        let count = (u16::MAX as usize) + 2;
+        let mut first_log_ids = Vec::with_capacity(count);
+        for i in 0..count {
+            first_log_ids.push(i as u64);
+        }
+        let bucket = LogDirectoryBucket {
+            start_block: 123,
+            first_log_ids,
+        };
+
+        let enc = encode_log_directory_bucket(&bucket);
+        let dec = decode_log_directory_bucket(&enc).expect("decode large bucket");
+        assert_eq!(dec, bucket);
+    }
+
+    #[test]
+    fn roundtrip_large_block_log_header() {
+        let count = (u16::MAX as usize) + 2;
+        let mut offsets = Vec::with_capacity(count);
+        for i in 0..count {
+            offsets.push(i as u32);
+        }
+        let header = BlockLogHeader { offsets };
+
+        let enc = encode_block_log_header(&header);
+        let dec = decode_block_log_header(&enc).expect("decode large block log header");
         assert_eq!(dec, header);
     }
 }

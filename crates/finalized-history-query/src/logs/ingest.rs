@@ -363,8 +363,14 @@ mod tests {
                 .await
                 .expect("read bucket1")
                 .expect("bucket1 present");
+            let bucket2 = meta
+                .get(&log_directory_bucket_key(LOG_DIRECTORY_BUCKET_SIZE * 2))
+                .await
+                .expect("read bucket2")
+                .expect("bucket2 present");
             let bucket0 = decode_log_directory_bucket(&bucket0.value).expect("decode bucket0");
             let bucket1 = decode_log_directory_bucket(&bucket1.value).expect("decode bucket1");
+            let bucket2 = decode_log_directory_bucket(&bucket2.value).expect("decode bucket2");
 
             assert_eq!(
                 bucket0,
@@ -374,6 +380,7 @@ mod tests {
                 }
             );
             assert_eq!(bucket1, bucket0);
+            assert_eq!(bucket2, bucket0);
         });
     }
 
