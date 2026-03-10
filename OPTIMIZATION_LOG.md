@@ -223,7 +223,7 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 
 ### Change Summary
 
-- Made query-time stream loading range-aware in `crates/finalized-log-index/src/query/executor.rs`.
+- Made query-time stream loading range-aware in `crates/finalized-history-query/src/query/executor.rs`.
 - `fetch_union_log_level` and `fetch_union_block_level` now pass shard-local bounds into `load_stream_entries`.
 - The executor now skips manifest `ChunkRef`s whose `min_local..=max_local` does not overlap the requested range and only admits tail entries inside the local range.
 - Added regression tests that record blob reads for both address-stream scans and `topic0_block` prefilter scans.
@@ -236,7 +236,7 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p finalized-history-query
 ```
 
 ### Before/After Metrics
@@ -248,7 +248,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
   - before: `3` `topic0_block` chunk blob reads were expected from the pre-change executor for a 3-chunk manifest queried over only block `2`
   - after: `1` `topic0_block` chunk blob read observed, plus `1` `log_packs/*` read for result materialization
 - Correctness verification:
-  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed, including new regression coverage
+  - `cargo +nightly-2025-12-09 test -p finalized-history-query`: all tests passed, including new regression coverage
 
 ### Interpretation
 
@@ -265,7 +265,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 ### Change Summary
 
 - Changed stream shard/local ID layout from high-32/low-32 to high-40/low-24.
-- Centralized shard/local helpers in `crates/finalized-log-index/src/domain/keys.rs`.
+- Centralized shard/local helpers in `crates/finalized-history-query/src/domain/keys.rs`.
 - Migrated ingest and query code to use the helpers instead of ad hoc bit shifts and casts.
 - Added rollover coverage for ingest/query behavior at the new 24-bit shard boundary.
 - Updated onboarding docs to describe the 24-bit local layout.
@@ -278,7 +278,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p finalized-history-query
 ```
 
 ### Before/After Metrics
@@ -290,7 +290,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
   - before: about `2,202,547` chunk refs in one full shard manifest (`~44.1 MB` serialized at `20` bytes/ref)
   - after: about `8,604` chunk refs in one full shard manifest (`~172 KB` serialized)
 - Verification:
-  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed
+  - `cargo +nightly-2025-12-09 test -p finalized-history-query`: all tests passed
   - includes new rollover test `ingest_and_query_across_24_bit_log_shard_boundary`
 
 ### Interpretation
@@ -321,7 +321,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p finalized-history-query
 ```
 
 ### Before/After Metrics
@@ -333,7 +333,7 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
   - before: check every tail entry against `local_from..=local_to` even when the range was `0..=MAX_LOCAL_ID`
   - after: insert the tail entries directly without range comparisons
 - Correctness verification:
-  - `cargo +nightly-2025-12-09 test -p finalized-log-index`: all tests passed, including new full-shard helper coverage
+  - `cargo +nightly-2025-12-09 test -p finalized-history-query`: all tests passed, including new full-shard helper coverage
 
 ### Interpretation
 
@@ -844,14 +844,14 @@ cargo +nightly-2025-12-09 test -p finalized-log-index
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p finalized-history-query
 cargo +nightly-2025-12-09 test -p benchmarking
 ```
 
 ### Metrics
 
 - Correctness verification only in this change set.
-- `finalized-log-index`: `40` tests passed.
+- `finalized-history-query`: `40` tests passed.
 - `benchmarking`: crate compiled and test target completed with no test failures.
 - No before/after performance benchmark has been run yet for always-on `topic0`.
 
@@ -875,14 +875,14 @@ cargo +nightly-2025-12-09 test -p benchmarking
 ### Commands
 
 ```bash
-cargo +nightly-2025-12-09 test -p finalized-log-index
+cargo +nightly-2025-12-09 test -p finalized-history-query
 cargo +nightly-2025-12-09 test -p benchmarking
 ```
 
 ### Metrics
 
 - Correctness verification only in this change set.
-- `finalized-log-index`: `40` tests passed after removing the block-level topic0 path.
+- `finalized-history-query`: `40` tests passed after removing the block-level topic0 path.
 - `benchmarking`: crate compiled and test target completed with no test failures.
 - No before/after performance benchmark has been run yet for the removal.
 

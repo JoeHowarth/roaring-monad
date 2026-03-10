@@ -1,7 +1,7 @@
 #![cfg(feature = "distributed-stores")]
 
-use finalized_log_index::store::scylla::ScyllaMetaStore;
-use finalized_log_index::store::traits::{FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::scylla::ScyllaMetaStore;
+use finalized_history_query::store::traits::{FenceToken, MetaStore, PutCond};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lwt_if_absent_has_single_winner() {

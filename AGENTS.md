@@ -52,6 +52,6 @@ Optimization and Profiling Log Discipline:
 
 Onboarding Docs Discipline:
 
-- Keep the onboarding docs in `docs/finalized-log-index-onboarding/` updated when architecture, terminology, storage layout, or core query/indexing behavior changes.
+- Keep the current developer docs in `docs/finalized-history-query/` updated when architecture, terminology, storage layout, or core query/indexing behavior changes.
 - Treat those docs as clean current-state documentation, not as a changelog or historical narrative.
 - Write them as they should read if authored at that moment in time; do not add retrospective notes such as "this was changed from X" unless the comparison is part of the architecture itself.

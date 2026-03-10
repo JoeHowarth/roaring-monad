@@ -1,8 +1,8 @@
 # Finalized History Query Architecture Roadmap
 
-This guide is for a developer who wants to understand the current wave-1 history-query architecture in `crates/finalized-log-index`.
+This guide is for a developer who wants to understand the current wave-1 history-query architecture in `crates/finalized-history-query`.
 
-Start with [docs/finalized-history-query-migration-plan.md](/home/jhow/roaring-monad/docs/finalized-history-query-migration-plan.md). That document explains the design goals. This guide explains the code that now implements that shape.
+This folder is the current source of truth for the implemented wave-1 architecture. Historical design and migration docs live under `docs/historical/`.
 
 ## Scope
 
@@ -98,19 +98,19 @@ That logic lives under `src/core/execution.rs` and is reused by the logs family 
 
 Read these in order:
 
-1. `crates/finalized-log-index/src/lib.rs`
-2. `crates/finalized-log-index/src/api/query_logs.rs`
-3. `crates/finalized-log-index/src/api/service.rs`
-4. `crates/finalized-log-index/src/core/page.rs`
-5. `crates/finalized-log-index/src/core/range.rs`
-6. `crates/finalized-log-index/src/logs/filter.rs`
-7. `crates/finalized-log-index/src/logs/window.rs`
-8. `crates/finalized-log-index/src/logs/materialize.rs`
-9. `crates/finalized-log-index/src/logs/block_scan.rs`
-10. `crates/finalized-log-index/src/logs/query.rs`
-11. `crates/finalized-log-index/src/ingest/engine.rs`
-12. `crates/finalized-log-index/src/logs/ingest.rs`
-13. `crates/finalized-log-index/tests/finalized_index.rs`
+1. `crates/finalized-history-query/src/lib.rs`
+2. `crates/finalized-history-query/src/api/query_logs.rs`
+3. `crates/finalized-history-query/src/api/service.rs`
+4. `crates/finalized-history-query/src/core/page.rs`
+5. `crates/finalized-history-query/src/core/range.rs`
+6. `crates/finalized-history-query/src/logs/filter.rs`
+7. `crates/finalized-history-query/src/logs/window.rs`
+8. `crates/finalized-history-query/src/logs/materialize.rs`
+9. `crates/finalized-history-query/src/logs/block_scan.rs`
+10. `crates/finalized-history-query/src/logs/query.rs`
+11. `crates/finalized-history-query/src/ingest/engine.rs`
+12. `crates/finalized-history-query/src/logs/ingest.rs`
+13. `crates/finalized-history-query/tests/finalized_index.rs`
 
 `src/ingest/engine.rs` now orchestrates finalized ingest. `src/logs/ingest.rs` owns packed-log writes, log block-metadata writes, locator-page writes, and log stream fanout.
 

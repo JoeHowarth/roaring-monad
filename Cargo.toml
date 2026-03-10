@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/benchmarking",
-    "crates/finalized-log-index",
+    "crates/finalized-history-query",
     "crates/log-workload-gen",
 ]
 resolver = "2"

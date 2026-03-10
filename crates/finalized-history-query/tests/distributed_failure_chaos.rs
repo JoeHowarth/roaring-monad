@@ -2,15 +2,15 @@
 
 use std::process::Command;
 
-use finalized_log_index::LogFilter;
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::LogFilter;
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::error::Error;
-use finalized_log_index::store::minio::MinioBlobStore;
-use finalized_log_index::store::scylla::ScyllaMetaStore;
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::error::Error;
+use finalized_history_query::store::minio::MinioBlobStore;
+use finalized_history_query::store::scylla::ScyllaMetaStore;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -72,7 +72,7 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     .expect("connect minio")
     .with_retry_policy(1, 10, 50);
 
-    let svc = FinalizedIndexService::new(
+    let svc = FinalizedHistoryService::new(
         Config {
             backend_error_throttle_after: 1,
             backend_error_degraded_after: 2,

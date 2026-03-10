@@ -3,16 +3,16 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::store::blob::InMemoryBlobStore;
-use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
-use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{BlobStore, MetaStore};
-use finalized_log_index::{Clause, LogFilter};
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::traits::{BlobStore, MetaStore};
+use finalized_history_query::{Clause, LogFilter};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -77,7 +77,7 @@ fn percentile_micros(sorted_micros: &[u128], pct: f64) -> u128 {
 }
 
 async fn ingest_blocks<M: MetaStore, B: BlobStore>(
-    svc: &FinalizedIndexService<M, B>,
+    svc: &FinalizedHistoryService<M, B>,
     blocks: u64,
     logs_per_block: u32,
 ) {
@@ -99,7 +99,7 @@ async fn ingest_blocks<M: MetaStore, B: BlobStore>(
 }
 
 async fn run_queries<M: MetaStore, B: BlobStore>(
-    svc: &FinalizedIndexService<M, B>,
+    svc: &FinalizedHistoryService<M, B>,
     blocks: u64,
     queries: usize,
     max_results: usize,
@@ -181,7 +181,7 @@ async fn run_queries<M: MetaStore, B: BlobStore>(
 }
 
 async fn run_stress<M: MetaStore, B: BlobStore>(
-    svc: &FinalizedIndexService<M, B>,
+    svc: &FinalizedHistoryService<M, B>,
     blocks: u64,
     logs_per_block: u32,
     queries: usize,
@@ -202,7 +202,7 @@ fn main() {
     let chunk_size = parse_arg("--chunk-size", 512u32);
     let max_results = parse_arg("--max-results", 10_000usize);
     let backend = parse_string_arg("--backend", "memory");
-    let fs_root = parse_string_arg("--fs-root", "/tmp/finalized-log-index-stress");
+    let fs_root = parse_string_arg("--fs-root", "/tmp/finalized-history-query-stress");
     let restart_before_query = has_flag("--restart-before-query");
 
     block_on(async move {
@@ -220,7 +220,7 @@ fn main() {
             fs::create_dir_all(&root).expect("create fs root");
 
             if restart_before_query {
-                let svc = FinalizedIndexService::new(
+                let svc = FinalizedHistoryService::new(
                     config.clone(),
                     FsMetaStore::new(&root, 1).expect("fs meta"),
                     FsBlobStore::new(&root).expect("fs blob"),
@@ -231,7 +231,7 @@ fn main() {
                 let ingest_elapsed = ingest_start.elapsed();
                 drop(svc);
 
-                let query_svc = FinalizedIndexService::new(
+                let query_svc = FinalizedHistoryService::new(
                     config,
                     FsMetaStore::new(&root, 1).expect("fs meta reopen"),
                     FsBlobStore::new(&root).expect("fs blob reopen"),
@@ -241,7 +241,7 @@ fn main() {
                     run_queries(&query_svc, blocks, queries, max_results).await;
                 (ingest_elapsed, latencies, total_returned, query_elapsed)
             } else {
-                let svc = FinalizedIndexService::new(
+                let svc = FinalizedHistoryService::new(
                     config,
                     FsMetaStore::new(&root, 1).expect("fs meta"),
                     FsBlobStore::new(&root).expect("fs blob"),
@@ -250,7 +250,7 @@ fn main() {
                 run_stress(&svc, blocks, logs_per_block, queries, max_results).await
             }
         } else {
-            let svc = FinalizedIndexService::new(
+            let svc = FinalizedHistoryService::new(
                 config,
                 InMemoryMetaStore::default(),
                 InMemoryBlobStore::default(),

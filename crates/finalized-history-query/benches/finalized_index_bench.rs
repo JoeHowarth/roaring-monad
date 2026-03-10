@@ -1,12 +1,12 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::store::blob::InMemoryBlobStore;
-use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::{Clause, LogFilter};
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::{Clause, LogFilter};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -32,8 +32,8 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
 
 fn build_service(
     target_entries_per_chunk: u32,
-) -> FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore> {
-    FinalizedIndexService::new(
+) -> FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore> {
+    FinalizedHistoryService::new(
         Config {
             target_entries_per_chunk,
             planner_max_or_terms: 256,
@@ -46,7 +46,7 @@ fn build_service(
 }
 
 fn seed_blocks(
-    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    svc: &FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore>,
     blocks: u64,
     logs_per_block: u32,
 ) {
@@ -70,7 +70,7 @@ fn seed_blocks(
 }
 
 fn query_len(
-    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    svc: &FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,

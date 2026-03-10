@@ -3,16 +3,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use finalized_log_index::LogFilter;
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::LogFilter;
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::error::{Error, Result};
-use finalized_log_index::store::blob::InMemoryBlobStore;
-use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::error::{Error, Result};
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::traits::{
     BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
 use futures::executor::block_on;
@@ -172,8 +172,8 @@ fn mk_service(
     meta: Arc<InMemoryMetaStore>,
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
-) -> FinalizedIndexService<FaultyMetaStore, FaultyBlobStore> {
-    FinalizedIndexService::new(
+) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
+    FinalizedHistoryService::new(
         Config {
             target_entries_per_chunk: 1,
             target_chunk_bytes: 1,
@@ -193,7 +193,7 @@ fn mk_service(
 }
 
 async fn query_range(
-    svc: &FinalizedIndexService<FaultyMetaStore, FaultyBlobStore>,
+    svc: &FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore>,
     from_block: u64,
     to_block: u64,
 ) -> Vec<Log> {

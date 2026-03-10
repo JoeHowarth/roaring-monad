@@ -3,26 +3,26 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::codec::finalized_state::{encode_block_meta, encode_meta_state};
-use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
-use finalized_log_index::domain::keys::{
+use finalized_history_query::codec::finalized_state::{encode_block_meta, encode_meta_state};
+use finalized_history_query::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
+use finalized_history_query::domain::keys::{
     MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
     manifest_key, stream_id,
 };
-use finalized_log_index::domain::types::{Block, BlockMeta, Log, MetaState};
-use finalized_log_index::error::Error;
-use finalized_log_index::store::blob::InMemoryBlobStore;
-use finalized_log_index::store::fs::{FsBlobStore, FsMetaStore};
-use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{
+use finalized_history_query::domain::types::{Block, BlockMeta, Log, MetaState};
+use finalized_history_query::error::Error;
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::traits::{
     BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
-use finalized_log_index::streams::chunk::{ChunkBlob, encode_chunk};
-use finalized_log_index::streams::manifest::{Manifest, decode_manifest, encode_manifest};
-use finalized_log_index::{Clause, LogFilter};
+use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
+use finalized_history_query::streams::manifest::{Manifest, decode_manifest, encode_manifest};
+use finalized_history_query::{Clause, LogFilter};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
@@ -65,13 +65,13 @@ fn query_request(
 }
 
 async fn query_page<M: MetaStore, B: BlobStore>(
-    svc: &FinalizedIndexService<M, B>,
+    svc: &FinalizedHistoryService<M, B>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
     limit: Option<usize>,
     resume_log_id: Option<u64>,
-) -> finalized_log_index::Result<finalized_log_index::QueryPage<Log>> {
+) -> finalized_history_query::Result<finalized_history_query::QueryPage<Log>> {
     query_page_with_budget(
         svc,
         from_block,
@@ -85,14 +85,14 @@ async fn query_page<M: MetaStore, B: BlobStore>(
 }
 
 async fn query_page_with_budget<M: MetaStore, B: BlobStore>(
-    svc: &FinalizedIndexService<M, B>,
+    svc: &FinalizedHistoryService<M, B>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
     limit: Option<usize>,
     resume_log_id: Option<u64>,
     budget: ExecutionBudget,
-) -> finalized_log_index::Result<finalized_log_index::QueryPage<Log>> {
+) -> finalized_history_query::Result<finalized_history_query::QueryPage<Log>> {
     svc.query_logs(
         query_request(
             from_block,
@@ -116,8 +116,9 @@ impl MetaStore for FlakyMetaStore {
     async fn get(
         &self,
         key: &[u8],
-    ) -> finalized_log_index::error::Result<Option<finalized_log_index::store::traits::Record>>
-    {
+    ) -> finalized_history_query::error::Result<
+        Option<finalized_history_query::store::traits::Record>,
+    > {
         if self.fail_get_remaining.load(Ordering::Relaxed) > 0 {
             self.fail_get_remaining.fetch_sub(1, Ordering::Relaxed);
             return Err(Error::Backend("injected backend get failure".to_string()));
@@ -129,18 +130,19 @@ impl MetaStore for FlakyMetaStore {
         &self,
         key: &[u8],
         value: bytes::Bytes,
-        cond: finalized_log_index::store::traits::PutCond,
+        cond: finalized_history_query::store::traits::PutCond,
         fence: FenceToken,
-    ) -> finalized_log_index::error::Result<finalized_log_index::store::traits::PutResult> {
+    ) -> finalized_history_query::error::Result<finalized_history_query::store::traits::PutResult>
+    {
         self.inner.put(key, value, cond, fence).await
     }
 
     async fn delete(
         &self,
         key: &[u8],
-        cond: finalized_log_index::store::traits::DelCond,
+        cond: finalized_history_query::store::traits::DelCond,
         fence: FenceToken,
-    ) -> finalized_log_index::error::Result<()> {
+    ) -> finalized_history_query::error::Result<()> {
         self.inner.delete(key, cond, fence).await
     }
 
@@ -149,7 +151,7 @@ impl MetaStore for FlakyMetaStore {
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
-    ) -> finalized_log_index::error::Result<finalized_log_index::store::traits::Page> {
+    ) -> finalized_history_query::error::Result<finalized_history_query::store::traits::Page> {
         self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
@@ -197,21 +199,21 @@ impl BlobStore for RecordingBlobStore {
         &self,
         key: &[u8],
         value: bytes::Bytes,
-    ) -> finalized_log_index::error::Result<()> {
+    ) -> finalized_history_query::error::Result<()> {
         self.inner.put_blob(key, value).await
     }
 
     async fn get_blob(
         &self,
         key: &[u8],
-    ) -> finalized_log_index::error::Result<Option<bytes::Bytes>> {
+    ) -> finalized_history_query::error::Result<Option<bytes::Bytes>> {
         if let Ok(mut gets) = self.gets.lock() {
             gets.push(key.to_vec());
         }
         self.inner.get_blob(key).await
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> finalized_log_index::error::Result<()> {
+    async fn delete_blob(&self, key: &[u8]) -> finalized_history_query::error::Result<()> {
         self.inner.delete_blob(key).await
     }
 
@@ -220,14 +222,14 @@ impl BlobStore for RecordingBlobStore {
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
-    ) -> finalized_log_index::error::Result<Page> {
+    ) -> finalized_history_query::error::Result<Page> {
         self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
 
 #[async_trait::async_trait]
 impl MetaStore for RecordingMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_log_index::error::Result<Option<Record>> {
+    async fn get(&self, key: &[u8]) -> finalized_history_query::error::Result<Option<Record>> {
         self.inner.get(key).await
     }
 
@@ -237,7 +239,7 @@ impl MetaStore for RecordingMetaStore {
         value: bytes::Bytes,
         cond: PutCond,
         fence: FenceToken,
-    ) -> finalized_log_index::error::Result<PutResult> {
+    ) -> finalized_history_query::error::Result<PutResult> {
         if let Ok(mut puts) = self.puts.lock() {
             puts.push((key.to_vec(), cond));
         }
@@ -249,7 +251,7 @@ impl MetaStore for RecordingMetaStore {
         key: &[u8],
         cond: DelCond,
         fence: FenceToken,
-    ) -> finalized_log_index::error::Result<()> {
+    ) -> finalized_history_query::error::Result<()> {
         self.inner.delete(key, cond, fence).await
     }
 
@@ -258,7 +260,7 @@ impl MetaStore for RecordingMetaStore {
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
-    ) -> finalized_log_index::error::Result<Page> {
+    ) -> finalized_history_query::error::Result<Page> {
         self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
@@ -271,7 +273,7 @@ fn ingest_and_query_with_limits() {
             planner_max_or_terms: 8,
             ..Config::default()
         };
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             config,
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -315,7 +317,7 @@ fn ingest_and_query_with_limits() {
 #[test]
 fn invalid_request_validation() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -374,7 +376,7 @@ fn invalid_request_validation() {
 #[test]
 fn indexed_same_block_resume_pagination_tracks_page_meta() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -437,7 +439,7 @@ fn indexed_same_block_resume_pagination_tracks_page_meta() {
 #[test]
 fn block_scan_same_block_resume_pagination_tracks_page_meta() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 planner_max_or_terms: 1,
                 planner_broad_query_policy: BroadQueryPolicy::BlockScan,
@@ -500,7 +502,7 @@ fn block_scan_same_block_resume_pagination_tracks_page_meta() {
 #[test]
 fn empty_page_metadata_uses_resolved_range_endpoint() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -540,7 +542,7 @@ fn empty_page_metadata_uses_resolved_range_endpoint() {
 #[test]
 fn exact_limit_without_additional_match_has_no_resume_metadata() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -563,7 +565,7 @@ fn exact_limit_without_additional_match_has_no_resume_metadata() {
 #[test]
 fn cross_block_resume_pagination_advances_without_duplicates() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -604,7 +606,7 @@ fn cross_block_resume_pagination_advances_without_duplicates() {
 #[test]
 fn indexed_query_does_not_leak_logs_past_empty_range_end() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -629,7 +631,7 @@ fn indexed_query_does_not_leak_logs_past_empty_range_end() {
 #[test]
 fn block_scan_query_does_not_leak_logs_past_empty_range_end() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 planner_max_or_terms: 0,
                 planner_broad_query_policy: BroadQueryPolicy::BlockScan,
@@ -671,7 +673,7 @@ fn block_scan_query_does_not_leak_logs_past_empty_range_end() {
 #[test]
 fn indexed_query_skips_empty_leading_blocks_within_range() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -697,7 +699,7 @@ fn indexed_query_skips_empty_leading_blocks_within_range() {
 #[test]
 fn block_scan_query_skips_empty_leading_blocks_within_range() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 planner_max_or_terms: 0,
                 planner_broad_query_policy: BroadQueryPolicy::BlockScan,
@@ -740,7 +742,7 @@ fn block_scan_query_skips_empty_leading_blocks_within_range() {
 #[test]
 fn all_empty_blocks_range_returns_empty_page() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -766,7 +768,7 @@ fn all_empty_blocks_range_returns_empty_page() {
 #[test]
 fn query_range_clips_to_finalized_head() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -797,7 +799,7 @@ fn query_range_clips_to_finalized_head() {
 #[test]
 fn query_above_finalized_head_returns_empty_page_anchored_to_head() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -822,7 +824,7 @@ fn query_above_finalized_head_returns_empty_page_anchored_to_head() {
 #[test]
 fn empty_store_returns_zero_anchored_empty_page() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -843,7 +845,7 @@ fn empty_store_returns_zero_anchored_empty_page() {
 #[test]
 fn inverted_block_range_is_invalid() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -861,7 +863,7 @@ fn inverted_block_range_is_invalid() {
 #[test]
 fn resume_log_id_below_window_is_invalid() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -883,7 +885,7 @@ fn resume_log_id_below_window_is_invalid() {
 #[test]
 fn resume_log_id_above_window_is_invalid() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -905,7 +907,7 @@ fn resume_log_id_above_window_is_invalid() {
 #[test]
 fn budget_max_results_caps_page_size_and_sets_resume_metadata() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -942,7 +944,7 @@ fn budget_max_results_caps_page_size_and_sets_resume_metadata() {
 #[test]
 fn zero_budget_max_results_is_invalid() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -970,7 +972,7 @@ fn zero_budget_max_results_is_invalid() {
 #[test]
 fn resuming_after_last_log_in_range_with_empty_tail_returns_empty_page_at_range_end() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -997,7 +999,7 @@ fn resuming_after_last_log_in_range_with_empty_tail_returns_empty_page_at_range_
 #[test]
 fn resume_past_last_match_inside_window_returns_empty_final_page() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -1045,7 +1047,7 @@ fn or_guardrail_is_enforced() {
             planner_max_or_terms: 2,
             ..Config::default()
         };
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             config,
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -1084,7 +1086,7 @@ fn broad_query_can_fallback_to_block_scan() {
             planner_broad_query_policy: BroadQueryPolicy::BlockScan,
             ..Config::default()
         };
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             config,
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -1138,7 +1140,7 @@ fn fs_store_adapter_roundtrip() {
             target_entries_per_chunk: 1,
             ..Config::default()
         };
-        let svc = FinalizedIndexService::new(config, meta, blob, 1);
+        let svc = FinalizedHistoryService::new(config, meta, blob, 1);
 
         let b1 = mk_block(1, [0; 32], vec![mk_log(9, 5, 4, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
@@ -1168,7 +1170,7 @@ fn fs_store_adapter_roundtrip() {
 #[test]
 fn ingest_always_writes_topic0_for_cold_signature() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 1,
                 ..Config::default()
@@ -1207,7 +1209,7 @@ fn ingest_always_writes_topic0_for_cold_signature() {
 #[test]
 fn seals_by_chunk_bytes_threshold() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 10_000,
                 target_chunk_bytes: 1,
@@ -1238,7 +1240,7 @@ fn seals_by_chunk_bytes_threshold() {
 #[test]
 fn periodic_maintenance_seals_old_tails() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 10_000,
                 target_chunk_bytes: usize::MAX / 2,
@@ -1302,7 +1304,7 @@ fn periodic_maintenance_seals_old_tails() {
 fn query_only_loads_overlapping_address_chunks() {
     block_on(async {
         let blob = RecordingBlobStore::default();
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 1,
                 planner_max_or_terms: 8,
@@ -1355,7 +1357,7 @@ fn query_only_loads_overlapping_address_chunks() {
 fn topic0_queries_use_only_topic0_chunks() {
     block_on(async {
         let blob = RecordingBlobStore::default();
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 1,
                 planner_max_or_terms: 8,
@@ -1412,7 +1414,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 1,
                 planner_max_or_terms: 8,
@@ -1448,7 +1450,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
             .ingest
             .meta_store
             .put(
-                &finalized_log_index::domain::keys::block_meta_key(1),
+                &finalized_history_query::domain::keys::block_meta_key(1),
                 encode_block_meta(&previous),
                 PutCond::Any,
                 FenceToken(1),
@@ -1520,7 +1522,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
 #[test]
 fn invalid_parent_puts_service_in_degraded_mode() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -1563,7 +1565,7 @@ fn invalid_parent_puts_service_in_degraded_mode() {
 #[test]
 fn gc_guardrail_fail_closed_sets_degraded() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 max_orphan_chunk_bytes: 1,
                 gc_guardrail_action: GuardrailAction::FailClosed,
@@ -1601,7 +1603,7 @@ fn gc_guardrail_fail_closed_sets_degraded() {
 #[test]
 fn gc_guardrail_throttle_blocks_ingest() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 max_orphan_chunk_bytes: 1,
                 gc_guardrail_action: GuardrailAction::Throttle,
@@ -1643,7 +1645,7 @@ fn gc_guardrail_throttle_blocks_ingest() {
 #[test]
 fn prune_block_hash_index_hook() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -1684,7 +1686,7 @@ fn prune_block_hash_index_hook() {
 fn backend_failures_throttle_then_degrade() {
     block_on(async {
         let fail_counter = Arc::new(AtomicUsize::new(3));
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 backend_error_throttle_after: 2,
                 backend_error_degraded_after: 3,
@@ -1743,7 +1745,7 @@ fn backend_failures_throttle_then_degrade() {
 fn backend_success_clears_throttle() {
     block_on(async {
         let fail_counter = Arc::new(AtomicUsize::new(2));
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 backend_error_throttle_after: 2,
                 backend_error_degraded_after: 10,
@@ -1781,7 +1783,7 @@ fn backend_success_clears_throttle() {
 #[test]
 fn strict_mode_keeps_cas_for_state_and_manifest_writes() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 ingest_mode: IngestMode::StrictCas,
                 target_entries_per_chunk: 1,
@@ -1830,7 +1832,7 @@ fn strict_mode_keeps_cas_for_state_and_manifest_writes() {
 #[test]
 fn fast_mode_uses_unconditional_writes_for_state_and_manifest() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 ingest_mode: IngestMode::SingleWriterFast,
                 target_entries_per_chunk: 1,

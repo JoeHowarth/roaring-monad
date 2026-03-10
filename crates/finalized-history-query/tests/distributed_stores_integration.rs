@@ -1,13 +1,13 @@
 #![cfg(feature = "distributed-stores")]
 
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::store::minio::MinioBlobStore;
-use finalized_log_index::store::scylla::ScyllaMetaStore;
-use finalized_log_index::{Clause, LogFilter};
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::store::minio::MinioBlobStore;
+use finalized_history_query::store::scylla::ScyllaMetaStore;
+use finalized_history_query::{Clause, LogFilter};
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -54,7 +54,7 @@ async fn scylla_minio_roundtrip_query() {
     .await
     .expect("connect minio");
 
-    let svc = FinalizedIndexService::new(
+    let svc = FinalizedHistoryService::new(
         Config {
             target_entries_per_chunk: 2,
             ..Config::default()

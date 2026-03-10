@@ -13,7 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 
-finalized-log-index = { path = "../finalized-log-index", features = ["distributed-stores"] }
+finalized-history-query = { path = "../finalized-history-query", features = ["distributed-stores"] }
 log-workload-gen = { path = "../log-workload-gen" }
 monad-archive = { path = "../../../monad-bft/monad-archive" }
 

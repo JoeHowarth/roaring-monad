@@ -1,17 +1,17 @@
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::Config;
-use finalized_log_index::domain::keys::{chunk_blob_key, stream_id, tail_key};
-use finalized_log_index::domain::types::{Block, Log};
-use finalized_log_index::gc::worker::GcWorker;
-use finalized_log_index::recovery::startup::startup_plan;
-use finalized_log_index::store::blob::InMemoryBlobStore;
-use finalized_log_index::store::meta::InMemoryMetaStore;
-use finalized_log_index::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
-use finalized_log_index::streams::chunk::{ChunkBlob, encode_chunk};
-use finalized_log_index::streams::manifest::encode_tail;
-use finalized_log_index::{Clause, LogFilter};
+use finalized_history_query::config::Config;
+use finalized_history_query::domain::keys::{chunk_blob_key, stream_id, tail_key};
+use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::gc::worker::GcWorker;
+use finalized_history_query::recovery::startup::startup_plan;
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
+use finalized_history_query::streams::manifest::encode_tail;
+use finalized_history_query::{Clause, LogFilter};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
@@ -73,7 +73,7 @@ fn naive_query(
 }
 
 async fn query_range(
-    svc: &FinalizedIndexService<InMemoryMetaStore, InMemoryBlobStore>,
+    svc: &FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
@@ -120,7 +120,7 @@ fn matches_topic(topic: Option<[u8; 32]>, clause: &Option<Clause<[u8; 32]>>) -> 
 #[test]
 fn differential_query_matches_naive() {
     block_on(async {
-        let svc = FinalizedIndexService::new(
+        let svc = FinalizedHistoryService::new(
             Config {
                 target_entries_per_chunk: 2,
                 planner_max_or_terms: 10,

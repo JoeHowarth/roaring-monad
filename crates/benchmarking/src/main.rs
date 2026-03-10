@@ -6,14 +6,14 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use finalized_log_index::api::{
-    ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
+use finalized_history_query::api::{
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_log_index::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
-use finalized_log_index::domain::filter::{Clause, LogFilter};
-use finalized_log_index::domain::types::{Block as IndexBlock, Log as IndexLog};
-use finalized_log_index::store::minio::MinioBlobStore;
-use finalized_log_index::store::scylla::ScyllaMetaStore;
+use finalized_history_query::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
+use finalized_history_query::domain::types::{Block as IndexBlock, Log as IndexLog};
+use finalized_history_query::store::minio::MinioBlobStore;
+use finalized_history_query::store::scylla::ScyllaMetaStore;
+use finalized_history_query::{Clause, LogFilter};
 use log_workload_gen::config::GeneratorConfig;
 use log_workload_gen::pipeline::run_collect_and_generate;
 use log_workload_gen::types::{
@@ -629,7 +629,7 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         ..IndexConfig::default()
     };
 
-    let svc = FinalizedIndexService::new(config, meta, blob, args.distributed.writer_epoch);
+    let svc = FinalizedHistoryService::new(config, meta, blob, args.distributed.writer_epoch);
 
     let started = Instant::now();
     let mut blocks_ingested = 0u64;
@@ -741,10 +741,10 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
 
 async fn cmd_benchmark(args: BenchmarkArgs) -> Result<()> {
     let mut traces = load_traces(&args.dataset_dir, &args.profiles)?;
-    if let Some(limit) = args.trace_limit {
-        if traces.len() > limit {
-            traces.truncate(limit);
-        }
+    if let Some(limit) = args.trace_limit
+        && traces.len() > limit
+    {
+        traces.truncate(limit);
     }
     if traces.is_empty() {
         bail!("no traces loaded from {}", args.dataset_dir.display());
@@ -1009,7 +1009,7 @@ fn open_fs_archive(root: &Path) -> Result<BlockDataArchive> {
 async fn connect_service(
     args: &DistributedArgs,
     config: IndexConfig,
-) -> Result<FinalizedIndexService<ScyllaMetaStore, MinioBlobStore>> {
+) -> Result<FinalizedHistoryService<ScyllaMetaStore, MinioBlobStore>> {
     let meta = ScyllaMetaStore::new(
         std::slice::from_ref(&args.scylla_node),
         &args.scylla_keyspace,
@@ -1038,7 +1038,7 @@ async fn connect_service(
         )
     })?;
 
-    Ok(FinalizedIndexService::new(
+    Ok(FinalizedHistoryService::new(
         config,
         meta,
         blob,
