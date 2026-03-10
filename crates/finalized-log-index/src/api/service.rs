@@ -5,11 +5,9 @@ use async_trait::async_trait;
 
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
-use crate::codec::finalized_state::decode_meta_state;
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
-use crate::core::state::FinalizedHeadState;
-use crate::domain::keys::META_STATE_KEY;
+use crate::core::state::load_finalized_head_state;
 use crate::error::{Error, Result};
 use crate::gc::worker::{GcStats, GcWorker};
 use crate::ingest::engine::{IngestEngine, MaintenanceStats};
@@ -51,13 +49,9 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
     }
 
     pub async fn indexed_finalized_head(&self) -> Result<u64> {
-        let state = self.ingest.meta_store.get(META_STATE_KEY).await?;
-        let result =
-            match state {
-                Some(record) => Ok(FinalizedHeadState::from(&decode_meta_state(&record.value)?)
-                    .indexed_finalized_head),
-                None => Ok(0),
-            };
+        let result = load_finalized_head_state(&self.ingest.meta_store)
+            .await
+            .map(|state| state.indexed_finalized_head);
         self.update_backend_state(&result);
         result
     }

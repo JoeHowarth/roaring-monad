@@ -1,8 +1,6 @@
-use crate::codec::finalized_state::{decode_block_meta, decode_meta_state};
 use crate::core::page::QueryOrder;
 use crate::core::refs::BlockRef;
-use crate::core::state::{BlockIdentity, FinalizedHeadState};
-use crate::domain::keys::{META_STATE_KEY, block_meta_key};
+use crate::core::state::{load_block_identity, load_finalized_head_state};
 use crate::error::{Error, Result};
 use crate::store::traits::MetaStore;
 
@@ -52,12 +50,9 @@ impl RangeResolver {
             ));
         }
 
-        let finalized_head = match meta_store.get(META_STATE_KEY).await? {
-            Some(record) => {
-                FinalizedHeadState::from(&decode_meta_state(&record.value)?).indexed_finalized_head
-            }
-            None => 0,
-        };
+        let finalized_head = load_finalized_head_state(meta_store)
+            .await?
+            .indexed_finalized_head;
 
         let anchor = if finalized_head == 0 {
             BlockRef::zero(0)
@@ -93,12 +88,8 @@ impl RangeResolver {
         meta_store: &M,
         block_num: u64,
     ) -> Result<Option<BlockRef>> {
-        let Some(record) = meta_store.get(&block_meta_key(block_num)).await? else {
-            return Ok(None);
-        };
-        let block_meta = decode_block_meta(&record.value)?;
-        Ok(Some(
-            BlockIdentity::from((block_num, &block_meta)).into_block_ref(),
-        ))
+        Ok(load_block_identity(meta_store, block_num)
+            .await?
+            .map(|identity| identity.into_block_ref()))
     }
 }
