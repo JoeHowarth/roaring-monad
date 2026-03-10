@@ -80,6 +80,61 @@ Important principle:
 
 - each bench file should read as benchmark intent, not fixture plumbing
 
+## Benchmark Seams
+
+Criterion bench targets under `benches/*.rs` compile as external crates, so this plan should not assume direct access to arbitrary private helpers.
+
+Decision:
+
+- do not make existing private helpers public just for benchmarks
+- use stable existing seams where they already match the behavior under test
+- add one narrow bench-only harness only where no good seam exists
+
+Concrete choices:
+
+- `execution_bench.rs`
+  - benchmark `core::execution::execute_candidates(...)`
+  - use a synthetic `PrimaryMaterializer` stub from `benches/common.rs`
+- `materialize_bench.rs`
+  - benchmark single-log materialization through `PrimaryMaterializer::load_by_id(...)` on `LogMaterializer`
+  - do not expose `resolve_log_id(...)` or `load_block_header(...)` just for benches
+- `query_clause_loading_bench.rs`
+  - add a small bench-oriented harness for clause loading instead of exposing the current private helper graph directly
+  - that harness may live behind a benchmark-only cfg gate or as a narrow crate-visible adapter specifically for benchmarks
+- `query_end_to_end_bench.rs`
+  - benchmark the public `FinalizedHistoryService::query_logs(...)` API
+
+The requirement is to benchmark the behavior at a stable seam, not to benchmark each current private function by name.
+
+## Measurement Methodology
+
+Cache-sensitive results are only useful if setup is kept out of the timed section.
+
+Decision:
+
+- fixture generation and data seeding happen outside the timed section
+- query IDs, block ranges, filters, and OR lists are precomputed outside the timed section
+- the timed section should contain only the operation under test plus any state transition intentionally being measured
+
+Method by benchmark type:
+
+- warm-cache benches
+  - build the harness once outside `b.iter`
+  - explicitly prime caches once before timing starts
+  - measure repeated target operations only
+- cold-cache benches
+  - use `iter_batched` or `iter_batched_ref`
+  - hand each iteration a fresh harness with preseeded stores and empty caches
+  - do not include fixture generation inside the batch body if it is not part of the intended measurement
+- locality benches
+  - precompute same-block and cross-block access sequences outside timing
+  - reuse the same sequences across iterations
+
+Reporting guidance:
+
+- bench names should encode whether the result is cold or warm
+- if a benchmark intentionally includes setup-like work, the name should say so explicitly
+
 ## Benchmark Categories
 
 ### 1. Candidate execution
@@ -125,18 +180,16 @@ Benchmark:
 - narrow local range vs full-shard local range
 - high-shard stream loading
 
-Hot code to exercise:
-
-- `load_clause_sets(...)`
-- `fetch_union_log_level(...)`
-- `load_stream_entries(...)`
-- `overlapping_chunk_refs(...)`
-
 Regression this should catch:
 
 - too much work per shard
 - loading or merging too many chunks for narrow windows
 - OR-list costs growing worse than expected
+
+Benchmark seam:
+
+- use the bench-oriented clause-loading harness described above
+- its surface should represent clause loading behavior, not expose the whole private helper graph
 
 ### 3. Materialization
 
@@ -156,18 +209,17 @@ Benchmark:
 - blocks spanning multiple directory buckets
 - high-shard log IDs
 
-Hot code to exercise:
-
-- `resolve_log_id(...)`
-- `load_block_header(...)`
-- `load_by_id(...)`
-
 Regression this should catch:
 
 - extra bucket decoding
 - poor cache locality
 - hidden ordinal computation overhead
 - unnecessary work in point materialization
+
+Benchmark seam:
+
+- use `LogMaterializer` through `PrimaryMaterializer::load_by_id(...)`
+- treat warm and cold cache state as explicit benchmark dimensions, not incidental fixture behavior
 
 ### 4. End-to-end query workloads
 
