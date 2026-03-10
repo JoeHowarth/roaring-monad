@@ -1,4 +1,4 @@
-use crate::core::ids::PrimaryIdRange;
+use crate::core::ids::{LogId, PrimaryIdRange};
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
 use crate::logs::state::load_log_block_window;
@@ -32,14 +32,20 @@ impl LogWindowResolver {
         };
 
         let start = from_block_window.first_log_id;
-        let end_exclusive = to_block_window
-            .first_log_id
-            .saturating_add(to_block_window.count as u64);
+        let end_exclusive = LogId::new(
+            to_block_window
+                .first_log_id
+                .get()
+                .saturating_add(to_block_window.count as u64),
+        );
         if start >= end_exclusive {
             return Ok(None);
         }
 
-        Ok(PrimaryIdRange::new(start, end_exclusive - 1))
+        Ok(PrimaryIdRange::new(
+            start,
+            LogId::new(end_exclusive.get().saturating_sub(1)),
+        ))
     }
 
     async fn load_block_window<M: MetaStore>(

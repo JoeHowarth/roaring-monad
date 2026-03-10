@@ -1,5 +1,6 @@
 use crate::config::BroadQueryPolicy;
 use crate::core::clause::Clause;
+use crate::core::ids::LogId;
 use crate::domain::keys::{
     MAX_LOCAL_ID, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
 };
@@ -25,8 +26,8 @@ pub struct ClauseEstimate {
 pub async fn build_clause_order<M: MetaStore>(
     meta_store: &M,
     filter: &LogFilter,
-    from_log_id: u64,
-    to_log_id_inclusive: u64,
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
 ) -> Result<Vec<ClauseKind>> {
     let mut clauses = Vec::<(ClauseKind, ClauseEstimate)>::new();
 
@@ -131,15 +132,16 @@ async fn estimate_for_values<M: MetaStore>(
     meta_store: &M,
     kind: &str,
     values: &[Vec<u8>],
-    from_log_id: u64,
-    to_log_id_inclusive: u64,
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
 ) -> Result<u64> {
     let from_shard = log_shard(from_log_id);
     let to_shard = log_shard(to_log_id_inclusive);
     let mut sum = 0u64;
 
     for value in values {
-        for shard in from_shard..=to_shard {
+        for shard_raw in from_shard.get()..=to_shard.get() {
+            let shard = crate::core::ids::LogShard::new(shard_raw);
             let stream = stream_id(kind, value, shard);
             sum = sum.saturating_add(
                 estimate_stream_overlap(
@@ -160,19 +162,21 @@ async fn estimate_for_values<M: MetaStore>(
 async fn estimate_stream_overlap<M: MetaStore>(
     meta_store: &M,
     stream_id: &str,
-    from_log_id: u64,
-    to_log_id_inclusive: u64,
-    shard: u32,
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
+    shard: crate::core::ids::LogShard,
 ) -> Result<u64> {
     let (local_from, local_to) = local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
     let mut count = 0u64;
 
     if let Some(record) = meta_store.get(&manifest_key(stream_id)).await? {
         let manifest = decode_manifest(&record.value)?;
-        if is_full_shard_range(local_from, local_to) {
+        if is_full_shard_range(local_from.get(), local_to.get()) {
             count = count.saturating_add(manifest.approx_count);
         } else {
-            for chunk_ref in overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to) {
+            for chunk_ref in
+                overlapping_chunk_refs(&manifest.chunk_refs, local_from.get(), local_to.get())
+            {
                 count = count.saturating_add(chunk_ref.count as u64);
             }
         }
@@ -181,8 +185,8 @@ async fn estimate_stream_overlap<M: MetaStore>(
     if let Some(record) = meta_store.get(&tail_key(stream_id)).await? {
         let tail = decode_tail(&record.value)?;
         for value in &tail {
-            if is_full_shard_range(local_from, local_to)
-                || (value >= local_from && value <= local_to)
+            if is_full_shard_range(local_from.get(), local_to.get())
+                || (value >= local_from.get() && value <= local_to.get())
             {
                 count = count.saturating_add(1);
             }

@@ -8,6 +8,7 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::codec::finalized_state::{encode_block_meta, encode_meta_state};
 use finalized_history_query::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
+use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard};
 use finalized_history_query::domain::keys::{
     MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
     manifest_key, stream_id,
@@ -1190,7 +1191,7 @@ fn ingest_always_writes_topic0_for_cold_signature() {
             svc.ingest_finalized_block(block).await.expect("ingest");
         }
 
-        let sid = stream_id("topic0", &sig, log_shard(0));
+        let sid = stream_id("topic0", &sig, log_shard(LogId::new(0)));
         let rec = svc
             .ingest
             .meta_store
@@ -1221,7 +1222,7 @@ fn seals_by_chunk_bytes_threshold() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(9, 9, 9, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
 
-        let sid = stream_id("addr", &[9; 20], 0);
+        let sid = stream_id("addr", &[9; 20], LogShard::new(0));
         let rec = svc
             .ingest
             .meta_store
@@ -1252,7 +1253,7 @@ fn periodic_maintenance_seals_old_tails() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(7, 7, 7, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
 
-        let sid = stream_id("addr", &[7; 20], 0);
+        let sid = stream_id("addr", &[7; 20], LogShard::new(0));
         let mkey = manifest_key(&sid);
         let mut manifest = svc
             .ingest
@@ -1460,8 +1461,11 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
         svc.ingest_finalized_block(b3).await.expect("ingest b3");
 
-        let first_id = u64::from(MAX_LOCAL_ID);
-        let second_id = compose_global_log_id(log_shard(first_id) + 1, 0);
+        let first_id = LogId::new(u64::from(MAX_LOCAL_ID));
+        let second_id = compose_global_log_id(
+            LogShard::new(log_shard(first_id).get() + 1),
+            LogLocalId::new(0).expect("0 is a valid local id"),
+        );
         let first_sid = stream_id("addr", &[9; 20], log_shard(first_id));
         let second_sid = stream_id("addr", &[9; 20], log_shard(second_id));
 
@@ -1513,6 +1517,67 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         assert_eq!(got.items.len(), 2);
         assert_eq!(got.items[0].block_num, 2);
         assert_eq!(got.items[1].block_num, 3);
+    });
+}
+
+#[test]
+fn indexed_query_for_high_shard_ids_does_not_alias_to_low_shard_results() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new(
+            Config {
+                target_entries_per_chunk: 1,
+                planner_max_or_terms: 8,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let b1 = mk_block(1, [0; 32], vec![mk_log(9, 1, 1, 1, 0, 0)]);
+        svc.ingest_finalized_block(b1.clone())
+            .await
+            .expect("ingest b1");
+
+        let high_shard_next_log_id = ((u64::from(u32::MAX) + 1) << 24) | 1;
+        let _ = svc
+            .ingest
+            .meta_store
+            .put(
+                META_STATE_KEY,
+                encode_meta_state(&MetaState {
+                    indexed_finalized_head: 1,
+                    next_log_id: high_shard_next_log_id,
+                    writer_epoch: 1,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("seed high-shard meta state");
+
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(9, 2, 2, 2, 0, 0)]);
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let got = query_page(
+            &svc,
+            2,
+            2,
+            LogFilter {
+                address: Some(Clause::One([9; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("query");
+
+        assert_eq!(got.items.len(), 1);
+        assert_eq!(got.items[0].block_num, 2);
     });
 }
 

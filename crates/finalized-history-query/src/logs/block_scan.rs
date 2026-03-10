@@ -1,5 +1,5 @@
 use crate::core::execution::MatchedPrimary;
-use crate::core::ids::PrimaryIdRange;
+use crate::core::ids::{LogId, PrimaryIdRange};
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
@@ -39,9 +39,14 @@ impl LogBlockScanner {
             }
 
             let start = block_window.first_log_id.max(log_window.start);
-            let end_inclusive = (block_window.first_log_id + block_window.count as u64)
-                .saturating_sub(1)
-                .min(log_window.end_inclusive);
+            let end_inclusive = LogId::new(
+                block_window
+                    .first_log_id
+                    .get()
+                    .saturating_add(block_window.count as u64)
+                    .saturating_sub(1),
+            )
+            .min(log_window.end_inclusive);
 
             if start > end_inclusive {
                 continue;
@@ -54,8 +59,9 @@ impl LogBlockScanner {
                 continue;
             };
 
-            for id in start..=end_inclusive {
-                let local_ordinal = usize::try_from(id - block_window.first_log_id)
+            for raw_id in start.get()..=end_inclusive.get() {
+                let id = LogId::new(raw_id);
+                let local_ordinal = usize::try_from(id.get() - block_window.first_log_id.get())
                     .map_err(|_| crate::error::Error::Decode("local ordinal overflow"))?;
                 let log = materializer.decode_log_from_cached_block(
                     &header,

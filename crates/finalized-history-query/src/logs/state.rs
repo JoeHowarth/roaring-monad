@@ -29,6 +29,7 @@ pub async fn load_log_block_window<M: MetaStore>(
 mod tests {
     use super::{load_log_block_meta, load_log_block_window};
     use crate::codec::finalized_state::encode_block_meta;
+    use crate::core::ids::LogId;
     use crate::domain::keys::block_meta_key;
     use crate::domain::types::BlockMeta;
     use crate::store::meta::InMemoryMetaStore;
@@ -64,7 +65,7 @@ mod tests {
 
             assert_eq!(block_meta.first_log_id, 42);
             assert_eq!(block_meta.count, 3);
-            assert_eq!(block_window.first_log_id, 42);
+            assert_eq!(block_window.first_log_id, LogId::new(42));
             assert_eq!(block_window.count, 3);
         });
     }

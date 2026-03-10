@@ -1,15 +1,16 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use futures::stream::{FuturesUnordered, StreamExt};
+use roaring::RoaringBitmap;
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
 use crate::config::{BroadQueryPolicy, Config};
-use crate::core::execution::{MatchedPrimary, execute_candidates};
+use crate::core::execution::{MatchedPrimary, ShardBitmapSet, execute_candidates};
+use crate::core::ids::{LogId, LogShard};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{RangeResolver, ResolvedBlockRange};
 use crate::domain::keys::{
-    chunk_blob_key, compose_global_log_id, local_range_for_shard, log_shard, manifest_key,
-    stream_id, tail_key,
+    chunk_blob_key, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
 };
 use crate::error::{Error, Result};
 use crate::logs::block_scan::LogBlockScanner;
@@ -89,7 +90,7 @@ impl LogsQueryEngine {
             return Ok(self.empty_page(&block_range));
         };
 
-        if let Some(resume_log_id) = request.resume_log_id {
+        if let Some(resume_log_id) = request.resume_log_id.map(LogId::new) {
             if !log_window.contains(resume_log_id) {
                 return Err(Error::InvalidParams(
                     "resume_log_id outside resolved block window",
@@ -180,7 +181,7 @@ impl LogsQueryEngine {
         }
 
         let next_resume_log_id = if has_more {
-            matched.last().map(|matched_log| matched_log.id)
+            matched.last().map(|matched_log| matched_log.id.get())
         } else {
             None
         };
@@ -211,9 +212,9 @@ async fn load_clause_sets<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     filter: &LogFilter,
     clause_order: &[ClauseKind],
-    from_log_id: u64,
-    to_log_id_inclusive: u64,
-) -> Result<Vec<BTreeSet<u64>>> {
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
+) -> Result<Vec<ShardBitmapSet>> {
     let mut clause_sets = Vec::new();
 
     for clause_kind in clause_order {
@@ -305,44 +306,53 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     kind: &str,
     values: &[Vec<u8>],
-    from_log_id: u64,
-    to_log_id_inclusive: u64,
-) -> Result<BTreeSet<u64>> {
-    let mut out = BTreeSet::new();
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
+) -> Result<ShardBitmapSet> {
+    let mut out = BTreeMap::new();
     let from_shard = log_shard(from_log_id);
     let to_shard = log_shard(to_log_id_inclusive);
     let mut in_flight = FuturesUnordered::new();
 
     for value in values {
-        for shard in from_shard..=to_shard {
+        for shard_raw in from_shard.get()..=to_shard.get() {
+            let shard = LogShard::new(shard_raw);
             let stream = stream_id(kind, value, shard);
             let (local_from, local_to) =
                 local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
             in_flight.push(async move {
-                let entries =
-                    load_stream_entries(meta_store, blob_store, &stream, local_from, local_to)
-                        .await?;
-                Ok::<(u32, BTreeSet<u32>), Error>((shard, entries))
+                let entries = load_stream_entries(
+                    meta_store,
+                    blob_store,
+                    &stream,
+                    local_from.get(),
+                    local_to.get(),
+                )
+                .await?;
+                Ok::<(LogShard, RoaringBitmap), Error>((shard, entries))
             });
             if in_flight.len() >= STREAM_LOAD_CONCURRENCY
                 && let Some(result) = in_flight.next().await
             {
-                let (shard, entries) = result?;
-                for local in entries {
-                    out.insert(compose_global_log_id(shard, local));
-                }
+                merge_union_entries(&mut out, result?);
             }
         }
     }
 
     while let Some(result) = in_flight.next().await {
-        let (shard, entries) = result?;
-        for local in entries {
-            out.insert(compose_global_log_id(shard, local));
-        }
+        merge_union_entries(&mut out, result?);
     }
 
     Ok(out)
+}
+
+fn merge_union_entries(out: &mut ShardBitmapSet, (shard, entries): (LogShard, RoaringBitmap)) {
+    if entries.is_empty() {
+        return;
+    }
+    out.entry(shard)
+        .and_modify(|existing| *existing |= &entries)
+        .or_insert(entries);
 }
 
 async fn load_stream_entries<M: MetaStore, B: BlobStore>(
@@ -351,8 +361,8 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     stream: &str,
     local_from: u32,
     local_to: u32,
-) -> Result<BTreeSet<u32>> {
-    let mut out = BTreeSet::new();
+) -> Result<RoaringBitmap> {
+    let mut out = RoaringBitmap::new();
 
     if let Some(record) = meta_store.get(&manifest_key(stream)).await? {
         let manifest = decode_manifest(&record.value)?;
@@ -364,9 +374,7 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     if let Some(record) = meta_store.get(&tail_key(stream)).await? {
         let tail = decode_tail(&record.value)?;
         if is_full_shard_range(local_from, local_to) {
-            for value in &tail {
-                out.insert(value);
-            }
+            out |= &tail;
         } else {
             for value in &tail {
                 if value >= local_from && value <= local_to {
@@ -383,7 +391,7 @@ async fn maybe_merge_chunk<B: BlobStore>(
     blob_store: &B,
     stream: &str,
     chunk_ref: &ChunkRef,
-    out: &mut BTreeSet<u32>,
+    out: &mut RoaringBitmap,
 ) -> Result<()> {
     let Some(bytes) = blob_store
         .get_blob(&chunk_blob_key(stream, chunk_ref.chunk_seq))
@@ -397,8 +405,6 @@ async fn maybe_merge_chunk<B: BlobStore>(
         return Err(Error::Decode("chunk count mismatch against manifest"));
     }
 
-    for value in chunk.bitmap {
-        out.insert(value);
-    }
+    *out |= &chunk.bitmap;
     Ok(())
 }

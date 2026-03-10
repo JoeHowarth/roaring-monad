@@ -2,6 +2,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
+use finalized_history_query::core::ids::{LogId, LogShard};
 use finalized_history_query::domain::keys::{chunk_blob_key, stream_id, tail_key};
 use finalized_history_query::domain::types::{Block, Log};
 use finalized_history_query::gc::worker::GcWorker;
@@ -204,7 +205,7 @@ fn recovery_and_gc_cleanup() {
         let blob = InMemoryBlobStore::default();
 
         // Create stale tail for stream with no manifest.
-        let stale_stream = stream_id("addr", &[0xabu8; 20], 0);
+        let stale_stream = stream_id("addr", &[0xabu8; 20], LogShard::new(0));
         let mut stale_tail = RoaringBitmap::new();
         stale_tail.insert(7);
         let _ = meta
@@ -241,6 +242,6 @@ fn recovery_and_gc_cleanup() {
 
         let rec = startup_plan(&meta, 0).await.expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
-        assert_eq!(rec.log_state.next_log_id, 0);
+        assert_eq!(rec.log_state.next_log_id, LogId::new(0));
     });
 }

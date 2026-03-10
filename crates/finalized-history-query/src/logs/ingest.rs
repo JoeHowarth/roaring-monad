@@ -7,6 +7,7 @@ use crate::codec::log::{
     decode_log_directory_bucket, encode_block_log_header, encode_log, encode_log_directory_bucket,
 };
 use crate::config::Config;
+use crate::core::ids::LogId;
 use crate::domain::keys::{
     LOG_DIRECTORY_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key, block_logs_blob_key,
     block_meta_key, log_directory_bucket_key, log_directory_bucket_start, log_local, log_shard,
@@ -91,9 +92,9 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
     let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
 
     for (index, log) in block.logs.iter().enumerate() {
-        let global_log_id = first_log_id + index as u64;
+        let global_log_id = LogId::new(first_log_id + index as u64);
         let shard = log_shard(global_log_id);
-        let local = log_local(global_log_id);
+        let local = log_local(global_log_id).get();
 
         out.entry(stream_id("addr", &log.address, shard))
             .or_default()
@@ -144,9 +145,9 @@ async fn persist_log_directory_bucket<M: MetaStore>(
     epoch: u64,
 ) -> Result<()> {
     let sentinel = first_log_id.saturating_add(u64::from(count));
-    let mut bucket_start = log_directory_bucket_start(first_log_id);
+    let mut bucket_start = log_directory_bucket_start(LogId::new(first_log_id));
     let last_bucket_start =
-        log_directory_bucket_start(sentinel.saturating_sub(1).max(first_log_id));
+        log_directory_bucket_start(LogId::new(sentinel.saturating_sub(1).max(first_log_id)));
     loop {
         upsert_log_directory_bucket(
             meta_store,

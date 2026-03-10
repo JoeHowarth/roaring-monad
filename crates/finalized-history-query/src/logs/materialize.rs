@@ -4,6 +4,7 @@ use bytes::Bytes;
 
 use crate::codec::log::{decode_block_log_header, decode_log, decode_log_directory_bucket};
 use crate::core::execution::PrimaryMaterializer;
+use crate::core::ids::LogId;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
 use crate::domain::keys::{
@@ -61,7 +62,10 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         Ok(self.block_header_cache.get(&block_num).cloned())
     }
 
-    pub(crate) async fn resolve_log_id(&mut self, id: u64) -> Result<Option<ResolvedLogLocation>> {
+    pub(crate) async fn resolve_log_id(
+        &mut self,
+        id: LogId,
+    ) -> Result<Option<ResolvedLogLocation>> {
         self.lookup_bucket(id, log_directory_bucket_start(id)).await
     }
 
@@ -93,7 +97,7 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
 
     async fn lookup_bucket(
         &mut self,
-        id: u64,
+        id: LogId,
         bucket_start: u64,
     ) -> Result<Option<ResolvedLogLocation>> {
         let bucket = self.load_directory_bucket(bucket_start).await?;
@@ -104,7 +108,7 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
             return Ok(None);
         };
         let block_num = bucket.start_block + entry_index as u64;
-        let local_ordinal = usize::try_from(id - bucket.first_log_ids[entry_index])
+        let local_ordinal = usize::try_from(id.get() - bucket.first_log_ids[entry_index])
             .map_err(|_| Error::Decode("local ordinal overflow"))?;
         Ok(Some(ResolvedLogLocation {
             block_num,
@@ -132,26 +136,30 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     }
 }
 
-fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: u64) -> Option<usize> {
+fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: LogId) -> Option<usize> {
     if bucket.first_log_ids.len() < 2 {
         return None;
     }
     let upper = bucket
         .first_log_ids
-        .partition_point(|first_log_id| *first_log_id <= id);
+        .partition_point(|first_log_id| *first_log_id <= id.get());
     if upper == 0 || upper >= bucket.first_log_ids.len() {
         return None;
     }
     let entry_index = upper - 1;
     let end = bucket.first_log_ids[upper];
-    if id < end { Some(entry_index) } else { None }
+    if id.get() < end {
+        Some(entry_index)
+    } else {
+        None
+    }
 }
 
 impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, B> {
     type Primary = Log;
     type Filter = LogFilter;
 
-    async fn load_by_id(&mut self, id: u64) -> Result<Option<Self::Primary>> {
+    async fn load_by_id(&mut self, id: LogId) -> Result<Option<Self::Primary>> {
         let Some(location) = self.resolve_log_id(id).await? else {
             return Ok(None);
         };
@@ -224,6 +232,7 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
 mod tests {
     use super::LogMaterializer;
     use crate::codec::log::encode_log_directory_bucket;
+    use crate::core::ids::LogId;
     use crate::domain::keys::{
         LOG_DIRECTORY_BUCKET_SIZE, log_directory_bucket_key, log_directory_bucket_start,
     };
@@ -240,7 +249,7 @@ mod tests {
             let blob = InMemoryBlobStore::default();
 
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
-            let log_id = first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5;
+            let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
                 &log_directory_bucket_key(log_directory_bucket_start(log_id)),
                 encode_log_directory_bucket(&LogDirectoryBucket {
