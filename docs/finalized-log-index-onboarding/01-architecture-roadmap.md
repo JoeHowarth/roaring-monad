@@ -35,7 +35,7 @@ Operational methods such as maintenance, GC, pruning, head inspection, and healt
 - `src/ingest/engine.rs`
   finalized ingest orchestration
 - `src/logs/ingest.rs`
-  log-specific artifact writes and stream fanout
+  log-specific artifact writes, block-metadata writes, and stream fanout
 - `src/streams/keys.rs`
   stream/shard key helpers
 

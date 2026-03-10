@@ -3,13 +3,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 
+use crate::codec::finalized_state::{encode_block_meta, encode_u64};
 use crate::codec::log::{decode_log_locator_page, encode_log, encode_log_locator_page};
 use crate::config::Config;
 use crate::domain::keys::{
-    log_local, log_locator_page_key, log_locator_page_start, log_pack_blob_key, log_shard,
-    stream_id,
+    block_hash_to_num_key, block_meta_key, log_local, log_locator_page_key, log_locator_page_start,
+    log_pack_blob_key, log_shard, stream_id,
 };
-use crate::domain::types::{Log, LogLocator};
+use crate::domain::types::{BlockMeta, Log, LogLocator};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
@@ -88,6 +89,40 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     Ok(())
 }
 
+pub async fn persist_log_block_metadata<M: MetaStore>(
+    meta_store: &M,
+    block: &Block,
+    first_log_id: u64,
+    epoch: u64,
+) -> Result<()> {
+    let block_meta = BlockMeta {
+        block_hash: block.block_hash,
+        parent_hash: block.parent_hash,
+        first_log_id,
+        count: block.logs.len() as u32,
+    };
+
+    meta_store
+        .put(
+            &block_meta_key(block.block_num),
+            encode_block_meta(&block_meta),
+            PutCond::Any,
+            FenceToken(epoch),
+        )
+        .await?;
+
+    meta_store
+        .put(
+            &block_hash_to_num_key(&block.block_hash),
+            encode_u64(block.block_num),
+            PutCond::Any,
+            FenceToken(epoch),
+        )
+        .await?;
+
+    Ok(())
+}
+
 pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<String, Vec<u32>> {
     let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
 
@@ -142,11 +177,15 @@ fn encode_log_pack(logs: &[Log]) -> Result<(Bytes, Vec<(u32, u32)>)> {
 
 #[cfg(test)]
 mod tests {
+    use crate::codec::finalized_state::{decode_block_meta, decode_u64};
     use crate::codec::log::{decode_log, decode_log_locator_page};
     use crate::config::Config;
-    use crate::domain::keys::{log_locator_page_key, log_pack_blob_key};
+    use crate::domain::keys::{
+        block_hash_to_num_key, block_meta_key, log_locator_page_key, log_pack_blob_key,
+    };
     use crate::domain::types::Log;
-    use crate::logs::ingest::persist_log_artifacts;
+    use crate::logs::ingest::{persist_log_artifacts, persist_log_block_metadata};
+    use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
@@ -161,6 +200,15 @@ mod tests {
             tx_idx,
             log_idx,
             block_hash: [seed.wrapping_add(3); 32],
+        }
+    }
+
+    fn sample_block(block_num: u64, seed: u8, logs: Vec<Log>) -> Block {
+        Block {
+            block_num,
+            block_hash: [seed; 32],
+            parent_hash: [seed.wrapping_add(1); 32],
+            logs,
         }
     }
 
@@ -236,6 +284,39 @@ mod tests {
             assert_eq!(entries.len(), 2);
             assert!(entries.contains_key(&1));
             assert!(entries.contains_key(&2));
+        });
+    }
+
+    #[test]
+    fn persist_log_block_metadata_writes_block_meta_and_hash_lookup() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let block = sample_block(9, 7, vec![sample_log(9, 0, 0, 21), sample_log(9, 0, 1, 22)]);
+
+            persist_log_block_metadata(&meta, &block, 33, 4)
+                .await
+                .expect("persist block metadata");
+
+            let stored_meta = meta
+                .get(&block_meta_key(9))
+                .await
+                .expect("read block meta")
+                .expect("block meta present");
+            let stored_hash_lookup = meta
+                .get(&block_hash_to_num_key(&block.block_hash))
+                .await
+                .expect("read block hash lookup")
+                .expect("block hash lookup present");
+
+            let decoded_meta = decode_block_meta(&stored_meta.value).expect("decode block meta");
+            let decoded_block_num =
+                decode_u64(&stored_hash_lookup.value).expect("decode block hash lookup");
+
+            assert_eq!(decoded_meta.block_hash, block.block_hash);
+            assert_eq!(decoded_meta.parent_hash, block.parent_hash);
+            assert_eq!(decoded_meta.first_log_id, 33);
+            assert_eq!(decoded_meta.count, 2);
+            assert_eq!(decoded_block_num, 9);
         });
     }
 }

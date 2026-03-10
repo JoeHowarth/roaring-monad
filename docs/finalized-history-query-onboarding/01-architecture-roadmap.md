@@ -112,7 +112,7 @@ Read these in order:
 12. `crates/finalized-log-index/src/logs/ingest.rs`
 13. `crates/finalized-log-index/tests/finalized_index.rs`
 
-`src/ingest/engine.rs` now orchestrates finalized ingest. `src/logs/ingest.rs` owns packed-log writes, locator-page writes, and log stream fanout.
+`src/ingest/engine.rs` now orchestrates finalized ingest. `src/logs/ingest.rs` owns packed-log writes, log block-metadata writes, locator-page writes, and log stream fanout.
 
 ## What Is Still Deferred
 

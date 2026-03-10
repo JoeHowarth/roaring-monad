@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 
-use crate::codec::finalized_state::{
-    decode_block_meta, decode_meta_state, encode_block_meta, encode_meta_state, encode_u64,
-};
+use crate::codec::finalized_state::{decode_block_meta, decode_meta_state, encode_meta_state};
 use crate::config::{Config, IngestMode};
-use crate::domain::keys::{META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key};
+use crate::domain::keys::{META_STATE_KEY, block_meta_key, chunk_blob_key};
 use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState};
 use crate::error::{Error, Result};
-use crate::logs::ingest::{collect_stream_appends, persist_log_artifacts};
+use crate::logs::ingest::{
+    collect_stream_appends, persist_log_artifacts, persist_log_block_metadata,
+};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use crate::streams::chunk::{ChunkBlob, decode_chunk};
 use crate::streams::keys::parse_stream_from_tail_key;
@@ -65,32 +65,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             epoch,
         )
         .await?;
-
-        let block_meta = BlockMeta {
-            block_hash: block.block_hash,
-            parent_hash: block.parent_hash,
-            first_log_id,
-            count: block.logs.len() as u32,
-        };
-        let _ = self
-            .meta_store
-            .put(
-                &block_meta_key(block.block_num),
-                encode_block_meta(&block_meta),
-                PutCond::Any,
-                FenceToken(epoch),
-            )
-            .await?;
-
-        let _ = self
-            .meta_store
-            .put(
-                &block_hash_to_num_key(&block.block_hash),
-                encode_u64(block.block_num),
-                PutCond::Any,
-                FenceToken(epoch),
-            )
-            .await?;
+        persist_log_block_metadata(&self.meta_store, block, first_log_id, epoch).await?;
 
         let appends = collect_stream_appends(block, first_log_id);
         let stream_writer = StreamWriter::new(
