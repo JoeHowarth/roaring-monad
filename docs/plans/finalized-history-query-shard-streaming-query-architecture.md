@@ -253,13 +253,14 @@ For each shard in ascending order:
 
 1. compute shard-local `[from_local, to_local]`
 2. build a shard-local clause plan:
-   - load only this shard's manifest/tail metadata for each active clause stream
+   - load only this shard's manifest metadata for each active clause stream
    - allow bounded intra-shard concurrency while loading that metadata
-   - derive a cheap shard-local estimate from the loaded metadata
+   - derive a cheap shard-local estimate from the loaded manifest metadata
    - choose clause order for this shard
 3. for each clause in shard-local planned order:
-   - reuse the already loaded shard metadata for that clause
+   - reuse the already loaded shard manifest metadata for that clause
    - allow bounded intra-shard concurrency while loading that clause
+   - load tail data only when actually executing the clause
    - union OR values for this shard only
    - intersect with the shard accumulator
    - short-circuit if the shard becomes empty
@@ -275,7 +276,7 @@ Concurrency rule:
 - shard traversal is serial in result order
 - clause execution inside a shard is serial by default so clause ordering can short-circuit work
 - stream loads within one clause for one shard may run with bounded concurrency
-- shard-local planning metadata should be reused by execution rather than fetched twice
+- shard-local manifest metadata should be reused by execution rather than fetched twice
 
 ### 4. Page assembly
 
@@ -436,10 +437,10 @@ That is not the right steady-state shape for shard streaming.
 
 Instead, for each shard:
 
-- load manifest/tail metadata for the active clause streams in that shard
+- load manifest metadata for the active clause streams in that shard
 - derive a cheap estimate from those already-needed reads
 - order clauses for that shard
-- reuse the loaded metadata during execution
+- reuse the loaded manifest metadata during execution
 
 This avoids a separate full-window planning pass and aligns planning cost with the shard currently being executed.
 
@@ -464,8 +465,27 @@ Examples of shard-local planning signals:
 
 - zero-overlap stream metadata, because it can kill the shard immediately
 - smaller overlapping sealed count from manifest chunk refs
-- smaller overlapping tail count
-- smaller combined sealed-plus-tail estimate
+
+Planning intentionally ignores tail cardinality in the base design.
+
+Reason:
+
+- tails are bounded by seal policy and concentrated near the tip
+- historical query cost is dominated by sealed chunks, not tails
+- decoding tails during planning adds work without materially improving ordering for most shards
+
+So the intended planning heuristic is:
+
+- use manifest-derived sealed overlap only
+- treat tail overlap as an execution concern, not a planning concern
+
+This still front-loads manifest reads for the active clause streams in the current shard.
+
+That is an accepted trade in the base design:
+
+- those manifest reads are needed anyway to execute indexed clauses in the shard
+- avoiding tail decode/count work keeps the planning step small and predictable
+- short-circuiting still saves chunk loads, unions, intersections, and materialization for later clauses
 
 ### OR handling
 
@@ -511,8 +531,13 @@ Without that reuse, shard streaming could improve early-stop behavior while stil
 
 Within a shard, metadata reuse is mandatory rather than optional:
 
-- if planning loads a manifest or tail for a clause stream, execution should consume that prepared result
-- do not fetch shard metadata once to choose order and then again to run the clause
+- if planning loads manifest metadata for a clause stream, execution should consume that prepared result
+- do not fetch shard manifest metadata once to choose order and then again to run the clause
+
+Tail reads are different:
+
+- planning does not need decoded tails in the base design
+- execution still loads tails when evaluating a clause so results stay exact
 
 ### Exact-match materialization
 
@@ -641,7 +666,7 @@ if filter has no active indexed clauses:
 
 for shard in overlapping_shards(log_window):
     local_range = local_range_for_shard(log_window, shard)
-    shard_plan = plan_one_shard(filter, shard, local_range)
+    shard_plan = plan_one_shard_from_manifests(filter, shard, local_range)
 
     if shard_plan.clauses is empty:
         continue
@@ -649,7 +674,7 @@ for shard in overlapping_shards(log_window):
     shard_accumulator = None
 
     for clause in shard_plan.clauses:
-        shard_clause = execute_prepared_clause(clause)
+        shard_clause = execute_prepared_clause_with_tail(clause)
         if shard_clause is empty:
             shard_accumulator = empty
             break
@@ -698,7 +723,7 @@ Introduce a narrow internal helper that can prepare:
 - one shard
 - one local range
 - the active clause streams for that shard
-- cheap shard-local estimates derived from manifest/tail metadata
+- cheap shard-local estimates derived from manifest metadata
 
 without requiring full-window `ShardBitmapSet` construction.
 
@@ -745,7 +770,8 @@ with emphasis on:
 - sparse vs dense candidates
 - expected-ingest shard spans, not only extreme worst-case shard spans
 - shard-local planning overhead
-- metadata reuse effectiveness between shard planning and execution
+- manifest-metadata reuse effectiveness between shard planning and execution
+- impact of excluding tails from planning heuristics
 
 ### Phase 7: Re-evaluate shard sizing separately
 
@@ -806,14 +832,21 @@ Because execution is incremental, poor shard-local clause ordering can waste wor
 
 ### Planning/execution reuse must be real
 
-If shard-local planning loads manifests and tails and execution then reloads them, the design loses much of its benefit.
+If shard-local planning loads manifests and execution then reloads them, the design loses much of its benefit.
 
 The implementation therefore needs a prepared-clause representation that can carry:
 
 - decoded manifest or equivalent overlap summary
-- decoded tail or equivalent overlap summary
 - overlapping chunk refs for the shard
 - shard-local estimate used for ordering
+
+The base design does not require tails to be part of that prepared-planning state.
+
+That is intentional:
+
+- tail contribution is bounded by seal policy
+- tail relevance is concentrated near the tip
+- correctness still comes from loading tails during execution
 
 ### Exact-page semantics can still allow long first pages
 
