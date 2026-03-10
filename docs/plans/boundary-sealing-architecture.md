@@ -102,11 +102,17 @@ Recommended shape:
 
 Properties:
 
-- the marker exists iff the stream currently has a non-empty tail for that shard
-- listing `open_tails/<completed_shard>/` yields exactly the streams that still need finalization for that shard
+- the marker is a conservative membership hint for streams that may currently have a non-empty tail for that shard
+- listing `open_tails/<completed_shard>/` yields a superset of the streams that may still need finalization for that shard
 - marker churn happens only on tail empty/non-empty transitions, not on every append
 
 This avoids a single giant per-shard membership object while also avoiding a full `tails/` scan at rollover.
+
+The required safety invariant is:
+
+- the index must never under-report a non-empty tail for a shard that might still need finalization before `meta/state` advances past that shard
+
+Over-reporting is acceptable. A stale marker may cause an unnecessary verification read during finalization, but it must not allow a live tail to be skipped.
 
 ## Ingest Flow
 
@@ -123,6 +129,15 @@ The new requirement is that tail writes also maintain `open_tails/<shard>/<strea
 - tail transitions from empty to non-empty: insert marker
 - tail remains non-empty: no membership change
 - tail transitions from non-empty to empty: delete marker
+
+Because the metadata API does not provide a multi-key transaction across tail state and marker state, the implementation must rely on write ordering rather than exact atomic membership.
+
+The required ordering is:
+
+- when tail state becomes non-empty, write the marker before publishing the non-empty tail state
+- when tail state becomes empty or is deleted, remove the tail state before deleting the marker
+
+That ordering makes stale markers possible, but it prevents under-reporting of live tails.
 
 ### Boundary-triggered finalization
 
@@ -160,6 +175,14 @@ The finalization rule stays the same:
 
 This guarantees that every newly closed shard is finalized before the new head becomes visible.
 
+This does not require splitting one mutable tail object across multiple shards. Stream IDs already include the shard, so:
+
+- `manifests/<stream_id>` is already shard-qualified
+- `tails/<stream_id>` is already shard-qualified
+- a block that contributes entries to shard `S` and shard `S + 1` writes different stream keys for those shards
+
+Finalizing shard `S` therefore does not delete or overwrite the live tail for shard `S + 1`.
+
 ## Stream Writer Changes
 
 The current `StreamWriter::apply_appends` path should be split conceptually into two modes:
@@ -172,6 +195,8 @@ Forced-finalize mode differs from normal sealing in one important way:
 - it must flush a non-empty tail even when entry-count, byte-size, and time thresholds would not normally seal it
 
 This should reuse the same chunk encoding and manifest update rules already used for normal sealing so the persisted format stays uniform.
+
+If a completed-shard marker is stale and the corresponding tail is already missing or empty, forced-finalize mode should treat that as a no-op and clear the stale marker.
 
 ## Tail Object Lifecycle
 
