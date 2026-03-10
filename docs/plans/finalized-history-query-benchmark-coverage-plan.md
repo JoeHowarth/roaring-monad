@@ -2,23 +2,20 @@
 
 ## Summary
 
-This plan adds benchmark coverage for `crates/finalized-history-query` at the subcomponent level instead of relying only on broad end-to-end Criterion runs.
+This plan adds only the benchmark coverage that is clearly worth maintaining for `crates/finalized-history-query`.
 
-The immediate motivation is to catch regressions like:
+The immediate goal is to catch regressions like:
 
 - replacing shard-local roaring operations with eager `BTreeSet<u64>` expansion
-- adding hidden per-shard iteration overhead
-- turning cache-friendly paths into repeated decode / lookup work
+- adding avoidable per-shard union or intersection overhead
+- turning `log_id` materialization into repeated decode / lookup churn
 
-The desired end state is a readable multi-file benchmark suite that makes performance regressions visible in:
+The reduced end state is a readable multi-file benchmark suite focused on:
 
 - candidate execution
 - clause loading
 - materialization
-- block-scan fallback
-- ingest fanout and stream append paths
-- codec and storage-adapter hot paths
-- end-to-end mixed query workloads
+- end-to-end query behavior
 
 ## Problem Statement
 
@@ -26,54 +23,43 @@ The current benchmark coverage in:
 
 - `crates/finalized-history-query/benches/finalized_history_query_bench.rs`
 
-is useful, but too coarse to diagnose or reliably catch subcomponent regressions.
+is too coarse to reliably catch subcomponent regressions.
 
-Current gaps:
+The most important current gaps are:
 
-1. one bench file mixes ingest and several query shapes, which makes it harder to see what changed
-2. the suite does not isolate the indexed candidate executor
-3. shard-heavy workloads are underrepresented
-4. materialization and directory-bucket lookup costs are not benchmarked directly
-5. stream append / seal costs are not benchmarked directly
-6. codec and manifest/chunk operations are not benchmarked directly
-7. there is no explicit benchmark shape targeting high shard IDs above `u32::MAX`
+1. the indexed candidate executor is not benchmarked directly
+2. clause loading and shard fanout are not benchmarked directly
+3. materialization and cache behavior are not benchmarked directly
+4. the broad query benches do not make shard-heavy regressions obvious
 
-That means a change can regress an important internal path while leaving the current broad query benches noisy or apparently flat.
+That means a performance regression can land in an important internal path while the existing broad query benchmarks stay noisy or inconclusive.
 
 ## Goals
 
 - split benchmark coverage into multiple bench files for readability
-- benchmark all major hot subcomponents directly
-- add shard-heavy and high-shard-ID workloads
-- make indexed execution regressions obvious before they reach full query benches
-- keep synthetic workloads deterministic and cheap enough for local iteration
-- preserve some broader end-to-end benches for integration-level signal
+- benchmark the highest-value hot subcomponents directly
+- add shard-heavy and high-shard-ID workloads where they matter
+- keep one end-to-end query layer as an integration backstop
+- keep the suite small enough that contributors will actually run it
 
 ## Non-Goals
 
 - replacing the existing `benchmarking` crate for distributed or production-shape runs
+- benchmarking every subsystem in the crate
 - introducing CI gating on absolute timings in the first pass
-- benchmarking backend-specific remote systems inside the Criterion microbench suite
-- building a generic benchmarking framework for the whole workspace
+- adding separate codec, block-scan, ingest-fanout, or stream-writer microbenches unless later profiling shows they matter
 
 ## Desired Bench Layout
 
-Replace the current single-file bench organization with multiple files under:
+Replace the current single-file bench organization with:
 
 - `crates/finalized-history-query/benches/common.rs`
 - `crates/finalized-history-query/benches/execution_bench.rs`
 - `crates/finalized-history-query/benches/query_clause_loading_bench.rs`
 - `crates/finalized-history-query/benches/materialize_bench.rs`
-- `crates/finalized-history-query/benches/block_scan_bench.rs`
-- `crates/finalized-history-query/benches/ingest_fanout_bench.rs`
-- `crates/finalized-history-query/benches/streams_bench.rs`
-- `crates/finalized-history-query/benches/codec_bench.rs`
 - `crates/finalized-history-query/benches/query_end_to_end_bench.rs`
 
-If the suite grows further, it is acceptable to split `streams_bench.rs` into:
-
-- `tail_manager_bench.rs`
-- `stream_writer_bench.rs`
+The point is not to exhaustively benchmark everything. The point is to isolate the internal query-path components that are both performance-sensitive and easy to regress.
 
 ## Shared Benchmark Support
 
@@ -112,19 +98,8 @@ Benchmark:
 - multi-clause intersection with dense candidates
 - OR-union of many shard-local bitmaps before intersection
 - empty-clause-set execution over a range
-- clipping candidate sets to:
-  - first shard only
-  - last shard only
-  - both edges
-  - full interior shards
+- clipping candidate sets at first shard, last shard, and both edges
 - high-shard-ID iteration with shard values above `u32::MAX`
-
-Metrics to care about:
-
-- throughput
-- allocation churn
-- scaling as shard count increases
-- scaling as candidate density increases
 
 Regression this should catch:
 
@@ -178,7 +153,6 @@ Benchmark:
 - cold block-header cache
 - repeated materialization within one block
 - repeated materialization across many blocks
-- large blocks vs small blocks
 - blocks spanning multiple directory buckets
 - high-shard log IDs
 
@@ -193,98 +167,9 @@ Regression this should catch:
 - extra bucket decoding
 - poor cache locality
 - hidden ordinal computation overhead
-- unnecessary full-blob behavior in point materialization
+- unnecessary work in point materialization
 
-### 4. Block-scan fallback
-
-Target file:
-
-- `crates/finalized-history-query/benches/block_scan_bench.rs`
-
-Benchmark:
-
-- empty-heavy block ranges
-- dense matching blocks
-- sparse matching blocks
-- large blocks with low selectivity
-- large blocks with high selectivity
-- resume windows that start inside a block
-
-Regression this should catch:
-
-- repeatedly decoding too much state per block
-- poor sequential payload reuse
-- expensive handling of empty blocks
-
-### 5. Ingest fanout
-
-Target file:
-
-- `crates/finalized-history-query/benches/ingest_fanout_bench.rs`
-
-Benchmark:
-
-- `collect_stream_appends(...)`
-- low-topic-count logs
-- max-topic logs
-- high address reuse vs low address reuse
-- logs that stay in one shard
-- logs that cross shard boundaries
-- blocks that cross directory-bucket boundaries
-
-Regression this should catch:
-
-- excessive map/set churn during fanout
-- shard-transition inefficiencies
-- over-allocation in per-stream append collection
-
-### 6. Stream append and sealing
-
-Target file:
-
-- `crates/finalized-history-query/benches/streams_bench.rs`
-
-Benchmark:
-
-- tail append only
-- append then seal at entry threshold
-- append then seal at byte threshold
-- many small streams
-- few large streams
-- warm manifest/tail load path
-- cold manifest/tail load path
-
-Hot code to exercise:
-
-- `TailManager`
-- `StreamWriter::apply_appends(...)` and related helpers
-
-Regression this should catch:
-
-- too much manifest rewrite overhead
-- unnecessary bitmap copying
-- poor scaling with many streams
-
-### 7. Codec hot paths
-
-Target file:
-
-- `crates/finalized-history-query/benches/codec_bench.rs`
-
-Benchmark:
-
-- encode/decode block log headers
-- encode/decode log directory buckets
-- encode/decode roaring chunks
-- encode/decode manifests
-- encode/decode realistic logs and block payloads
-
-Regression this should catch:
-
-- serialization overhead that spills into ingest/query hot paths
-- larger-than-expected cost for metadata-heavy workloads
-
-### 8. End-to-end query workloads
+### 4. End-to-end query workloads
 
 Target file:
 
@@ -297,7 +182,6 @@ Benchmark groups:
 - narrow indexed queries
 - multi-clause indexed intersections
 - wide OR queries still using indexed execution
-- broad queries forcing block scan
 - pagination-heavy queries
 - shard-boundary queries
 - high-shard-ID queries
@@ -309,7 +193,7 @@ Regression this should catch:
 
 ## Workload Matrix
 
-Every benchmark category does not need every axis, but the suite as a whole should cover them.
+The suite as a whole should cover these axes, but every bench does not need every shape.
 
 ### Shard shape
 
@@ -320,9 +204,9 @@ Every benchmark category does not need every axis, but the suite as a whole shou
 
 ### Candidate density
 
-- sparse: `0.01%` to `0.1%`
-- medium: `1%` to `5%`
-- dense: `25%` to `90%`
+- sparse
+- medium
+- dense
 
 ### OR width
 
@@ -332,20 +216,12 @@ Every benchmark category does not need every axis, but the suite as a whole shou
 - `64`
 - `256`
 
-### Block shape
-
-- many empty blocks
-- many small blocks
-- fewer large blocks
-- large blocks with repeated addresses/topics
-- blocks crossing directory-bucket boundaries
-
 ### Cache shape
 
 - cold cache
 - warm cache
 - same-block locality
-- cross-block random access
+- cross-block access
 
 ## Benchmark Data Strategy
 
@@ -358,15 +234,7 @@ Reasons:
 - easy to tune density and shard count
 - avoids remote backend noise
 
-The synthetic fixtures should explicitly support:
-
-- controlled shard count
-- controlled local-ID density
-- controlled value reuse across address/topic streams
-- controlled block-size distribution
-- controlled empty-block frequency
-
-Keep the distributed and production-shape workloads in the existing `benchmarking` crate and scripts.
+Keep production-shape and distributed runs in the existing `benchmarking` crate and scripts.
 
 ## Concrete File Changes
 
@@ -386,18 +254,14 @@ Add:
 - fixture builders
 - shared workload presets
 - deterministic bitmap / stream seed helpers
-- optional helper materializer/store stubs for execution-only benches
-
-### New bench files
-
-Add the files listed in the desired layout above.
+- small helper materializer/store stubs for execution-only benches
 
 ### Existing bench file
 
 Either:
 
 1. delete `finalized_history_query_bench.rs` after the split, or
-2. keep it temporarily as a thin umbrella file while moving logic out
+2. keep it briefly as a transition wrapper
 
 Recommendation:
 
@@ -405,95 +269,58 @@ Recommendation:
 
 ## Implementation Phases
 
-## Phase 1: Split the current bench file and introduce common helpers
+## Phase 1: Split the current bench file and add shared helpers
 
 Changes:
 
 - add `benches/common.rs`
-- move current ingest benches to `ingest_fanout_bench.rs` or `query_end_to_end_bench.rs` as appropriate
-- move current broad query benches to `query_end_to_end_bench.rs`
+- move the current end-to-end query benches into `query_end_to_end_bench.rs`
 - update `Cargo.toml` bench targets
 
 Acceptance:
 
-- no benchmark logic duplication
-- existing bench coverage still runs
-- bench files are readable on their own
+- the benchmark layout is readable
+- existing integration-level coverage still runs
 
-## Phase 2: Add executor and clause-loading microbenches
+## Phase 2: Add executor microbenches
 
 Changes:
 
 - add `execution_bench.rs`
-- add `query_clause_loading_bench.rs`
 - add shard-heavy and high-shard synthetic workloads
 
 Acceptance:
 
-- direct benchmark coverage exists for the indexed execution core
-- a roaring-vs-`BTreeSet` regression would show up clearly in these benches
+- a roaring-vs-`BTreeSet` regression would show up clearly here
 
-## Phase 3: Add materialization and block-scan microbenches
+## Phase 3: Add clause-loading microbenches
+
+Changes:
+
+- add `query_clause_loading_bench.rs`
+
+Acceptance:
+
+- shard fanout and OR-union costs are benchmarked directly
+
+## Phase 4: Add materialization microbenches
 
 Changes:
 
 - add `materialize_bench.rs`
-- add `block_scan_bench.rs`
 
 Acceptance:
 
-- query-path lookup and decode work are isolated from clause loading
-- cache hit vs miss behavior is visible
-
-## Phase 4: Add ingest fanout, streams, and codec benches
-
-Changes:
-
-- add `ingest_fanout_bench.rs`
-- add `streams_bench.rs`
-- add `codec_bench.rs`
-
-Acceptance:
-
-- ingest-side and storage-format regressions are covered directly
-
-## Phase 5: Tune naming, documentation, and workflow
-
-Changes:
-
-- document bench commands in crate docs or a focused benchmark README section
-- define the expected “run these first” local workflow
-- optionally add a lightweight script for running the finalized-history-query bench suite in a fixed order
-
-Acceptance:
-
-- contributors know which bench file to use for which kind of change
-
-## Benchmark Naming Guidance
-
-Names should encode the real shape under test.
-
-Prefer names like:
-
-- `intersect_sparse_8_shards`
-- `or_union_64_values_high_shard`
-- `materialize_warm_header_cache_same_block`
-- `block_scan_empty_heavy_range`
-
-Avoid names like:
-
-- `bench1`
-- `query_large`
-- `mixed2`
+- lookup and cache behavior are benchmarked directly
 
 ## Verification Plan
 
 At minimum after implementation:
 
 - `cargo bench -p finalized-history-query --no-run`
-- routine crate verification with `scripts/verify.sh finalized-history-query`
+- `scripts/verify.sh finalized-history-query`
 
-Recommended local benchmark smoke set:
+Recommended local smoke set:
 
 - `cargo bench -p finalized-history-query --bench execution_bench`
 - `cargo bench -p finalized-history-query --bench materialize_bench`
@@ -505,41 +332,14 @@ For any performance-motivated follow-up patch:
 - append them to `OPTIMIZATION_LOG.md`
 - include the relevant deltas in the commit message body
 
-## Risks
-
-### Too many benches too quickly
-
-A very broad suite can become expensive or noisy.
-
-Mitigation:
-
-- keep Criterion microbenches synthetic and in-memory
-- reserve distributed or soak runs for the `benchmarking` crate
-
-### Poor fixture design
-
-If each bench hand-builds different data, results become hard to compare.
-
-Mitigation:
-
-- centralize fixture builders in `benches/common.rs`
-
-### Overfitting to synthetic data
-
-A microbench can hide integration-level regressions.
-
-Mitigation:
-
-- keep end-to-end query benches
-- continue using the separate distributed benchmarking workflows
-
 ## Recommendation
 
-Implement this as a staged benchmark refactor:
+Implement only the benchmark layers with the highest payoff:
 
-1. split the current single bench file into multiple files
-2. add executor and clause-loading microbenches first
-3. add materialization, ingest, stream, and codec benches next
-4. keep end-to-end query benches as the final integration layer
+1. split the current bench file for readability
+2. add `execution_bench`
+3. add `query_clause_loading_bench`
+4. add `materialize_bench`
+5. keep one strong end-to-end query bench file
 
-The executor and clause-loading benches should be treated as the first-class guardrails against future regressions like eager `BTreeSet` expansion.
+That is enough to catch the important query-path regressions without turning the benchmark suite into maintenance overhead.
