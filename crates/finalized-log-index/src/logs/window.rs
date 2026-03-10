@@ -1,4 +1,4 @@
-use crate::codec::log::decode_block_meta;
+use crate::codec::finalized_state::decode_block_meta;
 use crate::core::ids::PrimaryIdRange;
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;

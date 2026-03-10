@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::codec::log::decode_u64;
+use crate::codec::finalized_state::decode_u64;
 use crate::codec::manifest::decode_manifest;
 use crate::config::Config;
 use crate::domain::keys::{chunk_blob_key, manifest_key};

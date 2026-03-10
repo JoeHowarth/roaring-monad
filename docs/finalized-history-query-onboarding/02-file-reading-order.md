@@ -55,10 +55,11 @@ Look for:
 ## Pass 4: Persisted bytes and storage
 
 19. `crates/finalized-log-index/src/domain/types.rs`
-20. `crates/finalized-log-index/src/codec/log.rs`
-21. `crates/finalized-log-index/src/codec/manifest.rs`
-22. `crates/finalized-log-index/src/codec/chunk.rs`
-23. `crates/finalized-log-index/src/store/traits.rs`
+20. `crates/finalized-log-index/src/codec/finalized_state.rs`
+21. `crates/finalized-log-index/src/codec/log.rs`
+22. `crates/finalized-log-index/src/codec/manifest.rs`
+23. `crates/finalized-log-index/src/codec/chunk.rs`
+24. `crates/finalized-log-index/src/store/traits.rs`
 
 Look for:
 
@@ -70,8 +71,8 @@ Look for:
 
 ## Pass 5: End-to-end behavior
 
-24. `crates/finalized-log-index/tests/finalized_index.rs`
-25. `crates/finalized-log-index/tests/differential_and_gc.rs`
+25. `crates/finalized-log-index/tests/finalized_index.rs`
+26. `crates/finalized-log-index/tests/differential_and_gc.rs`
 
 Focus on:
 

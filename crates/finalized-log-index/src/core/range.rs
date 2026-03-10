@@ -1,4 +1,4 @@
-use crate::codec::log::{decode_block_meta, decode_meta_state};
+use crate::codec::finalized_state::{decode_block_meta, decode_meta_state};
 use crate::core::page::QueryOrder;
 use crate::core::refs::BlockRef;
 use crate::core::state::BlockIdentity;

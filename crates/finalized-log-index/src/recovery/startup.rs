@@ -1,4 +1,4 @@
-use crate::codec::log::decode_meta_state;
+use crate::codec::finalized_state::decode_meta_state;
 use crate::domain::keys::META_STATE_KEY;
 use crate::domain::types::MetaState;
 use crate::error::Result;

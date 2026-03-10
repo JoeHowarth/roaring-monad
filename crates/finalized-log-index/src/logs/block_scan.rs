@@ -36,7 +36,7 @@ impl LogBlockScanner {
             else {
                 continue;
             };
-            let block_meta = crate::codec::log::decode_block_meta(&record.value)?;
+            let block_meta = crate::codec::finalized_state::decode_block_meta(&record.value)?;
             if block_meta.count == 0 {
                 continue;
             }

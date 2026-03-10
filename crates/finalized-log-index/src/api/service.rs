@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
-use crate::codec::log::decode_meta_state;
+use crate::codec::finalized_state::decode_meta_state;
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
 use crate::domain::keys::META_STATE_KEY;

@@ -5,10 +5,10 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::codec::chunk::{ChunkBlob, decode_chunk, encode_chunk};
-use crate::codec::log::{
-    decode_block_meta, decode_log_locator_page, decode_meta_state, encode_block_meta, encode_log,
-    encode_log_locator_page, encode_meta_state, encode_u64,
+use crate::codec::finalized_state::{
+    decode_block_meta, decode_meta_state, encode_block_meta, encode_meta_state, encode_u64,
 };
+use crate::codec::log::{decode_log_locator_page, encode_log, encode_log_locator_page};
 use crate::codec::manifest::{
     ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
 };

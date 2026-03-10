@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::codec::log::{
-    decode_block_meta, decode_log, decode_log_locator, decode_log_locator_page,
-};
+use crate::codec::finalized_state::decode_block_meta;
+use crate::codec::log::{decode_log, decode_log_locator, decode_log_locator_page};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;

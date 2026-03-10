@@ -32,14 +32,15 @@ This is the recommended file order for understanding the current indexing and qu
 ## Pass 4: Persisted bytes and ingest
 
 19. `crates/finalized-log-index/src/domain/types.rs`
-20. `crates/finalized-log-index/src/codec/log.rs`
-21. `crates/finalized-log-index/src/codec/manifest.rs`
-22. `crates/finalized-log-index/src/codec/chunk.rs`
-23. `crates/finalized-log-index/src/ingest/engine.rs`
+20. `crates/finalized-log-index/src/codec/finalized_state.rs`
+21. `crates/finalized-log-index/src/codec/log.rs`
+22. `crates/finalized-log-index/src/codec/manifest.rs`
+23. `crates/finalized-log-index/src/codec/chunk.rs`
+24. `crates/finalized-log-index/src/ingest/engine.rs`
 
 ## Pass 5: Validation
 
-24. `crates/finalized-log-index/tests/finalized_index.rs`
-25. `crates/finalized-log-index/tests/differential_and_gc.rs`
+25. `crates/finalized-log-index/tests/finalized_index.rs`
+26. `crates/finalized-log-index/tests/differential_and_gc.rs`
 
 That set covers the current public API, storage model, ingest path, indexed query path, block-scan fallback, and pagination behavior.

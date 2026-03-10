@@ -7,7 +7,7 @@ use finalized_log_index::api::{
     ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
 };
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
-use finalized_log_index::codec::log::{encode_block_meta, encode_meta_state};
+use finalized_log_index::codec::finalized_state::{encode_block_meta, encode_meta_state};
 use finalized_log_index::codec::manifest::{Manifest, decode_manifest, encode_manifest};
 use finalized_log_index::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
 use finalized_log_index::domain::filter::{Clause, LogFilter};
