@@ -1,7 +1,7 @@
 use crate::codec::finalized_state::{decode_block_meta, decode_meta_state};
 use crate::core::page::QueryOrder;
 use crate::core::refs::BlockRef;
-use crate::core::state::BlockIdentity;
+use crate::core::state::{BlockIdentity, FinalizedHeadState};
 use crate::domain::keys::{META_STATE_KEY, block_meta_key};
 use crate::error::{Error, Result};
 use crate::store::traits::MetaStore;
@@ -53,7 +53,9 @@ impl RangeResolver {
         }
 
         let finalized_head = match meta_store.get(META_STATE_KEY).await? {
-            Some(record) => decode_meta_state(&record.value)?.indexed_finalized_head,
+            Some(record) => {
+                FinalizedHeadState::from(&decode_meta_state(&record.value)?).indexed_finalized_head
+            }
             None => 0,
         };
 
