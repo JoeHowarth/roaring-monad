@@ -35,5 +35,5 @@ criterion.workspace = true
 libc.workspace = true
 
 [[bench]]
-name = "finalized_index_bench"
+name = "finalized_history_query_bench"
 harness = false

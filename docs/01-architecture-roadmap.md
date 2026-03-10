@@ -4,7 +4,7 @@ This folder is the current developer documentation for `crates/finalized-history
 
 Historical design docs, migration plans, and superseded onboarding material live under `docs/historical/`.
 
-The active storage-redesign note for moving from locator pages to block-keyed log payloads lives in:
+The current log-payload storage design lives in:
 
 - `docs/04-block-keyed-log-storage.md`
 

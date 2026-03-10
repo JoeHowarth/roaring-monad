@@ -1126,7 +1126,7 @@ fn broad_query_can_fallback_to_block_scan() {
 fn fs_store_adapter_roundtrip() {
     block_on(async {
         let root = std::env::temp_dir().join(format!(
-            "finalized-index-test-{}",
+            "finalized-history-query-test-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time")

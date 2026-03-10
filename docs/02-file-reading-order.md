@@ -56,7 +56,7 @@ Look for:
 - block-window to log-ID-window mapping
 - indexed path vs broad-query block scan
 - exact pagination boundary handling
-- packed-log, locator-page, and log block-metadata writes
+- directory-bucket, block-log-header, block-keyed payload, and log block-metadata writes
 - stream fanout during ingest
 
 ## Pass 4: Persisted bytes and storage

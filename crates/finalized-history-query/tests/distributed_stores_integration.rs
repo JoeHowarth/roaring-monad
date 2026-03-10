@@ -36,7 +36,7 @@ async fn scylla_minio_roundtrip_query() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let keyspace = format!("finalized_index_it_{}", stamp);
+    let keyspace = format!("finalized_history_query_it_{}", stamp);
 
     let meta = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
@@ -48,7 +48,7 @@ async fn scylla_minio_roundtrip_query() {
         "us-east-1",
         "minioadmin",
         "minioadmin",
-        "finalized-index-it",
+        "finalized-history-query-it",
         &format!("run-{stamp}"),
     )
     .await

@@ -52,7 +52,7 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let keyspace = format!("finalized_index_chaos_{}", stamp);
+    let keyspace = format!("finalized_history_query_chaos_{}", stamp);
 
     let meta = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
@@ -65,7 +65,7 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
         "us-east-1",
         "minioadmin",
         "minioadmin",
-        "finalized-index-it",
+        "finalized-history-query-it",
         &format!("chaos-{stamp}"),
     )
     .await
@@ -89,7 +89,7 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
         .await
         .expect("ingest b1");
 
-    assert!(docker_control(&["stop", "finalized-index-minio"]));
+    assert!(docker_control(&["stop", "finalized-history-query-minio"]));
 
     let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
     let e1 = svc
@@ -145,5 +145,5 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
         .expect_err("degraded call blocked");
     assert!(matches!(e3, Error::Degraded(_)));
 
-    let _ = docker_control(&["start", "finalized-index-minio"]);
+    let _ = docker_control(&["start", "finalized-history-query-minio"]);
 }

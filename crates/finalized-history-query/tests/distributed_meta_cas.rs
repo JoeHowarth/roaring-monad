@@ -9,7 +9,7 @@ async fn lwt_if_absent_has_single_winner() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let keyspace = format!("finalized_index_lwt_absent_{}", stamp);
+    let keyspace = format!("finalized_history_query_lwt_absent_{}", stamp);
 
     let store = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
@@ -64,7 +64,7 @@ async fn lwt_if_version_has_single_winner() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let keyspace = format!("finalized_index_lwt_ver_{}", stamp);
+    let keyspace = format!("finalized_history_query_lwt_ver_{}", stamp);
 
     let store = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
