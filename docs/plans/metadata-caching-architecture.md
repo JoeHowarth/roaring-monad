@@ -64,6 +64,8 @@ This keeps family semantics explicit while reusing one engine for:
 - metrics
 - in-flight miss coordination
 
+The engine may own the miss-coordination flow itself, but families still define the typed fetchers that know how to read, decode, and weight each object kind.
+
 ### 3. Tables are logical policy boundaries
 
 Each cache table has:
@@ -103,35 +105,49 @@ The cache engine should expose:
 - named tables with per-table config
 - `get`
 - `insert`
-- internal miss coordination
+- fill APIs that perform internal miss coordination
 - eviction and capacity tracking
 - per-table metrics
 
 The public family-facing API does not need to expose generic async loader closures.
 
-Instead, each typed family facade should implement miss handling internally:
+Instead, each typed family facade should call into cache-owned fill logic using a typed fetcher:
 
 1. check cache
 2. if present, return it
-3. otherwise join or start an in-flight fill for that table/key
-4. the elected loader reads from the backend, decodes, inserts, and completes the in-flight state
+3. otherwise ask the cache to fill `(table_id, key)` using the supplied fetcher
+4. the elected loader invokes `fetcher.fetch()`, gets the decoded value plus weight, inserts it, and completes the in-flight state
 5. waiters resume and read the inserted value
 
-This keeps the generic engine reusable while avoiding closure-heavy public APIs.
+This keeps deduplication and fill ownership in one place while avoiding closure-heavy public APIs.
 
 ### In-Flight Miss Coordination
 
 Concurrent miss coordination should be built into the first implementation and used consistently across tables.
 
-The cache does not need a public `get_or_load(...)` API to support this. The essential mechanism is:
+The cache does not need a public `get_or_load(...)` closure API to support this. The essential mechanism is:
 
 - one shared in-flight map keyed by `(table_id, cache_key)`
 - first miss becomes the loader
 - later misses wait on the same in-flight entry
+- the loader runs a typed fetcher for that key
 - successful load inserts into cache and wakes waiters
 - failed load wakes waiters without inserting
 
 This complexity is worth centralizing once rather than reintroducing duplicate fetch and decode behavior at every use site.
+
+The intended fetcher shape is:
+
+- cache-owned miss coordination
+- family-owned typed fetchers
+- fetchers return the fully decoded value plus its weight
+
+The fetcher should not be a raw `(store, key)` tuple implementation by default. Named typed fetchers or family-local helper structs are preferred because they give a clearer home for:
+
+- decode logic
+- weight computation
+- backend-specific reads
+- object-kind-specific error handling
 
 ## Immutable-First Scope
 
@@ -232,7 +248,7 @@ It should not:
 
 - construct storage paths
 - know backend-specific codecs
-- own metadata-store or object-store handles directly
+- own metadata-store or object-store handles directly as part of its long-lived state
 
 Those concerns belong to the family facade and storage adapters.
 
@@ -263,9 +279,9 @@ For logs, examples include:
 
 Those helpers should:
 
+- provide the typed fetchers used by cache-owned fill logic
 - read and decode from the appropriate backend on miss
-- compute object weight hints
-- insert on successful fill
+- compute object weights
 - optionally eagerly populate after successful ingest writes
 
 This is intentionally less abstract than a shared fully typed substrate layer. The repeated engine behavior is centralized, but family integration remains explicit.
