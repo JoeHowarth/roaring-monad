@@ -3,6 +3,7 @@ name = "finalized-history-query"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autobenches = false
 
 [features]
 default = []
@@ -34,5 +35,17 @@ criterion.workspace = true
 libc.workspace = true
 
 [[bench]]
-name = "finalized_history_query_bench"
+name = "execution_bench"
+harness = false
+
+[[bench]]
+name = "query_clause_loading_bench"
+harness = false
+
+[[bench]]
+name = "materialize_bench"
+harness = false
+
+[[bench]]
+name = "query_end_to_end_bench"
 harness = false

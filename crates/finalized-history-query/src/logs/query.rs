@@ -301,6 +301,27 @@ async fn load_clause_sets<M: MetaStore, B: BlobStore>(
     Ok(clause_sets)
 }
 
+#[doc(hidden)]
+pub async fn load_clause_sets_for_benchmark<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    filter: &LogFilter,
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
+) -> Result<Vec<ShardBitmapSet>> {
+    let clause_order =
+        build_clause_order(meta_store, filter, from_log_id, to_log_id_inclusive).await?;
+    load_clause_sets(
+        meta_store,
+        blob_store,
+        filter,
+        &clause_order,
+        from_log_id,
+        to_log_id_inclusive,
+    )
+    .await
+}
+
 async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
