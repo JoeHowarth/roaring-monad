@@ -4,5 +4,6 @@ pub mod index_spec;
 pub mod ingest;
 pub mod materialize;
 pub mod query;
+pub mod state;
 pub mod types;
 pub mod window;

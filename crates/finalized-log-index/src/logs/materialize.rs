@@ -2,16 +2,14 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::codec::finalized_state::decode_block_meta;
 use crate::codec::log::{decode_log, decode_log_locator, decode_log_locator_page};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
-use crate::domain::keys::{
-    block_meta_key, log_locator_key, log_locator_page_key, log_locator_page_start,
-};
+use crate::domain::keys::{log_locator_key, log_locator_page_key, log_locator_page_start};
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
+use crate::logs::state::load_log_block_meta;
 use crate::logs::types::{Log, LogLocator};
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -109,10 +107,10 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
         {
             block_ref
         } else {
-            let Some(record) = self.meta_store.get(&block_meta_key(item.block_num)).await? else {
+            let Some(block_meta) = load_log_block_meta(self.meta_store, item.block_num).await?
+            else {
                 return Err(Error::NotFound);
             };
-            let block_meta = decode_block_meta(&record.value)?;
             BlockRef {
                 number: item.block_num,
                 hash: item.block_hash,

@@ -4,6 +4,7 @@ use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::materialize::LogMaterializer;
+use crate::logs::state::load_log_block_window;
 use crate::logs::types::Log;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -30,19 +31,15 @@ impl LogBlockScanner {
             else {
                 continue;
             };
-            let Some(record) = meta_store
-                .get(&crate::domain::keys::block_meta_key(block_num))
-                .await?
-            else {
+            let Some(block_window) = load_log_block_window(meta_store, block_num).await? else {
                 continue;
             };
-            let block_meta = crate::codec::finalized_state::decode_block_meta(&record.value)?;
-            if block_meta.count == 0 {
+            if block_window.count == 0 {
                 continue;
             }
 
-            let start = block_meta.first_log_id.max(log_window.start);
-            let end_inclusive = (block_meta.first_log_id + block_meta.count as u64)
+            let start = block_window.first_log_id.max(log_window.start);
+            let end_inclusive = (block_window.first_log_id + block_window.count as u64)
                 .saturating_sub(1)
                 .min(log_window.end_inclusive);
 

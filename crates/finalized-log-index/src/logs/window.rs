@@ -1,7 +1,7 @@
-use crate::codec::finalized_state::decode_block_meta;
 use crate::core::ids::PrimaryIdRange;
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
+use crate::logs::state::load_log_block_window;
 use crate::logs::types::LogBlockWindow;
 use crate::store::traits::MetaStore;
 
@@ -47,13 +47,6 @@ impl LogWindowResolver {
         meta_store: &M,
         block_num: u64,
     ) -> Result<Option<LogBlockWindow>> {
-        let Some(record) = meta_store
-            .get(&crate::domain::keys::block_meta_key(block_num))
-            .await?
-        else {
-            return Ok(None);
-        };
-        let block_meta = decode_block_meta(&record.value)?;
-        Ok(Some(LogBlockWindow::from(&block_meta)))
+        load_log_block_window(meta_store, block_num).await
     }
 }
