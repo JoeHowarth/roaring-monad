@@ -10,7 +10,7 @@ The intended end state is:
 - keep shard-local stream manifests and tails during active ingest
 - synchronously finalize completed shards during ingest when `next_log_id` crosses a shard boundary
 - treat completed log-directory buckets as sealed once `next_log_id` moves past the bucket end
-- give readers a strong guarantee: once shard `S + 1` has begun, shard `S` manifests and tails are final everywhere
+- give readers a strong guarantee on supported strongly consistent backends: once shard `S + 1` has begun, shard `S` manifests and tails are final everywhere
 - make sealed-state predicates explicit so the cache layer can promote mutable objects to immutable caching safely
 
 This document is about storage lifecycle and ingest behavior. Cache policy is a separate concern and should build on the sealing rules defined here.
@@ -82,11 +82,15 @@ After those conditions hold, the manifest for shard `S` is immutable.
 
 ### 3. Reader guarantee
 
-The system should provide this guarantee:
+The system should provide this guarantee for supported strongly consistent backend profiles:
 
 - once `meta/state.next_log_id` points into shard `S + 1` or later, every manifest for shard `S` is final and every tail for shard `S` has been drained before that state is committed
 
 This guarantee is the reason shard-boundary finalization must be synchronous with ingest.
+
+At the generic trait level, `MetaStore` and `BlobStore` do not themselves provide cross-key or cross-store snapshot semantics.
+
+As a result, the strong reader guarantee in this document is not implied by the generic traits alone. It depends on a publication protocol plus backend consistency strong enough that a reader observing the new `meta/state` can also observe the writes that were required before that state was published.
 
 ## Required Metadata
 
@@ -210,6 +214,86 @@ The current `FinalizedHeadState` projection does not expose `next_log_id`, so th
 
 - a wider shared finalized-state projection, or
 - a new helper dedicated to sealing/caching watermarks
+
+For unsupported or weakly consistent backend profiles, `next_log_id` still defines writer publication order, but it is not enough by itself to claim that every non-writer reader will immediately observe the sealed artifacts. In those environments, seal status should be treated as a writer-side property unless the backend contract is strengthened.
+
+## Publication Contract
+
+The strong reader guarantee in this document requires more than "write dependent objects first, then write `meta/state` last."
+
+It also requires using backend consistency modes that make the finalization writes and the publishing `meta/state` write visible to readers with the intended semantics.
+
+The required publication ordering is:
+
+1. write all chunk blobs for newly finalized shards
+2. write all manifest, tail, and marker changes for those finalized shards
+3. only after those writes succeed, write `meta/state` with the new `next_log_id`
+
+Readers may treat `meta/state.next_log_id` as a seal watermark only when the deployment uses one of the supported backend profiles below.
+
+### Supported backend profiles
+
+#### Scylla metadata + S3 or MinIO blobs
+
+For Scylla-backed metadata stores, sealing publication should use `ConsistencyLevel::ALL` for:
+
+- final manifest writes
+- final tail deletes or empty-tail writes
+- `open_tails` marker writes and deletes
+- the final `meta/state` write that publishes the new `next_log_id`
+
+This is intentionally stronger than the normal hot-path write profile and should apply only to the sealing writes that publish closed-shard immutability.
+
+For blob visibility:
+
+- all final chunk blob writes must complete before the `meta/state` publish write
+- the blob backend must provide strong read-after-write and list-after-write consistency
+
+This profile is intended for:
+
+- Amazon S3
+- single-site MinIO deployments configured in a consistency-preserving mode
+
+It is not intended to rely on asynchronous cross-site replication.
+
+#### DynamoDB metadata + S3 or MinIO blobs
+
+For DynamoDB-backed metadata stores, sealing publication should use:
+
+- transactional metadata publication where practical for the manifest/tail/marker set
+- strongly consistent reads (`ConsistentRead=true`) for any reader path that derives seal status from metadata
+
+As with Scylla:
+
+- chunk blob writes must complete before the publishing `meta/state` write
+- the blob backend must provide strong read-after-write and list-after-write consistency
+
+This profile is also intended for:
+
+- Amazon S3
+- single-site MinIO deployments configured in a consistency-preserving mode
+
+### Backend notes
+
+Scylla:
+
+- `CL=ALL` reduces availability because all replicas must acknowledge the write
+- this stronger consistency mode should therefore be reserved for boundary-sealing publication, not every ingest write
+
+DynamoDB:
+
+- strongly consistent reads are available only on base tables and LSIs, not GSIs
+- if metadata publication depends on multiple items changing together, transactional writes are preferred
+
+Amazon S3:
+
+- successful object writes, overwrites, deletes, and list operations are strongly consistent
+- this makes S3 a suitable publication target for the chunk side of sealed-shard publication
+
+MinIO:
+
+- single-site MinIO deployments document strict read-after-write and list-after-write consistency
+- asynchronous replication across sites should not be used as the basis for this reader guarantee
 
 ## Failure and Atomicity Expectations
 
