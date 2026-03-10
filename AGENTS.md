@@ -12,6 +12,8 @@ Make sure to lint and format after every commit and also run cargo test -p <crat
 
 Commit after each major code change so the working tree is clean. You can break work into smaller commits, but unless we are actively discussing or you are mid-implementation, leave the tree clean.
 
+When reporting verification in user-facing updates or final responses, do not write out the full fmt or clippy command lines unless explicitly asked. Summarize them concisely (for example: "fmt passed", "clippy passed", "tests passed").
+
 When amending commits, use `git am` (alias for `git commit --amend --no-edit`).
 
 When force pushing, use `git fp` (alias for `git push --force-with-lease`).
