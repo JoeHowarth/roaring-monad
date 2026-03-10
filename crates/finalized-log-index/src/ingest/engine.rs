@@ -5,15 +5,11 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use crate::codec::finalized_state::{
     decode_block_meta, decode_meta_state, encode_block_meta, encode_meta_state, encode_u64,
 };
-use crate::codec::log::{decode_log_locator_page, encode_log, encode_log_locator_page};
 use crate::config::{Config, IngestMode};
-use crate::domain::keys::{
-    META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
-    log_locator_page_start, log_pack_blob_key,
-};
-use crate::domain::types::{Block, BlockMeta, IngestOutcome, LogLocator, MetaState};
+use crate::domain::keys::{META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key};
+use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState};
 use crate::error::{Error, Result};
-use crate::logs::ingest::collect_stream_appends;
+use crate::logs::ingest::{collect_stream_appends, persist_log_artifacts};
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use crate::streams::chunk::{ChunkBlob, decode_chunk};
 use crate::streams::keys::parse_stream_from_tail_key;
@@ -60,65 +56,15 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         let first_log_id = state.next_log_id;
-        if !block.logs.is_empty() {
-            let (log_pack, spans) = encode_log_pack(&block.logs);
-            let pack_key = log_pack_blob_key(first_log_id);
-            self.blob_store.put_blob(&pack_key, log_pack).await?;
-
-            let mut page_updates: HashMap<u64, HashMap<u16, LogLocator>> = HashMap::new();
-            for (i, (byte_offset, byte_len)) in spans.iter().enumerate() {
-                let global_log_id = first_log_id + i as u64;
-                let page_start = log_locator_page_start(global_log_id);
-                let slot = u16::try_from(global_log_id - page_start)
-                    .map_err(|_| Error::Decode("log locator page slot overflow"))?;
-                page_updates.entry(page_start).or_default().insert(
-                    slot,
-                    LogLocator {
-                        blob_key: pack_key.clone(),
-                        byte_offset: *byte_offset,
-                        byte_len: *byte_len,
-                    },
-                );
-            }
-
-            let mut in_flight = FuturesUnordered::new();
-            for (page_start, page_entries) in page_updates {
-                let page_key = log_locator_page_key(page_start);
-                in_flight.push(async move {
-                    let mut merged_entries = match self.meta_store.get(&page_key).await? {
-                        Some(existing) => {
-                            let (stored_page_start, stored_entries) =
-                                decode_log_locator_page(&existing.value)?;
-                            if stored_page_start != page_start {
-                                return Err(Error::Decode("log locator page key mismatch"));
-                            }
-                            stored_entries
-                        }
-                        None => HashMap::new(),
-                    };
-                    merged_entries.extend(page_entries);
-                    self.meta_store
-                        .put(
-                            &page_key,
-                            encode_log_locator_page(page_start, &merged_entries),
-                            PutCond::Any,
-                            FenceToken(epoch),
-                        )
-                        .await
-                });
-
-                if in_flight.len() >= self.config.log_locator_write_concurrency.max(1) {
-                    match in_flight.next().await {
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => return Err(e),
-                        None => break,
-                    }
-                }
-            }
-            while let Some(res) = in_flight.next().await {
-                let _ = res?;
-            }
-        }
+        persist_log_artifacts(
+            &self.config,
+            &self.meta_store,
+            &self.blob_store,
+            &block.logs,
+            first_log_id,
+            epoch,
+        )
+        .await?;
 
         let block_meta = BlockMeta {
             block_hash: block.block_hash,
@@ -274,18 +220,4 @@ async fn load_chunk_if_present<B: BlobStore>(
 pub struct MaintenanceStats {
     pub flushed_streams: u64,
     pub sealed_streams: u64,
-}
-
-fn encode_log_pack(logs: &[crate::domain::types::Log]) -> (bytes::Bytes, Vec<(u32, u32)>) {
-    let mut out = Vec::<u8>::new();
-    let mut spans = Vec::with_capacity(logs.len());
-    for log in logs {
-        let encoded = encode_log(log);
-        let len = encoded.len() as u32;
-        let offset = out.len() as u32;
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&encoded);
-        spans.push((offset + 4, len));
-    }
-    (bytes::Bytes::from(out), spans)
 }

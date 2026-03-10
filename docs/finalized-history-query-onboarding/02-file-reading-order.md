@@ -52,6 +52,7 @@ Look for:
 - block-window to log-ID-window mapping
 - indexed path vs broad-query block scan
 - exact pagination boundary handling
+- packed-log and locator-page writes during ingest
 - stream fanout during ingest
 
 ## Pass 4: Persisted bytes and storage

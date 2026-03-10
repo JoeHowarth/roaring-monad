@@ -46,3 +46,5 @@ This is the recommended file order for understanding the current indexing and qu
 28. `crates/finalized-log-index/tests/differential_and_gc.rs`
 
 That set covers the current public API, storage model, ingest path, indexed query path, block-scan fallback, and pagination behavior.
+
+In the ingest path, `src/ingest/engine.rs` is orchestration and `src/logs/ingest.rs` owns packed-log blobs, locator pages, and stream fanout.
