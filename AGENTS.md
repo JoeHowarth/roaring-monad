@@ -1,8 +1,8 @@
-NOTE: Keep this file in sync with ~/.claude/CLAUDE.md when making changes.
+NOTE: Keep this file in sync with ~/.claude/CLAUDE.md when making changes, except for repo-local guidance that should not be copied to home-directory instruction files.
 
 Use `scripts/verify.sh <crate> [<crate> ...]` for routine repo verification. It runs the repo-standard fmt, tests, and clippy commands for the listed crates.
 
-This project is not deployed in production yet. Backward compatibility is not a constraint here; prefer the best end-state design and implementation over preserving transitional shapes.
+This project is not deployed in production yet. Backward compatibility is not a constraint here; prefer the best end-state design and implementation over preserving transitional shapes. This note is repo-local and should not be copied into home-directory instruction files.
 
 If you need to run the underlying commands directly:
 - format with `cargo +nightly-2025-12-09 fmt --all`
