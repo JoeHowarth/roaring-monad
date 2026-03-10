@@ -1222,7 +1222,7 @@ fn seals_by_chunk_bytes_threshold() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(9, 9, 9, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
 
-        let sid = stream_id("addr", &[9; 20], LogShard::new(0));
+        let sid = stream_id("addr", &[9; 20], LogShard::new(0).unwrap());
         let rec = svc
             .ingest
             .meta_store
@@ -1253,7 +1253,7 @@ fn periodic_maintenance_seals_old_tails() {
         let b1 = mk_block(1, [0; 32], vec![mk_log(7, 7, 7, 1, 0, 0)]);
         svc.ingest_finalized_block(b1).await.expect("ingest");
 
-        let sid = stream_id("addr", &[7; 20], LogShard::new(0));
+        let sid = stream_id("addr", &[7; 20], LogShard::new(0).unwrap());
         let mkey = manifest_key(&sid);
         let mut manifest = svc
             .ingest
@@ -1463,7 +1463,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
 
         let first_id = LogId::new(u64::from(MAX_LOCAL_ID));
         let second_id = compose_global_log_id(
-            LogShard::new(log_shard(first_id).get() + 1),
+            LogShard::new(log_shard(first_id).get() + 1).unwrap(),
             LogLocalId::new(0).expect("0 is a valid local id"),
         );
         let first_sid = stream_id("addr", &[9; 20], log_shard(first_id));

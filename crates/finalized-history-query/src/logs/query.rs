@@ -316,7 +316,7 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
 
     for value in values {
         for shard_raw in from_shard.get()..=to_shard.get() {
-            let shard = LogShard::new(shard_raw);
+            let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
             let stream = stream_id(kind, value, shard);
             let (local_from, local_to) =
                 local_range_for_shard(from_log_id, to_log_id_inclusive, shard);

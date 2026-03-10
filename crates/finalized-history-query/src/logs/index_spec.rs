@@ -141,7 +141,8 @@ async fn estimate_for_values<M: MetaStore>(
 
     for value in values {
         for shard_raw in from_shard.get()..=to_shard.get() {
-            let shard = crate::core::ids::LogShard::new(shard_raw);
+            let shard =
+                crate::core::ids::LogShard::new(shard_raw).expect("shard derived from LogId range");
             let stream = stream_id(kind, value, shard);
             sum = sum.saturating_add(
                 estimate_stream_overlap(

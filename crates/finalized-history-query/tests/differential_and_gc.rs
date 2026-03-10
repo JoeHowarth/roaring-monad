@@ -205,7 +205,7 @@ fn recovery_and_gc_cleanup() {
         let blob = InMemoryBlobStore::default();
 
         // Create stale tail for stream with no manifest.
-        let stale_stream = stream_id("addr", &[0xabu8; 20], LogShard::new(0));
+        let stale_stream = stream_id("addr", &[0xabu8; 20], LogShard::new(0).unwrap());
         let mut stale_tail = RoaringBitmap::new();
         stale_tail.insert(7);
         let _ = meta

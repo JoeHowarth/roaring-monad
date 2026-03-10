@@ -1,5 +1,7 @@
 use crate::domain::keys::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
 
+const MAX_LOG_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LogId(u64);
 
@@ -13,7 +15,7 @@ impl LogId {
     }
 
     pub const fn shard(self) -> LogShard {
-        LogShard::new(self.0 >> LOCAL_ID_BITS)
+        LogShard::new_masked(self.0 >> LOCAL_ID_BITS)
     }
 
     pub const fn local(self) -> LogLocalId {
@@ -41,12 +43,31 @@ impl From<LogId> for u64 {
 pub struct LogShard(u64);
 
 impl LogShard {
-    pub const fn new(raw: u64) -> Self {
-        Self(raw)
+    pub fn new(raw: u64) -> Result<Self, InvalidLogShard> {
+        if raw <= MAX_LOG_SHARD {
+            Ok(Self(raw))
+        } else {
+            Err(InvalidLogShard { raw })
+        }
     }
 
     pub const fn get(self) -> u64 {
         self.0
+    }
+
+    pub(crate) const fn new_masked(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidLogShard {
+    raw: u64,
+}
+
+impl InvalidLogShard {
+    pub const fn raw(self) -> u64 {
+        self.raw
     }
 }
 
@@ -105,14 +126,14 @@ impl PrimaryIdRange {
     }
 
     pub fn resume_strictly_after(&self, id: LogId) -> Option<Self> {
-        let next_start = LogId::new(id.get().saturating_add(1));
+        let next_start = id.get().checked_add(1).map(LogId::new)?;
         Self::new(next_start, self.end_inclusive)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id};
+    use super::{LogId, LogLocalId, LogShard, MAX_LOG_SHARD, PrimaryIdRange, compose_log_id};
     use crate::domain::keys::MAX_LOCAL_ID;
 
     #[test]
@@ -123,7 +144,7 @@ mod tests {
             LogId::new(u64::from(MAX_LOCAL_ID)),
             LogId::new(u64::from(MAX_LOCAL_ID) + 1),
             compose_log_id(
-                LogShard::new(u64::from(u32::MAX) + 1),
+                LogShard::new(u64::from(u32::MAX) + 1).unwrap(),
                 LogLocalId::new(7).unwrap(),
             ),
         ];
@@ -141,6 +162,12 @@ mod tests {
     }
 
     #[test]
+    fn log_shard_rejects_values_above_40_bits() {
+        let invalid = LogShard::new(MAX_LOG_SHARD.checked_add(1).unwrap()).unwrap_err();
+        assert_eq!(invalid.raw(), MAX_LOG_SHARD.checked_add(1).unwrap());
+    }
+
+    #[test]
     fn primary_id_range_uses_typed_log_ids() {
         let range = PrimaryIdRange::new(LogId::new(10), LogId::new(12)).expect("valid range");
         assert!(range.contains(LogId::new(10)));
@@ -153,5 +180,12 @@ mod tests {
                 end_inclusive: LogId::new(12),
             })
         );
+    }
+
+    #[test]
+    fn resume_strictly_after_returns_none_at_u64_max() {
+        let range =
+            PrimaryIdRange::new(LogId::new(u64::MAX), LogId::new(u64::MAX)).expect("valid range");
+        assert_eq!(range.resume_strictly_after(LogId::new(u64::MAX)), None);
     }
 }
