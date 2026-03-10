@@ -55,7 +55,7 @@ Look for:
 ## Pass 3: Logs family
 
 15. `crates/finalized-history-query/src/logs/filter.rs`
-    Read this first for actual log matching semantics and the broad-query signal derived from `max_or_terms`.
+    Read this first for actual log matching semantics and which clauses count as indexed input.
 16. `crates/finalized-history-query/src/logs/types.rs`
     Read this for the logs-family aliases and lightweight projections like `LogSequencingState` and `LogBlockWindow`.
 17. `crates/finalized-history-query/src/logs/state.rs`
@@ -64,11 +64,9 @@ Look for:
     Read this for the exact bridge from resolved block ranges to inclusive primary-ID ranges.
 19. `crates/finalized-history-query/src/logs/materialize.rs`
     Read this to see how a `log_id` resolves into `block_num` and local ordinal, then into a single log via cached bucket/header lookups and range reads.
-20. `crates/finalized-history-query/src/logs/block_scan.rs`
-    Read this for the block-scan fallback that decodes whole block payloads sequentially when indexed execution is skipped.
-21. `crates/finalized-history-query/src/logs/query.rs`
-    Read this for the main query engine: request validation, range/window resolution, broad-query policy, shard-streaming indexed execution, clause-free sequential traversal, and page assembly.
-22. `crates/finalized-history-query/src/logs/ingest.rs`
+20. `crates/finalized-history-query/src/logs/query.rs`
+    Read this for the main query engine: request validation, range/window resolution, indexed-clause enforcement, shard-streaming indexed execution, and page assembly.
+21. `crates/finalized-history-query/src/logs/ingest.rs`
     Read this for the logs-family ingest details: block-keyed payload/header writes, directory-bucket maintenance, block metadata, and stream fanout collection.
 
 Look for:
@@ -76,24 +74,24 @@ Look for:
 - log clause semantics
 - family-local block metadata reads
 - block-window to log-ID-window mapping
-- indexed path vs broad-query block scan
+- indexed-only query execution
 - exact pagination boundary handling
 - directory-bucket, block-log-header, block-keyed payload, and log block-metadata writes
 - stream fanout during ingest
 
 ## Pass 4: Persisted bytes and storage
 
-23. `crates/finalized-history-query/src/domain/types.rs`
+22. `crates/finalized-history-query/src/domain/types.rs`
     Read this for the core persisted/data model structs shared across codecs, ingest, and query paths.
-24. `crates/finalized-history-query/src/codec/finalized_state.rs`
+23. `crates/finalized-history-query/src/codec/finalized_state.rs`
     Read this for the fixed-width encoding of `MetaState`, `BlockMeta`, and block-hash lookup values.
-25. `crates/finalized-history-query/src/codec/log.rs`
+24. `crates/finalized-history-query/src/codec/log.rs`
     Read this for the byte encodings of three log artifacts: individual logs, directory buckets, and block log headers.
-26. `crates/finalized-history-query/src/streams/manifest.rs`
+25. `crates/finalized-history-query/src/streams/manifest.rs`
     Read this for manifest and tail encodings, including the currently supported manifest versions.
-27. `crates/finalized-history-query/src/streams/chunk.rs`
+26. `crates/finalized-history-query/src/streams/chunk.rs`
     Read this for the persisted roaring chunk format and its checksum validation.
-28. `crates/finalized-history-query/src/store/traits.rs`
+27. `crates/finalized-history-query/src/store/traits.rs`
     Read this for the storage contract the rest of the crate depends on: meta CAS/fencing plus blob reads, deletes, listing, and logical range reads.
 
 Look for:
@@ -108,9 +106,9 @@ Look for:
 
 ## Pass 5: Ingest orchestration
 
-29. `crates/finalized-history-query/src/ingest/engine.rs`
+28. `crates/finalized-history-query/src/ingest/engine.rs`
     Read this for the ingest orchestrator: sequence and parent checks, artifact persistence, concurrent stream appends, maintenance, and state advancement.
-30. `crates/finalized-history-query/src/recovery/startup.rs`
+29. `crates/finalized-history-query/src/recovery/startup.rs`
     Read this for the current startup view, which is intentionally small: load finalized head, log sequencing state, and report warmed streams.
 
 Look for:
@@ -122,9 +120,9 @@ Look for:
 
 ## Pass 6: End-to-end behavior
 
-31. `crates/finalized-history-query/tests/finalized_index.rs`
+30. `crates/finalized-history-query/tests/finalized_index.rs`
     Read this for the main end-to-end contract: ingest/query behavior, pagination metadata, validation errors, runtime degradation, and storage-side effects.
-32. `crates/finalized-history-query/tests/differential_and_gc.rs`
+31. `crates/finalized-history-query/tests/differential_and_gc.rs`
     Read this for the naive differential query check plus the basic recovery and GC cleanup behaviors.
 
 Focus on:
@@ -132,7 +130,7 @@ Focus on:
 - resume-token pagination
 - exact `has_more`
 - empty-page metadata
-- broad-query fallback
+- indexed-only query validation
 - ingest / query invariants
 - differential correctness
 

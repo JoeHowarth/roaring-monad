@@ -7,7 +7,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::codec::finalized_state::{encode_block_meta, encode_meta_state};
-use finalized_history_query::config::{BroadQueryPolicy, Config, GuardrailAction, IngestMode};
+use finalized_history_query::config::{Config, GuardrailAction, IngestMode};
 use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard};
 use finalized_history_query::domain::keys::{
     MAX_LOCAL_ID, META_STATE_KEY, block_hash_to_num_key, compose_global_log_id, log_shard,
@@ -45,6 +45,28 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
         block_hash: [block_num as u8; 32],
         parent_hash,
         logs,
+    }
+}
+
+fn indexed_address_filter(address: u8) -> LogFilter {
+    LogFilter {
+        address: Some(Clause::One([address; 20])),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
+fn indexed_address_or_filter(addresses: &[u8]) -> LogFilter {
+    LogFilter {
+        address: Some(Clause::Or(
+            addresses.iter().map(|address| [*address; 20]).collect(),
+        )),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
     }
 }
 
@@ -435,69 +457,6 @@ fn indexed_same_block_resume_pagination_tracks_page_meta() {
 }
 
 #[test]
-fn block_scan_same_block_resume_pagination_tracks_page_meta() {
-    block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config {
-                planner_max_or_terms: 1,
-                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
-                ..Config::default()
-            },
-            InMemoryMetaStore::default(),
-            InMemoryBlobStore::default(),
-            1,
-        );
-        let block = mk_block(
-            1,
-            [0; 32],
-            vec![
-                mk_log(1, 10, 20, 1, 0, 0),
-                mk_log(2, 10, 21, 1, 0, 1),
-                mk_log(1, 10, 22, 1, 0, 2),
-            ],
-        );
-        svc.ingest_finalized_block(block).await.expect("ingest");
-
-        let filter = LogFilter {
-            address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
-            topic0: Some(Clause::One([10; 32])),
-            topic1: None,
-            topic2: None,
-            topic3: None,
-        };
-
-        let first = query_page(&svc, 1, 1, filter.clone(), Some(1), None)
-            .await
-            .expect("first page");
-        assert_eq!(first.items.len(), 1);
-        assert!(first.meta.has_more);
-        assert_eq!(first.meta.next_resume_log_id, Some(0));
-
-        let second = query_page(
-            &svc,
-            1,
-            1,
-            filter.clone(),
-            Some(1),
-            first.meta.next_resume_log_id,
-        )
-        .await
-        .expect("second page");
-        assert_eq!(second.items.len(), 1);
-        assert!(second.meta.has_more);
-        assert_eq!(second.meta.next_resume_log_id, Some(1));
-
-        let third = query_page(&svc, 1, 1, filter, Some(1), second.meta.next_resume_log_id)
-            .await
-            .expect("third page");
-        assert_eq!(third.items.len(), 1);
-        assert!(!third.meta.has_more);
-        assert_eq!(third.meta.next_resume_log_id, None);
-        assert_eq!(third.meta.cursor_block.number, 1);
-    });
-}
-
-#[test]
 fn empty_page_metadata_uses_resolved_range_endpoint() {
     block_on(async {
         let svc = FinalizedHistoryService::new(
@@ -549,7 +508,7 @@ fn exact_limit_without_additional_match_has_no_resume_metadata() {
         let block = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
         svc.ingest_finalized_block(block).await.expect("ingest");
 
-        let page = query_page(&svc, 1, 1, LogFilter::default(), Some(1), None)
+        let page = query_page(&svc, 1, 1, indexed_address_filter(1), Some(1), None)
             .await
             .expect("query");
 
@@ -574,7 +533,7 @@ fn cross_block_resume_pagination_advances_without_duplicates() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let first = query_page(&svc, 1, 2, LogFilter::default(), Some(1), None)
+        let first = query_page(&svc, 1, 2, indexed_address_filter(1), Some(1), None)
             .await
             .expect("first page");
         assert_eq!(first.items.len(), 1);
@@ -587,7 +546,7 @@ fn cross_block_resume_pagination_advances_without_duplicates() {
             &svc,
             1,
             2,
-            LogFilter::default(),
+            indexed_address_filter(1),
             Some(1),
             first.meta.next_resume_log_id,
         )
@@ -615,51 +574,9 @@ fn indexed_query_does_not_leak_logs_past_empty_range_end() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 1, 1, LogFilter::default(), Some(10), None)
+        let page = query_page(&svc, 1, 1, indexed_address_filter(1), Some(10), None)
             .await
             .expect("query");
-
-        assert!(page.items.is_empty());
-        assert_eq!(page.meta.resolved_from_block.number, 1);
-        assert_eq!(page.meta.resolved_to_block.number, 1);
-        assert_eq!(page.meta.cursor_block.number, 1);
-    });
-}
-
-#[test]
-fn block_scan_query_does_not_leak_logs_past_empty_range_end() {
-    block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config {
-                planner_max_or_terms: 0,
-                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
-                ..Config::default()
-            },
-            InMemoryMetaStore::default(),
-            InMemoryBlobStore::default(),
-            1,
-        );
-        let b1 = mk_block(1, [0; 32], Vec::new());
-        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
-        svc.ingest_finalized_block(b1).await.expect("ingest b1");
-        svc.ingest_finalized_block(b2).await.expect("ingest b2");
-
-        let page = query_page(
-            &svc,
-            1,
-            1,
-            LogFilter {
-                address: Some(Clause::One([1; 20])),
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            Some(10),
-            None,
-        )
-        .await
-        .expect("query");
 
         assert!(page.items.is_empty());
         assert_eq!(page.meta.resolved_from_block.number, 1);
@@ -682,52 +599,9 @@ fn indexed_query_skips_empty_leading_blocks_within_range() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), None)
+        let page = query_page(&svc, 1, 2, indexed_address_filter(1), Some(10), None)
             .await
             .expect("query");
-
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].block_num, 2);
-        assert_eq!(page.meta.resolved_from_block.number, 1);
-        assert_eq!(page.meta.resolved_to_block.number, 2);
-        assert_eq!(page.meta.cursor_block.number, 2);
-    });
-}
-
-#[test]
-fn block_scan_query_skips_empty_leading_blocks_within_range() {
-    block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config {
-                planner_max_or_terms: 0,
-                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
-                ..Config::default()
-            },
-            InMemoryMetaStore::default(),
-            InMemoryBlobStore::default(),
-            1,
-        );
-        let b1 = mk_block(1, [0; 32], Vec::new());
-        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
-        svc.ingest_finalized_block(b1).await.expect("ingest b1");
-        svc.ingest_finalized_block(b2).await.expect("ingest b2");
-
-        let page = query_page(
-            &svc,
-            1,
-            2,
-            LogFilter {
-                address: Some(Clause::One([1; 20])),
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            Some(10),
-            None,
-        )
-        .await
-        .expect("query");
 
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].block_num, 2);
@@ -751,7 +625,7 @@ fn all_empty_blocks_range_returns_empty_page() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), None)
+        let page = query_page(&svc, 1, 2, indexed_address_filter(1), Some(10), None)
             .await
             .expect("query");
 
@@ -777,9 +651,16 @@ fn query_range_clips_to_finalized_head() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 1, 10, LogFilter::default(), Some(10), None)
-            .await
-            .expect("query");
+        let page = query_page(
+            &svc,
+            1,
+            10,
+            indexed_address_or_filter(&[1, 2]),
+            Some(10),
+            None,
+        )
+        .await
+        .expect("query");
 
         assert_eq!(
             page.items
@@ -808,7 +689,7 @@ fn query_above_finalized_head_returns_empty_page_anchored_to_head() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 10, 20, LogFilter::default(), Some(10), None)
+        let page = query_page(&svc, 10, 20, indexed_address_filter(1), Some(10), None)
             .await
             .expect("query");
 
@@ -829,7 +710,7 @@ fn empty_store_returns_zero_anchored_empty_page() {
             1,
         );
 
-        let page = query_page(&svc, 1, 10, LogFilter::default(), Some(10), None)
+        let page = query_page(&svc, 1, 10, indexed_address_filter(1), Some(10), None)
             .await
             .expect("query");
 
@@ -850,7 +731,7 @@ fn inverted_block_range_is_invalid() {
             1,
         );
 
-        let err = query_page(&svc, 2, 1, LogFilter::default(), Some(10), None)
+        let err = query_page(&svc, 2, 1, indexed_address_filter(1), Some(10), None)
             .await
             .expect_err("expected invalid block range");
 
@@ -872,7 +753,7 @@ fn resume_log_id_below_window_is_invalid() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let err = query_page(&svc, 2, 2, LogFilter::default(), Some(10), Some(0))
+        let err = query_page(&svc, 2, 2, indexed_address_filter(2), Some(10), Some(0))
             .await
             .expect_err("expected invalid resume_log_id");
 
@@ -894,7 +775,7 @@ fn resume_log_id_above_window_is_invalid() {
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let err = query_page(&svc, 1, 1, LogFilter::default(), Some(10), Some(1))
+        let err = query_page(&svc, 1, 1, indexed_address_filter(1), Some(10), Some(1))
             .await
             .expect_err("expected invalid resume_log_id");
 
@@ -922,7 +803,7 @@ fn budget_max_results_caps_page_size_and_sets_resume_metadata() {
             &svc,
             1,
             1,
-            LogFilter::default(),
+            indexed_address_or_filter(&[1, 2]),
             Some(10),
             None,
             ExecutionBudget {
@@ -953,7 +834,7 @@ fn zero_budget_max_results_is_invalid() {
             &svc,
             1,
             1,
-            LogFilter::default(),
+            indexed_address_filter(1),
             Some(10),
             None,
             ExecutionBudget {
@@ -981,7 +862,7 @@ fn resuming_after_last_log_in_range_with_empty_tail_returns_empty_page_at_range_
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
-        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), Some(0))
+        let page = query_page(&svc, 1, 2, indexed_address_filter(1), Some(10), Some(0))
             .await
             .expect("query");
 
@@ -1077,15 +958,10 @@ fn or_guardrail_is_enforced() {
 }
 
 #[test]
-fn broad_query_can_fallback_to_block_scan() {
+fn query_without_indexed_clause_is_invalid() {
     block_on(async {
-        let config = Config {
-            planner_max_or_terms: 1,
-            planner_broad_query_policy: BroadQueryPolicy::BlockScan,
-            ..Config::default()
-        };
         let svc = FinalizedHistoryService::new(
-            config,
+            Config::default(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             1,
@@ -1098,14 +974,34 @@ fn broad_query_can_fallback_to_block_scan() {
         );
         svc.ingest_finalized_block(b1).await.expect("ingest b1");
 
-        // Two OR terms exceed max_or_terms=1, but policy says block-scan fallback.
-        let got = query_page(
+        let err = query_page(&svc, 1, 1, LogFilter::default(), None, None)
+            .await
+            .expect_err("unindexed query must be rejected");
+
+        assert!(matches!(
+            err,
+            Error::InvalidParams("query must include at least one indexed address or topic clause")
+        ));
+    });
+}
+
+#[test]
+fn any_only_query_is_invalid() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let err = query_page(
             &svc,
             1,
             1,
             LogFilter {
-                address: Some(Clause::Or(vec![[1; 20], [2; 20]])),
-                topic0: Some(Clause::One([10; 32])),
+                address: Some(Clause::Any),
+                topic0: None,
                 topic1: None,
                 topic2: None,
                 topic3: None,
@@ -1114,9 +1010,12 @@ fn broad_query_can_fallback_to_block_scan() {
             None,
         )
         .await
-        .expect("fallback block scan query");
+        .expect_err("any-only query must be rejected");
 
-        assert_eq!(got.items.len(), 2);
+        assert!(matches!(
+            err,
+            Error::InvalidParams("query must include at least one indexed address or topic clause")
+        ));
     });
 }
 
@@ -1521,7 +1420,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
 }
 
 #[test]
-fn clause_free_resume_pagination_crosses_24_bit_log_shard_boundary() {
+fn indexed_resume_pagination_crosses_24_bit_log_shard_boundary_with_or_clause() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -1574,7 +1473,8 @@ fn clause_free_resume_pagination_crosses_24_bit_log_shard_boundary() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
         svc.ingest_finalized_block(b3).await.expect("ingest b3");
 
-        let first = query_page(&svc, 2, 3, LogFilter::default(), Some(1), None)
+        let filter = indexed_address_or_filter(&[8, 9]);
+        let first = query_page(&svc, 2, 3, filter.clone(), Some(1), None)
             .await
             .expect("first page");
         assert_eq!(first.items.len(), 1);
@@ -1582,16 +1482,9 @@ fn clause_free_resume_pagination_crosses_24_bit_log_shard_boundary() {
         assert!(first.meta.has_more);
         assert_eq!(first.meta.next_resume_log_id, Some(u64::from(MAX_LOCAL_ID)));
 
-        let second = query_page(
-            &svc,
-            2,
-            3,
-            LogFilter::default(),
-            Some(1),
-            first.meta.next_resume_log_id,
-        )
-        .await
-        .expect("second page");
+        let second = query_page(&svc, 2, 3, filter, Some(1), first.meta.next_resume_log_id)
+            .await
+            .expect("second page");
         assert_eq!(second.items.len(), 1);
         assert_eq!(second.items[0].block_num, 3);
         assert!(!second.meta.has_more);
@@ -1763,22 +1656,9 @@ fn invalid_parent_puts_service_in_degraded_mode() {
         assert!(health.degraded);
         assert!(health.message.contains("degraded"));
 
-        let qerr = query_page(
-            &svc,
-            1,
-            1,
-            LogFilter {
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            None,
-            None,
-        )
-        .await
-        .expect_err("degraded query");
+        let qerr = query_page(&svc, 1, 1, indexed_address_filter(1), None, None)
+            .await
+            .expect_err("degraded query");
         assert!(matches!(qerr, Error::Degraded(_)));
     });
 }
@@ -1941,22 +1821,9 @@ fn backend_failures_throttle_then_degrade() {
         let e3 = svc.ingest_finalized_block(b1).await.expect_err("err3");
         assert!(matches!(e3, Error::Throttled(_)));
 
-        let qerr = query_page(
-            &svc,
-            1,
-            1,
-            LogFilter {
-                address: None,
-                topic0: None,
-                topic1: None,
-                topic2: None,
-                topic3: None,
-            },
-            None,
-            None,
-        )
-        .await
-        .expect_err("backend query error");
+        let qerr = query_page(&svc, 1, 1, indexed_address_filter(1), None, None)
+            .await
+            .expect_err("backend query error");
         assert!(matches!(qerr, Error::Backend(_)));
         assert!(svc.health().await.degraded);
     });

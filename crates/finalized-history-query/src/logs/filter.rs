@@ -30,6 +30,14 @@ impl LogFilter {
         }
         max_terms
     }
+
+    pub fn has_indexed_clause(&self) -> bool {
+        has_indexed_value_20(&self.address)
+            || has_indexed_value_32(&self.topic0)
+            || has_indexed_value_32(&self.topic1)
+            || has_indexed_value_32(&self.topic2)
+            || has_indexed_value_32(&self.topic3)
+    }
 }
 
 pub fn exact_match(log: &crate::logs::types::Log, filter: &LogFilter) -> bool {
@@ -70,4 +78,14 @@ fn match_topic(topic: Option<Topic32>, clause: &Option<Clause<Topic32>>) -> bool
             .map(|actual| values.iter().any(|value| value == actual))
             .unwrap_or(false),
     }
+}
+
+fn has_indexed_value_20(clause: &Option<Clause<[u8; 20]>>) -> bool {
+    matches!(clause, Some(Clause::One(_)))
+        || matches!(clause, Some(Clause::Or(values)) if !values.is_empty())
+}
+
+fn has_indexed_value_32(clause: &Option<Clause<Topic32>>) -> bool {
+    matches!(clause, Some(Clause::One(_)))
+        || matches!(clause, Some(Clause::Or(values)) if !values.is_empty())
 }

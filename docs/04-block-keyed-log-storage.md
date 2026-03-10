@@ -10,7 +10,6 @@ The crate keeps the query model and roaring indexes based on monotonic global `l
 - store log payload bytes in block-keyed objects
 - avoid per-log locator records
 - support efficient single-log materialization
-- support efficient broad block scans
 - support backends with and without native byte-range reads
 
 ## Non-Goals
@@ -165,7 +164,6 @@ Good cases:
 
 - repeated pagination through nearby `log_id`s
 - many matches from the same block
-- broad block scans
 - machines where directory buckets and block headers are effectively memory-resident
 
 The current executor already iterates candidate `log_id`s in ascending order, which improves cache locality for:
@@ -173,8 +171,6 @@ The current executor already iterates candidate `log_id`s in ascending order, wh
 - current directory bucket
 - current block header
 - current block payload object
-
-The block-scan path also becomes simpler: load `BlockMeta`, skip blocks with `count == 0`, then load the block header and payload once and decode sequentially without any per-log locator lookups.
 
 ## Bad Cases
 
@@ -222,7 +218,7 @@ The crate implements the layout directly:
 1. the blob-store abstraction exposes logical range reads
 2. ingest writes directory buckets, block headers, and block-keyed payload blobs
 3. materialization resolves `log_id -> bucket -> block_num -> header -> byte range`
-4. block scan reads block-keyed artifacts directly
+4. indexed materialization reads block-keyed artifacts directly
 5. locator-page and packed-log code paths are gone
 
 ## Directory Bucket Writes

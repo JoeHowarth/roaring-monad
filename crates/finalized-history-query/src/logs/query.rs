@@ -4,7 +4,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
-use crate::config::{BroadQueryPolicy, Config};
+use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer, ShardBitmapSet};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
@@ -13,11 +13,10 @@ use crate::domain::keys::{
     chunk_blob_key, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
 };
 use crate::error::{Error, Result};
-use crate::logs::block_scan::LogBlockScanner;
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{
-    ClauseKind, clause_values_20, clause_values_32, is_full_shard_range, overlapping_chunk_refs,
-    should_error_too_broad, should_force_block_scan,
+    ClauseKind, clause_values_20, clause_values_32, is_full_shard_range, is_too_broad,
+    overlapping_chunk_refs,
 };
 use crate::logs::materialize::LogMaterializer;
 use crate::logs::types::Log;
@@ -53,20 +52,16 @@ struct PreparedShardClause {
 #[derive(Debug, Clone)]
 pub struct LogsQueryEngine {
     max_or_terms: usize,
-    broad_query_policy: BroadQueryPolicy,
     range_resolver: RangeResolver,
     window_resolver: LogWindowResolver,
-    block_scanner: LogBlockScanner,
 }
 
 impl LogsQueryEngine {
     pub fn from_config(config: &Config) -> Self {
         Self {
             max_or_terms: config.planner_max_or_terms,
-            broad_query_policy: config.planner_broad_query_policy,
             range_resolver: RangeResolver,
             window_resolver: LogWindowResolver,
-            block_scanner: LogBlockScanner,
         }
     }
 
@@ -79,6 +74,11 @@ impl LogsQueryEngine {
     ) -> Result<QueryPage<Log>> {
         if request.limit == 0 {
             return Err(Error::InvalidParams("limit must be at least 1"));
+        }
+        if !request.filter.has_indexed_clause() {
+            return Err(Error::InvalidParams(
+                "query must include at least one indexed address or topic clause",
+            ));
         }
 
         let effective_limit = match budget.max_results {
@@ -125,7 +125,7 @@ impl LogsQueryEngine {
             log_window = resumed_window;
         }
 
-        if should_error_too_broad(&request.filter, self.max_or_terms, self.broad_query_policy) {
+        if is_too_broad(&request.filter, self.max_or_terms) {
             let actual = request.filter.max_or_terms();
             return Err(Error::QueryTooBroad {
                 actual,
@@ -134,41 +134,16 @@ impl LogsQueryEngine {
         }
 
         let take = effective_limit.saturating_add(1);
-        let clause_specs = build_clause_specs(&request.filter);
-        let matched =
-            if should_force_block_scan(&request.filter, self.max_or_terms, self.broad_query_policy)
-            {
-                self.block_scanner
-                    .execute(
-                        meta_store,
-                        blob_store,
-                        &block_range,
-                        log_window,
-                        &request.filter,
-                        take,
-                    )
-                    .await?
-            } else if clause_specs.is_empty() {
-                self.execute_clause_free_query(
-                    meta_store,
-                    blob_store,
-                    log_window.start,
-                    log_window.end_inclusive,
-                    &request.filter,
-                    take,
-                )
-                .await?
-            } else {
-                self.execute_indexed_query(
-                    meta_store,
-                    blob_store,
-                    &request.filter,
-                    log_window.start,
-                    log_window.end_inclusive,
-                    take,
-                )
-                .await?
-            };
+        let matched = self
+            .execute_indexed_query(
+                meta_store,
+                blob_store,
+                &request.filter,
+                log_window.start,
+                log_window.end_inclusive,
+                take,
+            )
+            .await?;
 
         Ok(self.build_page(block_range, effective_limit, matched))
     }
@@ -221,48 +196,6 @@ impl LogsQueryEngine {
                 next_resume_log_id,
             },
         }
-    }
-
-    async fn execute_clause_free_query<M: MetaStore, B: BlobStore>(
-        &self,
-        meta_store: &M,
-        blob_store: &B,
-        from_log_id: LogId,
-        to_log_id_inclusive: LogId,
-        filter: &LogFilter,
-        take: usize,
-    ) -> Result<Vec<MatchedPrimary<Log>>> {
-        let mut materializer = LogMaterializer::new(meta_store, blob_store);
-        let mut matched = Vec::new();
-
-        for shard_raw in from_log_id.shard().get()..=to_log_id_inclusive.shard().get() {
-            let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
-            let (local_from, local_to) =
-                local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
-
-            for local_raw in local_from.get()..=local_to.get() {
-                let local = LogLocalId::new(local_raw).expect("local derived from shard range");
-                let id = compose_log_id(shard, local);
-                let Some(item) = materializer.load_by_id(id).await? else {
-                    continue;
-                };
-                if !materializer.exact_match(&item, filter) {
-                    continue;
-                }
-
-                let block_ref = materializer.block_ref_for(&item).await?;
-                matched.push(MatchedPrimary {
-                    id,
-                    item,
-                    block_ref,
-                });
-                if matched.len() >= take {
-                    return Ok(matched);
-                }
-            }
-        }
-
-        Ok(matched)
     }
 
     async fn execute_indexed_query<M: MetaStore, B: BlobStore>(

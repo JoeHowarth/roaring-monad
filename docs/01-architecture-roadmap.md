@@ -75,7 +75,6 @@ The logs layer owns:
 - filter semantics
 - block-window to log-window mapping
 - exact-match materialization
-- broad-query block-scan fallback
 - log artifact writes
 - log block metadata reads and writes
 - stream fanout for address/topic indexes
@@ -104,8 +103,9 @@ The code treats those bytes through cleaner shared and family-local helpers inst
 
 - `RangeResolver` clips the request to the indexed finalized head.
 - `LogWindowResolver` maps the resolved block range to a log-ID range.
+- queries must include at least one indexed address/topic clause
 - indexed queries execute one shard at a time in ascending `log_id` order.
-- broad queries can fall back to log-family block scan.
+- non-indexed queries are rejected instead of falling back to a scan.
 - pagination uses `resume_log_id` as a declarative lower bound.
 - responses return `cursor_block` separately from `next_resume_log_id`.
 

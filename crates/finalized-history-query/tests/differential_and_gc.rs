@@ -181,7 +181,7 @@ fn differential_query_matches_naive() {
                 1,
                 3,
                 LogFilter {
-                    address: None,
+                    address: Some(Clause::Or(vec![[1; 20], [4; 20]])),
                     topic0: None,
                     topic1: None,
                     topic2: None,

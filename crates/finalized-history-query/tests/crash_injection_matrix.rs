@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use finalized_history_query::Clause;
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
@@ -189,6 +190,18 @@ fn mk_service(
     )
 }
 
+fn indexed_address_or_filter(addresses: &[u8]) -> LogFilter {
+    LogFilter {
+        address: Some(Clause::Or(
+            addresses.iter().map(|address| [*address; 20]).collect(),
+        )),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
 async fn query_range(
     svc: &FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore>,
     from_block: u64,
@@ -202,13 +215,7 @@ async fn query_range(
                 order: QueryOrder::Ascending,
                 resume_log_id: None,
                 limit: usize::MAX,
-                filter: LogFilter {
-                    address: None,
-                    topic0: None,
-                    topic1: None,
-                    topic2: None,
-                    topic3: None,
-                },
+                filter: indexed_address_or_filter(&[1, 2, 3, 7, 8]),
             },
             ExecutionBudget::default(),
         )
@@ -319,13 +326,7 @@ fn ingest_retry_survives_faults_at_phase_boundaries() {
                         order: QueryOrder::Ascending,
                         resume_log_id: None,
                         limit: usize::MAX,
-                        filter: LogFilter {
-                            address: None,
-                            topic0: None,
-                            topic1: None,
-                            topic2: None,
-                            topic3: None,
-                        },
+                        filter: indexed_address_or_filter(&[1, 2, 3, 7, 8]),
                     },
                     ExecutionBudget::default(),
                 )

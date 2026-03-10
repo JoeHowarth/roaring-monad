@@ -125,6 +125,8 @@ This boundary is transport-free:
 async def query_logs(request, budget):
     if request.limit == 0:
         raise InvalidParams("limit must be at least 1")
+    if not logs.has_indexed_clause(request.filter):
+        raise InvalidParams("query must include at least one indexed address or topic clause")
 
     effective_limit = min(request.limit, budget.max_results or request.limit)
 
@@ -148,25 +150,11 @@ async def query_logs(request, budget):
         if log_window.is_empty():
             return empty_page(block_window)
 
-    if logs.should_use_block_scan(request.filter):
-        matching = await logs.block_scan.execute(
-            block_window=block_window,
-            log_window=log_window,
-            filter=request.filter,
-            take=effective_limit + 1,
-        )
-    elif logs.has_no_indexed_clauses(request.filter):
-        matching = await logs.sequential_scan.execute(
-            log_window=log_window,
-            filter=request.filter,
-            take=effective_limit + 1,
-        )
-    else:
-        matching = await logs.shard_streaming_executor.execute(
-            filter=request.filter,
-            id_window=log_window,
-            take=effective_limit + 1,
-        )
+    matching = await logs.shard_streaming_executor.execute(
+        filter=request.filter,
+        id_window=log_window,
+        take=effective_limit + 1,
+    )
 
     has_more = len(matching) > effective_limit
     page_matches = matching[:effective_limit]
@@ -234,47 +222,9 @@ This preserves the primary ID long enough to emit:
 - exact `next_resume_log_id`
 - exact `cursor_block`
 
-## Broad-Query Block Scan
+## Unsupported Query Shapes
 
-The block-scan path stays in the logs family because it depends on log-specific block metadata.
-
-```python
-async def log_block_scan(block_window, log_window, filter, take):
-    out = []
-
-    for block_num in range(block_window.from_block, block_window.to_block + 1):
-        block_ref = load_shared_block_ref(block_num)
-        log_block_window = load_log_block_window(block_num)
-        if log_block_window is None or log_block_window.count == 0:
-            continue
-
-        start = max(log_block_window.first_log_id, log_window.start)
-        end = min(
-            log_block_window.first_log_id + log_block_window.count - 1,
-            log_window.end_inclusive,
-        )
-        if start > end:
-            continue
-
-        header = await logs.storage.load_block_header(block_num)
-        payload = await logs.storage.read_full_block_blob(block_num)
-        if header is None or payload is None:
-            continue
-
-        for log_id in range(start, end + 1):
-            local_ordinal = log_id - log_block_window.first_log_id
-            log = decode_one_log(payload, header.offsets, local_ordinal)
-            if not logs.materializer.exact_match(log, filter):
-                continue
-
-            out.append(MatchedPrimary(id=log_id, item=log, block_ref=block_ref))
-            if len(out) >= take:
-                return out
-
-    return out
-```
-
-That path uses the same page semantics as the indexed path.
+Queries without at least one indexed address/topic clause are rejected at the boundary.
 
 ## Ingest Flow
 

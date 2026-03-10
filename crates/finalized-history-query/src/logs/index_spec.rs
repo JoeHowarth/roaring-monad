@@ -1,4 +1,3 @@
-use crate::config::BroadQueryPolicy;
 use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
@@ -110,22 +109,8 @@ pub async fn build_clause_order<M: MetaStore>(
     Ok(clauses.into_iter().map(|(kind, _)| kind).collect())
 }
 
-pub fn should_force_block_scan(
-    filter: &LogFilter,
-    max_or_terms: usize,
-    policy: BroadQueryPolicy,
-) -> bool {
-    let max_terms = filter.max_or_terms();
-    max_terms > max_or_terms && matches!(policy, BroadQueryPolicy::BlockScan)
-}
-
-pub fn should_error_too_broad(
-    filter: &LogFilter,
-    max_or_terms: usize,
-    policy: BroadQueryPolicy,
-) -> bool {
-    let max_terms = filter.max_or_terms();
-    max_terms > max_or_terms && matches!(policy, BroadQueryPolicy::Error)
+pub fn is_too_broad(filter: &LogFilter, max_or_terms: usize) -> bool {
+    filter.max_or_terms() > max_or_terms
 }
 
 async fn estimate_for_values<M: MetaStore>(

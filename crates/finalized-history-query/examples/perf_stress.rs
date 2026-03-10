@@ -150,7 +150,7 @@ async fn run_queries<M: MetaStore, B: BlobStore>(
                 blocks.saturating_sub(1_000).max(1),
                 blocks,
                 LogFilter {
-                    address: None,
+                    address: Some(Clause::One([(i % 128) as u8; 20])),
                     topic0: None,
                     topic1: None,
                     topic2: None,

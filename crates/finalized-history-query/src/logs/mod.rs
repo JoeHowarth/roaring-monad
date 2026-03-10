@@ -1,4 +1,3 @@
-pub mod block_scan;
 pub mod filter;
 pub mod index_spec;
 pub mod ingest;

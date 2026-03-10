@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use bytes::Bytes;
-
 use crate::codec::log::{decode_block_log_header, decode_log, decode_log_directory_bucket};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::ids::LogId;
@@ -67,32 +65,6 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         id: LogId,
     ) -> Result<Option<ResolvedLogLocation>> {
         self.lookup_bucket(id, log_directory_bucket_start(id)).await
-    }
-
-    pub(crate) async fn read_full_block_blob(&self, block_num: u64) -> Result<Option<Bytes>> {
-        self.blob_store
-            .get_blob(&block_logs_blob_key(block_num))
-            .await
-    }
-
-    fn decode_log_from_blob(
-        &self,
-        header: &BlockLogHeader,
-        local_ordinal: usize,
-        blob: &[u8],
-    ) -> Result<Log> {
-        let Some(&start) = header.offsets.get(local_ordinal) else {
-            return Err(Error::Decode("block log ordinal out of range"));
-        };
-        let Some(&end) = header.offsets.get(local_ordinal + 1) else {
-            return Err(Error::Decode("block log header missing sentinel"));
-        };
-        let start = start as usize;
-        let end = end as usize;
-        if start > end || end > blob.len() {
-            return Err(Error::Decode("invalid block log span"));
-        }
-        decode_log(&blob[start..end])
     }
 
     async fn lookup_bucket(
@@ -214,17 +186,6 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
 
     fn exact_match(&self, item: &Self::Primary, filter: &Self::Filter) -> bool {
         exact_match(item, filter)
-    }
-}
-
-impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
-    pub(crate) fn decode_log_from_cached_block(
-        &self,
-        header: &BlockLogHeader,
-        local_ordinal: usize,
-        blob: &[u8],
-    ) -> Result<Log> {
-        self.decode_log_from_blob(header, local_ordinal, blob)
     }
 }
 
