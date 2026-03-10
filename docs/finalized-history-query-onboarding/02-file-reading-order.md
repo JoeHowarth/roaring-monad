@@ -26,6 +26,8 @@ Look for:
 9. `crates/finalized-log-index/src/core/execution.rs`
 10. `crates/finalized-log-index/src/core/runtime.rs`
 11. `crates/finalized-log-index/src/streams/keys.rs`
+12. `crates/finalized-log-index/src/streams/tail_manager.rs`
+13. `crates/finalized-log-index/src/streams/writer.rs`
 
 Look for:
 
@@ -36,13 +38,13 @@ Look for:
 
 ## Pass 3: Log family
 
-12. `crates/finalized-log-index/src/logs/filter.rs`
-13. `crates/finalized-log-index/src/logs/types.rs`
-14. `crates/finalized-log-index/src/logs/window.rs`
-15. `crates/finalized-log-index/src/logs/materialize.rs`
-16. `crates/finalized-log-index/src/logs/block_scan.rs`
-17. `crates/finalized-log-index/src/logs/query.rs`
-18. `crates/finalized-log-index/src/logs/ingest.rs`
+14. `crates/finalized-log-index/src/logs/filter.rs`
+15. `crates/finalized-log-index/src/logs/types.rs`
+16. `crates/finalized-log-index/src/logs/window.rs`
+17. `crates/finalized-log-index/src/logs/materialize.rs`
+18. `crates/finalized-log-index/src/logs/block_scan.rs`
+19. `crates/finalized-log-index/src/logs/query.rs`
+20. `crates/finalized-log-index/src/logs/ingest.rs`
 
 Look for:
 
@@ -54,12 +56,12 @@ Look for:
 
 ## Pass 4: Persisted bytes and storage
 
-19. `crates/finalized-log-index/src/domain/types.rs`
-20. `crates/finalized-log-index/src/codec/finalized_state.rs`
-21. `crates/finalized-log-index/src/codec/log.rs`
-22. `crates/finalized-log-index/src/streams/manifest.rs`
-23. `crates/finalized-log-index/src/streams/chunk.rs`
-24. `crates/finalized-log-index/src/store/traits.rs`
+21. `crates/finalized-log-index/src/domain/types.rs`
+22. `crates/finalized-log-index/src/codec/finalized_state.rs`
+23. `crates/finalized-log-index/src/codec/log.rs`
+24. `crates/finalized-log-index/src/streams/manifest.rs`
+25. `crates/finalized-log-index/src/streams/chunk.rs`
+26. `crates/finalized-log-index/src/store/traits.rs`
 
 Look for:
 
@@ -71,8 +73,8 @@ Look for:
 
 ## Pass 5: End-to-end behavior
 
-25. `crates/finalized-log-index/tests/finalized_index.rs`
-26. `crates/finalized-log-index/tests/differential_and_gc.rs`
+27. `crates/finalized-log-index/tests/finalized_index.rs`
+28. `crates/finalized-log-index/tests/differential_and_gc.rs`
 
 Focus on:
 

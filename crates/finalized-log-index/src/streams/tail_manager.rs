@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::store::traits::{FenceToken, MetaStore, PutCond};
 use crate::streams::manifest::{decode_tail, encode_tail};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct TailManager;
 
 impl TailManager {

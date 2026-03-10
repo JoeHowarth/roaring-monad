@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::stream::{FuturesUnordered, StreamExt};
-use roaring::RoaringBitmap;
 
 use crate::codec::finalized_state::{
     decode_block_meta, decode_meta_state, encode_block_meta, encode_meta_state, encode_u64,
@@ -11,29 +9,20 @@ use crate::codec::log::{decode_log_locator_page, encode_log, encode_log_locator_
 use crate::config::{Config, IngestMode};
 use crate::domain::keys::{
     META_STATE_KEY, block_hash_to_num_key, block_meta_key, chunk_blob_key, log_locator_page_key,
-    log_locator_page_start, log_pack_blob_key, manifest_key, tail_key,
+    log_locator_page_start, log_pack_blob_key,
 };
 use crate::domain::types::{Block, BlockMeta, IngestOutcome, LogLocator, MetaState};
 use crate::error::{Error, Result};
 use crate::logs::ingest::collect_stream_appends;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
-use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
-use crate::streams::manifest::{
-    ChunkRef, Manifest, decode_manifest, decode_tail, encode_manifest, encode_tail,
-};
+use crate::streams::chunk::{ChunkBlob, decode_chunk};
+use crate::streams::writer::{CachedStreamState, StreamWriter};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
     pub meta_store: M,
     pub blob_store: B,
     stream_state_cache: std::sync::RwLock<HashMap<String, CachedStreamState>>,
-}
-
-#[derive(Debug, Clone)]
-struct CachedStreamState {
-    manifest: Manifest,
-    manifest_version: Option<u64>,
-    tail: RoaringBitmap,
 }
 
 impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
@@ -157,10 +146,17 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .await?;
 
         let appends = collect_stream_appends(block, first_log_id);
+        let stream_writer = StreamWriter::new(
+            &self.config,
+            &self.meta_store,
+            &self.blob_store,
+            &self.stream_state_cache,
+        );
         let mut appends_in_flight = FuturesUnordered::new();
         for (stream_id, values) in appends {
+            let writer = stream_writer;
             appends_in_flight
-                .push(async move { self.apply_stream_appends(&stream_id, &values, epoch).await });
+                .push(async move { writer.apply_appends(&stream_id, &values, epoch).await });
             if appends_in_flight.len() >= self.config.stream_append_concurrency.max(1) {
                 match appends_in_flight.next().await {
                     Some(Ok(_)) => {}
@@ -188,9 +184,13 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
     }
 
     pub async fn run_periodic_maintenance(&self, epoch: u64) -> Result<MaintenanceStats> {
-        if let Ok(mut cache) = self.stream_state_cache.write() {
-            cache.clear();
-        }
+        let stream_writer = StreamWriter::new(
+            &self.config,
+            &self.meta_store,
+            &self.blob_store,
+            &self.stream_state_cache,
+        );
+        stream_writer.clear_cache();
         let mut stats = MaintenanceStats::default();
         let page = self
             .meta_store
@@ -198,7 +198,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .await?;
         for key in page.keys {
             if let Some(stream) = parse_stream_from_tail_key(&key) {
-                let sealed = self.apply_stream_appends(&stream, &[], epoch).await?;
+                let sealed = stream_writer.apply_appends(&stream, &[], epoch).await?;
                 if sealed {
                     stats.sealed_streams = stats.sealed_streams.saturating_add(1);
                 }
@@ -206,107 +206,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             }
         }
         Ok(stats)
-    }
-
-    async fn apply_stream_appends(&self, stream: &str, values: &[u32], epoch: u64) -> Result<bool> {
-        let cached = self
-            .stream_state_cache
-            .write()
-            .ok()
-            .and_then(|mut cache| cache.remove(stream));
-        let (mut manifest, mut manifest_version, mut tail) = if let Some(cached) = cached {
-            (cached.manifest, cached.manifest_version, cached.tail)
-        } else if self.config.assume_empty_streams
-            && matches!(self.config.ingest_mode, IngestMode::SingleWriterFast)
-        {
-            (Manifest::default(), None, RoaringBitmap::new())
-        } else {
-            let (manifest, manifest_version) = self.load_manifest(stream).await?;
-            let tail = self.load_tail(stream).await?;
-            (manifest, manifest_version, tail)
-        };
-        let mut manifest_changed = false;
-
-        for v in values {
-            tail.insert(*v);
-        }
-
-        let now = now_unix_sec();
-        let mut sealed = false;
-        if self.should_seal(&tail, manifest.last_seal_unix_sec, now)? {
-            let min_local = tail.min().unwrap_or(0);
-            let max_local = tail.max().unwrap_or(0);
-            let count = tail.len() as u32;
-            let chunk_seq = manifest.last_chunk_seq + 1;
-
-            let chunk = ChunkBlob {
-                min_local,
-                max_local,
-                count,
-                crc32: 0,
-                bitmap: tail.clone(),
-            };
-            let encoded_chunk = encode_chunk(&chunk)?;
-            self.blob_store
-                .put_blob(&chunk_blob_key(stream, chunk_seq), encoded_chunk)
-                .await?;
-
-            manifest.last_chunk_seq = chunk_seq;
-            manifest.approx_count += count as u64;
-            manifest.last_seal_unix_sec = now;
-            manifest.chunk_refs.push(ChunkRef {
-                chunk_seq,
-                min_local,
-                max_local,
-                count,
-            });
-
-            tail = RoaringBitmap::new();
-            manifest_changed = true;
-            sealed = true;
-        }
-
-        if manifest_changed {
-            manifest_version = self
-                .store_manifest(stream, &manifest, manifest_version, epoch)
-                .await?;
-        }
-        self.store_tail(stream, &tail, epoch).await?;
-        if let Ok(mut cache) = self.stream_state_cache.write() {
-            cache.insert(
-                stream.to_string(),
-                CachedStreamState {
-                    manifest,
-                    manifest_version,
-                    tail,
-                },
-            );
-        }
-        Ok(sealed)
-    }
-
-    fn should_seal(
-        &self,
-        tail: &RoaringBitmap,
-        last_seal_unix_sec: u64,
-        now_unix_sec: u64,
-    ) -> Result<bool> {
-        if tail.is_empty() {
-            return Ok(false);
-        }
-        if tail.len() >= self.config.target_entries_per_chunk as u64 {
-            return Ok(true);
-        }
-        if encode_tail(tail)?.len() >= self.config.target_chunk_bytes {
-            return Ok(true);
-        }
-        if last_seal_unix_sec > 0
-            && now_unix_sec.saturating_sub(last_seal_unix_sec)
-                >= self.config.maintenance_seal_seconds
-        {
-            return Ok(true);
-        }
-        Ok(false)
     }
 
     async fn load_state(&self) -> Result<(MetaState, Option<u64>)> {
@@ -355,59 +254,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             .ok_or(Error::NotFound)?;
         decode_block_meta(&rec.value)
     }
-
-    async fn load_manifest(&self, stream: &str) -> Result<(Manifest, Option<u64>)> {
-        let key = manifest_key(stream);
-        match self.meta_store.get(&key).await? {
-            Some(rec) => Ok((decode_manifest(&rec.value)?, Some(rec.version))),
-            None => Ok((Manifest::default(), None)),
-        }
-    }
-
-    async fn store_manifest(
-        &self,
-        stream: &str,
-        manifest: &Manifest,
-        version: Option<u64>,
-        epoch: u64,
-    ) -> Result<Option<u64>> {
-        let key = manifest_key(stream);
-        let (cond, strict_applied_check) = match self.config.ingest_mode {
-            IngestMode::StrictCas => (
-                match version {
-                    Some(v) => PutCond::IfVersion(v),
-                    None => PutCond::IfAbsent,
-                },
-                true,
-            ),
-            IngestMode::SingleWriterFast => (PutCond::Any, false),
-        };
-        let r = self
-            .meta_store
-            .put(&key, encode_manifest(manifest), cond, FenceToken(epoch))
-            .await?;
-        if strict_applied_check && !r.applied {
-            return Err(Error::CasConflict);
-        }
-        Ok(r.version.or(version))
-    }
-
-    async fn load_tail(&self, stream: &str) -> Result<RoaringBitmap> {
-        let key = tail_key(stream);
-        match self.meta_store.get(&key).await? {
-            Some(rec) => decode_tail(&rec.value),
-            None => Ok(RoaringBitmap::new()),
-        }
-    }
-
-    async fn store_tail(&self, stream: &str, tail: &RoaringBitmap, epoch: u64) -> Result<()> {
-        let key = tail_key(stream);
-        let _ = self
-            .meta_store
-            .put(&key, encode_tail(tail)?, PutCond::Any, FenceToken(epoch))
-            .await?;
-        Ok(())
-    }
 }
 
 #[allow(dead_code)]
@@ -427,13 +273,6 @@ async fn load_chunk_if_present<B: BlobStore>(
 pub struct MaintenanceStats {
     pub flushed_streams: u64,
     pub sealed_streams: u64,
-}
-
-fn now_unix_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn parse_stream_from_tail_key(key: &[u8]) -> Option<String> {

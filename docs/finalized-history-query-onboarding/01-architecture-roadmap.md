@@ -30,6 +30,8 @@ The crate now has three explicit layers:
   - `src/core/execution.rs`
   - `src/core/runtime.rs`
   - `src/streams/keys.rs`
+  - `src/streams/tail_manager.rs`
+  - `src/streams/writer.rs`
 - family adapters
   - `src/logs/filter.rs`
   - `src/logs/window.rs`
@@ -127,3 +129,4 @@ Keep these roles distinct:
 - method layer: block ranges, limits, continuation, page metadata
 - family layer: log filter semantics, materialization, block scan fallback
 - shared substrate: range resolution, stream math, candidate execution, runtime state
+  - stream append/seal lifecycle now lives under `streams/`, with `ingest/engine.rs` orchestrating rather than implementing it inline
