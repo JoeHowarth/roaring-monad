@@ -64,25 +64,27 @@ This keeps family semantics explicit while reusing one engine for:
 - metrics
 - in-flight miss coordination
 
-### 3. Table identity and table kind are separate
+### 3. Tables are logical policy boundaries
 
 Each cache table has:
 
 - a logical identity, which determines policy and metrics
-- a storage kind, which determines how entry weight is accounted
+- a capacity budget
+- caller-provided entry weights
 
-The engine should support two table kinds:
+The engine should treat cached values as opaque entries.
 
-- `Bytes`
-  - entries are cached as serialized byte buffers
-  - entry weight is exact
-- `Objects`
-  - entries are cached as Rust objects
-  - entry weight is supplied by the caller as a size hint
+Each insert supplies:
 
-Table kind answers:
+- the key
+- the value
+- the entry weight in bytes
 
-- how the engine stores and measures entries
+That lets the same engine store:
+
+- serialized byte buffers
+- decoded metadata objects
+- decoded index fragments
 
 Table identity answers:
 
@@ -90,7 +92,7 @@ Table identity answers:
 - which metrics bucket they belong to
 - which admission and eager-population rules apply
 
-These are different concerns and should not be conflated.
+The engine does not need separate first-class storage modes for bytes versus objects as long as weight accounting is explicit at insertion time.
 
 ## Cache Model
 
@@ -180,15 +182,12 @@ The first draft should assume separate logical tables even if they share the sam
 Recommended initial tables for logs:
 
 - `log_directory_buckets`
-  - kind: `Objects`
   - value: decoded `LogDirectoryBucket`
   - notes: small, immutable, very high reuse
 - `block_log_headers`
-  - kind: `Objects`
   - value: decoded `BlockLogHeader`
   - notes: small, immutable, very high reuse
 - `decoded_stream_chunks`
-  - kind: `Objects`
   - value: decoded roaring chunk
   - notes: immutable but materially larger; independent capacity
 
@@ -198,11 +197,11 @@ Future tables:
 - `stream_tails`
 - family-specific equivalents for transactions, native transfers, and traces
 
-Even when two objects use the same table kind, they should not share a table unless they have meaningfully similar value density and eviction behavior.
+Even when two objects use the same insertion model, they should not share a table unless they have meaningfully similar value density and eviction behavior.
 
 ## Relationship Between Persisted Metadata and Derived Objects
 
-Persisted metadata records and decoded index fragments are both cached as Rust objects when using `Objects` tables, but they are not the same class of data.
+Persisted metadata records and decoded index fragments may both be cached as opaque weighted entries, but they are not the same class of data.
 
 Persisted metadata examples:
 
@@ -250,7 +249,7 @@ and several object-store backends:
 - filesystem
 - S3
 
-The cache should operate on semantic keys and typed values rather than storage paths.
+The cache should operate on semantic keys and weighted typed values rather than storage paths.
 
 ## Family Integration
 
@@ -308,7 +307,7 @@ For derived decoded chunks, also record:
 
 ### Phase 1
 
-- add the generic engine with `Bytes` and `Objects` table kinds
+- add the generic engine with weighted opaque entries and named tables
 - add in-flight miss coordination keyed by `(table_id, cache_key)`
 - add logs-family facade methods for immutable metadata
 - eagerly populate immutable log directory buckets and block headers on ingest
