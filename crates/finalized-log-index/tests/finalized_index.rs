@@ -72,6 +72,27 @@ async fn query_page<M: MetaStore, B: BlobStore>(
     limit: Option<usize>,
     resume_log_id: Option<u64>,
 ) -> finalized_log_index::Result<finalized_log_index::QueryPage<Log>> {
+    query_page_with_budget(
+        svc,
+        from_block,
+        to_block,
+        filter,
+        limit,
+        resume_log_id,
+        ExecutionBudget::default(),
+    )
+    .await
+}
+
+async fn query_page_with_budget<M: MetaStore, B: BlobStore>(
+    svc: &FinalizedIndexService<M, B>,
+    from_block: u64,
+    to_block: u64,
+    filter: LogFilter,
+    limit: Option<usize>,
+    resume_log_id: Option<u64>,
+    budget: ExecutionBudget,
+) -> finalized_log_index::Result<finalized_log_index::QueryPage<Log>> {
     svc.query_logs(
         query_request(
             from_block,
@@ -80,7 +101,7 @@ async fn query_page<M: MetaStore, B: BlobStore>(
             limit.unwrap_or(usize::MAX),
             resume_log_id,
         ),
-        ExecutionBudget::default(),
+        budget,
     )
     .await
 }
@@ -506,6 +527,338 @@ fn empty_page_metadata_uses_resolved_range_endpoint() {
         )
         .await
         .expect("empty page");
+
+        assert!(page.items.is_empty());
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+        assert_eq!(page.meta.next_resume_log_id, None);
+    });
+}
+
+#[test]
+fn indexed_query_does_not_leak_logs_past_empty_range_end() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], Vec::new());
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 1, 1, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert!(page.items.is_empty());
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 1);
+        assert_eq!(page.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn block_scan_query_does_not_leak_logs_past_empty_range_end() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                planner_max_or_terms: 0,
+                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], Vec::new());
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(
+            &svc,
+            1,
+            1,
+            LogFilter {
+                address: Some(Clause::One([1; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            Some(10),
+            None,
+        )
+        .await
+        .expect("query");
+
+        assert!(page.items.is_empty());
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 1);
+        assert_eq!(page.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn indexed_query_skips_empty_leading_blocks_within_range() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], Vec::new());
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].block_num, 2);
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
+fn block_scan_query_skips_empty_leading_blocks_within_range() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config {
+                planner_max_or_terms: 0,
+                planner_broad_query_policy: BroadQueryPolicy::BlockScan,
+                ..Config::default()
+            },
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], Vec::new());
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 20, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(
+            &svc,
+            1,
+            2,
+            LogFilter {
+                address: Some(Clause::One([1; 20])),
+                topic0: None,
+                topic1: None,
+                topic2: None,
+                topic3: None,
+            },
+            Some(10),
+            None,
+        )
+        .await
+        .expect("query");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].block_num, 2);
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
+fn all_empty_blocks_range_returns_empty_page() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], Vec::new());
+        let b2 = mk_block(2, b1.block_hash, Vec::new());
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert!(page.items.is_empty());
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
+fn query_range_clips_to_finalized_head() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 1, 10, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|log| log.block_num)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(page.meta.resolved_from_block.number, 1);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
+fn query_above_finalized_head_returns_empty_page_anchored_to_head() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 10, 20, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert!(page.items.is_empty());
+        assert_eq!(page.meta.resolved_from_block.number, 2);
+        assert_eq!(page.meta.resolved_to_block.number, 2);
+        assert_eq!(page.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
+fn resume_log_id_below_window_is_invalid() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let err = query_page(&svc, 2, 2, LogFilter::default(), Some(10), Some(0))
+            .await
+            .expect_err("expected invalid resume_log_id");
+
+        assert!(matches!(err, Error::InvalidParams(_)));
+    });
+}
+
+#[test]
+fn budget_max_results_caps_page_size_and_sets_resume_metadata() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let block = mk_block(
+            1,
+            [0; 32],
+            vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 11, 21, 1, 0, 1)],
+        );
+        svc.ingest_finalized_block(block).await.expect("ingest");
+
+        let page = query_page_with_budget(
+            &svc,
+            1,
+            1,
+            LogFilter::default(),
+            Some(10),
+            None,
+            ExecutionBudget {
+                max_results: Some(1),
+            },
+        )
+        .await
+        .expect("query");
+
+        assert_eq!(page.items.len(), 1);
+        assert!(page.meta.has_more);
+        assert_eq!(page.meta.next_resume_log_id, Some(0));
+        assert_eq!(page.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn zero_budget_max_results_is_invalid() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let err = query_page_with_budget(
+            &svc,
+            1,
+            1,
+            LogFilter::default(),
+            Some(10),
+            None,
+            ExecutionBudget {
+                max_results: Some(0),
+            },
+        )
+        .await
+        .expect_err("expected invalid budget");
+
+        assert!(matches!(err, Error::InvalidParams(_)));
+    });
+}
+
+#[test]
+fn resuming_after_last_log_in_range_with_empty_tail_returns_empty_page_at_range_end() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, Vec::new());
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let page = query_page(&svc, 1, 2, LogFilter::default(), Some(10), Some(0))
+            .await
+            .expect("query");
 
         assert!(page.items.is_empty());
         assert!(!page.meta.has_more);

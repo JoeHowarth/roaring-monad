@@ -37,6 +37,10 @@ impl LogBlockScanner {
                 continue;
             };
             let block_meta = crate::codec::log::decode_block_meta(&record.value)?;
+            if block_meta.count == 0 {
+                continue;
+            }
+
             let start = block_meta.first_log_id.max(log_window.start);
             let end_inclusive = (block_meta.first_log_id + block_meta.count as u64)
                 .saturating_sub(1)
