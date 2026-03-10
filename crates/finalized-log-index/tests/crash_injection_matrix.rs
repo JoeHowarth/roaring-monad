@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use finalized_log_index::LogFilter;
 use finalized_log_index::api::{
     ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
 };
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::LogFilter;
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::error::{Error, Result};
 use finalized_log_index::store::blob::InMemoryBlobStore;

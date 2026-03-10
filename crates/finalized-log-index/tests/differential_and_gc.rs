@@ -4,7 +4,6 @@ use finalized_log_index::api::{
 use finalized_log_index::codec::chunk::{ChunkBlob, encode_chunk};
 use finalized_log_index::codec::manifest::encode_tail;
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::keys::{chunk_blob_key, stream_id, tail_key};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::gc::worker::GcWorker;
@@ -12,6 +11,7 @@ use finalized_log_index::recovery::startup::startup_plan;
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::meta::InMemoryMetaStore;
 use finalized_log_index::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_log_index::{Clause, LogFilter};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 

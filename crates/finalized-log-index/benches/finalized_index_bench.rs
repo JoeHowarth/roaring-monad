@@ -3,10 +3,10 @@ use finalized_log_index::api::{
     ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
 };
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::store::blob::InMemoryBlobStore;
 use finalized_log_index::store::meta::InMemoryMetaStore;
+use finalized_log_index::{Clause, LogFilter};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {

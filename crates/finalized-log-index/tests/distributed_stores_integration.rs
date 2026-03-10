@@ -4,10 +4,10 @@ use finalized_log_index::api::{
     ExecutionBudget, FinalizedIndexService, QueryLogsRequest, QueryOrder,
 };
 use finalized_log_index::config::Config;
-use finalized_log_index::domain::filter::{Clause, LogFilter};
 use finalized_log_index::domain::types::{Block, Log};
 use finalized_log_index::store::minio::MinioBlobStore;
 use finalized_log_index::store::scylla::ScyllaMetaStore;
+use finalized_log_index::{Clause, LogFilter};
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
