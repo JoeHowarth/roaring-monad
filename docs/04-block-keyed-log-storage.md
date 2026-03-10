@@ -4,6 +4,8 @@ This document describes a proposed replacement for the current locator-page plus
 
 The goal is to keep the query model and roaring indexes based on monotonic global `log_id`, while storing log payload bytes by `block_num`.
 
+This project is not deployed in production yet, so backward compatibility is not a constraint for this redesign. The document therefore targets the clean end state rather than a compatibility-preserving rollout.
+
 ## Goals
 
 - keep `log_id` as the primary query and pagination identity
@@ -209,13 +211,14 @@ Backends may implement that by:
 
 The logs family should only depend on the logical range-read API.
 
-## Proposed Migration Shape
+## Implementation Shape
+
+Because there is no production compatibility requirement, the implementation can move directly to the new layout:
 
 1. add directory bucket, block-header, and range-read abstractions
-2. dual-write new block-keyed artifacts during ingest
+2. switch ingest to write block-keyed artifacts instead of locator pages and packed-log blobs
 3. switch materialization to `log_id -> bucket -> block_num -> header -> byte range`
-4. remove locator-page reads
-5. remove locator-page writes and packed-log blobs
+4. remove dead locator-page and packed-log code paths
 
 ## Open Parameters
 
