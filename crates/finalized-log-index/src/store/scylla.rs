@@ -501,18 +501,17 @@ impl MetaStore for ScyllaMetaStore {
                     })
                     .await?;
 
-                if let Ok(rows_result) = res.into_rows_result() {
-                    if let Ok(iter) = rows_result.rows::<(Vec<u8>,)>() {
-                        for row in iter {
-                            let (k,) =
-                                row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
-                            if k < start || !k.starts_with(prefix) {
-                                continue;
-                            }
-                            keys.push(k);
-                            if keys.len() >= limit {
-                                break;
-                            }
+                if let Ok(rows_result) = res.into_rows_result()
+                    && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
+                {
+                    for row in iter {
+                        let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
+                        if k < start || !k.starts_with(prefix) {
+                            continue;
+                        }
+                        keys.push(k);
+                        if keys.len() >= limit {
+                            break;
                         }
                     }
                 }

@@ -27,10 +27,10 @@ impl RuntimeState {
 
     pub fn clear_throttle(&self) {
         self.throttled.store(false, Ordering::Relaxed);
-        if !self.degraded.load(Ordering::Relaxed) {
-            if let Ok(mut current_reason) = self.reason.lock() {
-                current_reason.clear();
-            }
+        if !self.degraded.load(Ordering::Relaxed)
+            && let Ok(mut current_reason) = self.reason.lock()
+        {
+            current_reason.clear();
         }
     }
 

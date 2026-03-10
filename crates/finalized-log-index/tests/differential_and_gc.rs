@@ -60,10 +60,10 @@ fn naive_query(
                 continue;
             }
             out.push(l.clone());
-            if let Some(limit) = max_results {
-                if out.len() >= limit {
-                    return out;
-                }
+            if let Some(limit) = max_results
+                && out.len() >= limit
+            {
+                return out;
             }
         }
     }

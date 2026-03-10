@@ -324,12 +324,12 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
                         .await?;
                 Ok::<(u32, BTreeSet<u32>), Error>((shard, entries))
             });
-            if in_flight.len() >= STREAM_LOAD_CONCURRENCY {
-                if let Some(result) = in_flight.next().await {
-                    let (shard, entries) = result?;
-                    for local in entries {
-                        out.insert(compose_global_log_id(shard, local));
-                    }
+            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
+                && let Some(result) = in_flight.next().await
+            {
+                let (shard, entries) = result?;
+                for local in entries {
+                    out.insert(compose_global_log_id(shard, local));
                 }
             }
         }

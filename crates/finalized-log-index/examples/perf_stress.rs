@@ -42,12 +42,11 @@ where
 {
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == name {
-            if let Some(value) = args.next() {
-                if let Ok(parsed) = value.parse::<T>() {
-                    return parsed;
-                }
-            }
+        if arg == name
+            && let Some(value) = args.next()
+            && let Ok(parsed) = value.parse::<T>()
+        {
+            return parsed;
         }
     }
     default
@@ -56,10 +55,10 @@ where
 fn parse_string_arg(name: &str, default: &str) -> String {
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == name {
-            if let Some(value) = args.next() {
-                return value;
-            }
+        if arg == name
+            && let Some(value) = args.next()
+        {
+            return value;
         }
     }
     default.to_string()
