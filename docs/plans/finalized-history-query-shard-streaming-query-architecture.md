@@ -15,6 +15,12 @@ The proposed end state is:
 
 The goal is to improve first-page latency, bound per-request memory, and make pagination naturally align with the storage and indexing model.
 
+This document is intentionally about executor shape, not cache hierarchy.
+
+Cross-request metadata caching is a separate architectural concern and is covered only as an assumption and dependency here. A separate stub plan now exists at:
+
+- `docs/plans/finalized-history-query-metadata-caching-architecture.md`
+
 ## Problem Statement
 
 The current indexed query path in:
@@ -35,6 +41,23 @@ That shape is simple, but it front-loads the most shard-sensitive work.
 
 At high ingest rates, broad time windows become large shard spans quickly. For paginated queries, the first page often does not need full-window clause state, but the current architecture still pays that cost before it can return anything.
 
+However, the expected ingest regime is materially lower than the previously discussed worst case.
+
+For planning purposes, this document now assumes the more typical operating point is closer to:
+
+- `1,000` transactions per second
+- `1` log per transaction
+- `1,000` logs per second
+
+With the current `24` local-bit width:
+
+- `1` shard = `16,777,216` logs
+- `1` shard fills in about `4.66` hours at `1,000` logs per second
+- `1` day spans about `5.15` shards
+- `1` year spans about `1,880` shards
+
+This is much less extreme than the `100,000 logs/s` worst-case thought experiment. That changes the shard-size discussion, but it does not remove the case for improving the execution model.
+
 ## Goals
 
 - preserve exact ascending result order
@@ -44,6 +67,7 @@ At high ingest rates, broad time windows become large shard spans quickly. For p
 - bound in-memory clause/intersection state to one shard at a time
 - avoid full-window clause loading when early shards already satisfy the page
 - keep broad-query fallback behavior available where it still makes sense
+- make it explicit where bounded-work partial pages would fit if introduced later
 
 ## Non-Goals
 
@@ -51,7 +75,9 @@ At high ingest rates, broad time windows become large shard spans quickly. For p
 - changing `log_id` pagination identity
 - changing block-scan fallback semantics
 - redesigning ingest or on-disk stream formats in the first pass
+- redesigning manifest storage in the first pass
 - solving remote-storage latency in this document
+- specifying a cross-request metadata cache hierarchy in this document
 
 ## Current Shape
 
@@ -106,6 +132,19 @@ This shifts the unit of work from:
 to:
 
 - one shard-local `log_id` slice at a time
+
+The default semantic model in this document remains:
+
+- exact pagination
+- exact `has_more`
+- exact `next_resume_log_id`
+
+That means the executor still keeps searching until it either:
+
+- finds `limit + 1` matches, or
+- exhausts the resolved query window
+
+This document also identifies where an optional bounded-work mode could be introduced later, but it does not make that mode part of the base proposal.
 
 ## Visual Shape
 
@@ -229,6 +268,32 @@ Then build page metadata exactly as today:
 
 This keeps pagination behavior unchanged.
 
+## Optional Bounded-Work Mode
+
+The base proposal preserves current exact-page behavior.
+
+That means a sparse query may still traverse many shards before returning the first page.
+
+If the system later needs stronger latency bounds, shard streaming provides a natural place to add an explicit bounded-work mode. That mode could stop after one or more execution budgets are exhausted, for example:
+
+- maximum shards touched
+- maximum clause loads
+- maximum candidate IDs examined
+- maximum wall-clock time
+
+In that mode, the executor could intentionally return fewer than `limit` items even when more matches may exist later in the resolved window.
+
+This document does not choose those semantics yet. It only identifies the boundary:
+
+- base mode: exact current behavior
+- future bounded-work mode: explicit partial-page semantics
+
+Any future bounded-work mode must define:
+
+- whether `has_more` means "known more items exist" or "query was cut short"
+- whether a new metadata bit is needed to distinguish "partial by budget" from "naturally exhausted"
+- whether the existing resume token remains sufficient
+
 ## Query Semantics
 
 The proposal keeps these current invariants:
@@ -277,6 +342,16 @@ Pagination becomes a natural continuation of ascending shard traversal:
 
 The current benchmarks show that shard fanout and OR width are major drivers of cost. A shard-streaming executor lets those costs grow incrementally with actual page discovery rather than paying the full resolved-window cost up front.
 
+### Better fit for the expected ingest regime
+
+At the expected `1,000 logs/s` regime, the current `24` local-bit layout yields:
+
+- about `5.15` shards per day
+- about `36` shards per week
+- about `155` shards per 30-day month
+
+That means the system is not under immediate pressure to enlarge shard-local space just to make day-scale queries feasible. The bigger opportunity is improving how indexed queries traverse those shards.
+
 ## What This Does Not Solve
 
 Shard streaming does not make every broad query cheap.
@@ -296,6 +371,10 @@ It improves:
 It does not eliminate:
 
 - the fundamental cost of very broad, very selective queries
+
+- repeated metadata decode/load churn by itself
+
+Shard streaming improves the execution order, but it will not realize its full benefit if each shard step repeatedly reloads or redecodes the same manifests, tails, chunks, and headers without effective caching.
 
 ## Execution Model Details
 
@@ -318,6 +397,23 @@ Do not build a full-window union for a clause before streaming. Instead:
 - load OR values for the current shard only
 - union them into one shard-local bitmap
 - discard that union before moving to the next shard
+
+### Metadata reuse assumptions
+
+The executor should be designed so it can benefit from both:
+
+- per-request reuse
+- cross-request shared caches
+
+This document does not define those caches in detail, but the execution model should assume the following objects are strong cache candidates:
+
+- stream manifests
+- stream tails
+- decoded chunk bitmaps
+- block log headers
+- log directory buckets
+
+Without that reuse, shard streaming could improve early-stop behavior while still paying too much repeated metadata overhead on expensive traversals.
 
 ### Exact-match materialization
 
@@ -357,15 +453,52 @@ This proposal improves execution behavior even if the shard/local bit split stay
 
 However, it does not remove the architectural importance of shard size.
 
+Under the lower expected ingest regime, the current `24` local-bit split is more defensible than it looked in the worst-case throughput thought experiment.
+
+At `1,000 logs/s`:
+
+- `24` bits gives about `4.66` hours per shard
+- `1` day is about `5.15` shards
+- `1` year is about `1,880` shards
+
+That is not free, but it is materially better than the worst-case regime where one shard represented only a few minutes of data.
+
+At the same time, increasing local-bit width has a real metadata cost with the current manifest design.
+
+Given the current defaults:
+
+- target chunk size is about `1,950` entries
+- each manifest chunk ref costs `20` bytes
+- manifests are rewritten as a single object on each seal
+
+That implies maximum hot-stream manifest sizes roughly like:
+
+- `24` bits: about `172 KB`
+- `28` bits: about `2.75 MB`
+- `32` bits: about `44 MB`
+
+So shard streaming and shard-size changes are not symmetric decisions.
+
 If one shard covers only a few minutes of ingest at target throughput, then:
 
 - one-hour queries still span many shards
 - one-day queries still span hundreds of shards
 
-So shard streaming and shard-size changes are complementary:
+Under the expected ingest regime, this document therefore recommends:
+
+- treat `24` bits as the working assumption for now
+- improve the executor first
+- reconsider larger local-bit widths only after measuring realistic workloads and only with explicit acknowledgement of manifest-growth costs
+
+So shard streaming and shard-size changes are still complementary, but they are not equally urgent:
 
 - shard streaming improves the per-request execution model
 - larger local-bit width would reduce the number of shards that any broad query touches
+
+In practice:
+
+- shard streaming is in scope for this plan
+- shard-size redesign is deferred until there is evidence that `24` bits is insufficient at expected ingest or until manifest storage is redesigned
 
 ## Implementation Sketch
 
@@ -463,6 +596,18 @@ with emphasis on:
 - wide OR queries
 - large shard spans
 - sparse vs dense candidates
+- expected-ingest shard spans, not only extreme worst-case shard spans
+
+### Phase 6: Re-evaluate shard sizing separately
+
+Only after the shard-streaming executor is benchmarked under expected workloads should the project decide whether to revisit local-bit width.
+
+That later evaluation should include both:
+
+- query execution cost
+- manifest and metadata growth cost
+
+It should not be folded implicitly into this executor plan.
 
 ## Risks
 
@@ -476,6 +621,20 @@ That is acceptable if:
 - memory shape improves
 - storage adapters cache effectively
 
+### Metadata churn can erase the win
+
+If each shard step repeatedly loads or decodes the same metadata, then shard streaming may improve easy first pages while still regressing expensive traversals.
+
+The architecture therefore depends on a coherent metadata-reuse story across:
+
+- manifests
+- tails
+- chunk blobs or decoded chunk bitmaps
+- block headers
+- directory buckets
+
+That reuse may exist partly within a request and partly across requests, but it cannot be treated as incidental.
+
 ### More complex control flow
 
 The current executor is conceptually simpler because it centralizes clause loading before execution. Shard streaming adds a more stateful loop.
@@ -483,6 +642,12 @@ The current executor is conceptually simpler because it centralizes clause loadi
 ### Planner quality matters more
 
 Because execution is incremental, poor clause ordering can waste work inside every shard.
+
+### Exact-page semantics can still allow long first pages
+
+Because the base proposal preserves exact `limit + 1` semantics, sparse queries may still traverse large shard spans before returning the first page.
+
+That is acceptable for the base design, but it means bounded-work partial-page behavior may still be needed later as a separate semantic choice.
 
 ## Recommendation
 
@@ -499,5 +664,6 @@ This should be treated as:
 
 - an execution-model improvement first
 - a shard-size redesign second
+- a metadata-caching architecture as a separate parallel design track
 
-Both may still be worth doing, but shard-streaming is the more direct response to the observed query-shape problem.
+All three may still be worth doing, but shard-streaming is the most direct response to the current query-shape problem and does not require an immediate shard-size change.
