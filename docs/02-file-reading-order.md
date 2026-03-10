@@ -72,7 +72,9 @@ Look for:
 
 - `MetaState`
 - `BlockMeta`
-- locator pages
+- directory buckets
+- block log headers
+- block-keyed log blobs
 - manifests, tails, and chunks
 - store fencing and CAS behavior
 
@@ -102,8 +104,8 @@ Focus on:
 - ingest / query invariants
 - differential correctness
 
-## Optional design note
+## Storage note
 
 33. `docs/04-block-keyed-log-storage.md`
 
-Read this after the current implementation if you want the proposed next-step storage design for replacing locator pages with block-keyed payloads.
+Read this after the current implementation if you want the current storage design for `log_id -> block_num -> byte-range` resolution.

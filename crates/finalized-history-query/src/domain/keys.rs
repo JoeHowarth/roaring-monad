@@ -1,5 +1,5 @@
 pub const META_STATE_KEY: &[u8] = b"meta/state";
-pub const LOG_LOCATOR_PAGE_SIZE: u64 = 1024;
+pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOCAL_ID_BITS: u32 = 24;
 pub const LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
 pub const MAX_LOCAL_ID: u32 = LOCAL_ID_MASK as u32;
@@ -18,33 +18,33 @@ pub fn read_u64_be(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(out))
 }
 
-pub fn log_locator_key(global_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_locators/".to_vec();
-    k.extend_from_slice(&u64_be(global_log_id));
+pub fn log_directory_bucket_start(global_log_id: u64) -> u64 {
+    (global_log_id / LOG_DIRECTORY_BUCKET_SIZE) * LOG_DIRECTORY_BUCKET_SIZE
+}
+
+pub fn log_directory_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir/".to_vec();
+    k.extend_from_slice(&u64_be(bucket_start_log_id));
     k
 }
 
-pub fn log_locator_page_start(global_log_id: u64) -> u64 {
-    (global_log_id / LOG_LOCATOR_PAGE_SIZE) * LOG_LOCATOR_PAGE_SIZE
+pub fn log_directory_prefix() -> &'static [u8] {
+    b"log_dir/"
 }
 
-pub fn log_locator_page_key(page_start_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_locator_pages/".to_vec();
-    k.extend_from_slice(&u64_be(page_start_log_id));
+pub fn block_log_header_key(block_num: u64) -> Vec<u8> {
+    let mut k = b"block_log_headers/".to_vec();
+    k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn log_locator_pages_prefix() -> &'static [u8] {
-    b"log_locator_pages/"
+pub fn block_log_headers_prefix() -> &'static [u8] {
+    b"block_log_headers/"
 }
 
-pub fn log_locators_prefix() -> &'static [u8] {
-    b"log_locators/"
-}
-
-pub fn log_pack_blob_key(first_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_packs/".to_vec();
-    k.extend_from_slice(&u64_be(first_log_id));
+pub fn block_logs_blob_key(block_num: u64) -> Vec<u8> {
+    let mut k = b"block_logs/".to_vec();
+    k.extend_from_slice(&u64_be(block_num));
     k
 }
 
@@ -155,5 +155,15 @@ mod tests {
             (MAX_LOCAL_ID - 2, MAX_LOCAL_ID)
         );
         assert_eq!(local_range_for_shard(from, to, second_shard), (0, 1));
+    }
+
+    #[test]
+    fn log_directory_bucket_start_aligns_to_bucket_size() {
+        assert_eq!(log_directory_bucket_start(0), 0);
+        assert_eq!(log_directory_bucket_start(123), 0);
+        assert_eq!(
+            log_directory_bucket_start(LOG_DIRECTORY_BUCKET_SIZE + 17),
+            LOG_DIRECTORY_BUCKET_SIZE
+        );
     }
 }

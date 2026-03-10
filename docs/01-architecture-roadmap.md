@@ -91,13 +91,12 @@ The persisted bytes still use the existing records:
 
 - `MetaState`
 - `BlockMeta`
-- packed log blobs
-- locator pages
+- `LogDirectoryBucket`
+- `BlockLogHeader`
+- block-keyed log blobs
 - manifests, tails, and chunks
 
 The code treats those bytes through cleaner shared and family-local helpers instead of exposing the mixed record shape everywhere.
-
-The next major storage evolution is to keep global `log_id` sequencing while moving payload bytes to block-keyed objects. That design is described in `docs/04-block-keyed-log-storage.md`.
 
 ## Query Semantics
 
@@ -125,8 +124,9 @@ It is responsible for:
 
 The logs family owns:
 
-- packed-log writes
-- locator-page writes
+- directory-bucket writes
+- block-log-header writes
+- block-log blob writes
 - log block-metadata writes
 - block-hash lookup writes
 - stream fanout rules

@@ -1,10 +1,8 @@
-# Block-Keyed Log Storage Design
+# Block-Keyed Log Storage
 
-This document describes a proposed replacement for the current locator-page plus packed-log layout.
+This document describes the current log-payload layout.
 
-The goal is to keep the query model and roaring indexes based on monotonic global `log_id`, while storing log payload bytes by `block_num`.
-
-This project is not deployed in production yet, so backward compatibility is not a constraint for this redesign. The document therefore targets the clean end state rather than a compatibility-preserving rollout.
+The crate keeps the query model and roaring indexes based on monotonic global `log_id`, while storing log payload bytes by `block_num`.
 
 ## Goals
 
@@ -22,18 +20,6 @@ This project is not deployed in production yet, so backward compatibility is not
 - removing `first_log_id` and `count` from block metadata
 - designing non-log families
 
-## Current Layout
-
-Today the logs family stores:
-
-- `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
-- `log_locator_pages/<page_start_log_id> -> { slot -> LogLocator }`
-- `log_packs/<first_log_id> -> packed encoded logs`
-
-That makes `log_id -> bytes` cheap, but it pushes the storage model toward per-log indirection.
-
-## Proposed Layout
-
 Keep `BlockMeta` as the authoritative log sequencing record:
 
 - `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
@@ -43,7 +29,7 @@ This intentionally duplicates sequencing information that is also derivable from
 - `BlockMeta` remains the authoritative per-block record for finalized-state reads
 - directory buckets are lookup accelerators for `log_id -> block_num`
 
-Replace locator pages and log packs with:
+The logs family stores:
 
 - `log_dir/<bucket_start_log_id> -> LogDirectoryBucket`
 - `block_log_headers/<block_num> -> BlockLogHeader`
@@ -207,13 +193,13 @@ The design mitigates those issues by:
 
 ## Why Not Locator Pages
 
-Locator pages optimize direct per-log lookup, but they also require:
+Locator pages were removed because they required:
 
 - per-log locator maintenance
 - extra metadata churn during ingest
-- a storage model that is less aligned with future block-keyed artifact families
+- a storage model that was less aligned with future block-keyed artifact families
 
-The proposed layout keeps the query identity (`log_id`) while moving payload storage toward the more general block-keyed model.
+The current layout keeps the query identity (`log_id`) while moving payload storage toward the more general block-keyed model.
 
 ## Backend Abstraction
 
@@ -230,16 +216,15 @@ The logs family should only depend on the logical range-read API.
 
 In-memory and simple test backends can implement this by loading the whole object and slicing locally. Remote/object-store backends can implement it with native range GETs.
 
-## Implementation Shape
+## Implemented Shape
 
-Because there is no production compatibility requirement, the implementation can move directly to the new layout:
+The crate implements the layout directly:
 
-1. extend the blob-store abstraction with logical range reads
-2. add directory bucket and block-header codecs and keys
-3. switch ingest to write block-keyed artifacts instead of locator pages and packed-log blobs
-4. switch materialization to `log_id -> bucket -> block_num -> header -> byte range`
-5. simplify block scan to read block-keyed artifacts directly
-6. remove dead locator-page and packed-log code paths
+1. the blob-store abstraction exposes logical range reads
+2. ingest writes directory buckets, block headers, and block-keyed payload blobs
+3. materialization resolves `log_id -> bucket -> block_num -> header -> byte range`
+4. block scan reads block-keyed artifacts directly
+5. locator-page and packed-log code paths are gone
 
 ## Directory Bucket Writes
 

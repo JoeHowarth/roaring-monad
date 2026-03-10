@@ -80,12 +80,13 @@ meta_store:
     "meta/state" -> MetaState
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
-    "log_locator_pages/<page_start_log_id>" -> {slot -> LogLocator}
+    "log_dir/<bucket_start_log_id>" -> LogDirectoryBucket
+    "block_log_headers/<block_num>" -> BlockLogHeader
     "manifests/<stream_id>" -> Manifest
     "tails/<stream_id>" -> roaring_bitmap
 
 blob_store:
-    "log_packs/<first_log_id>" -> packed_log_bytes
+    "block_logs/<block_num>" -> concatenated encoded logs
     "chunks/<stream_id>/<chunk_seq>" -> roaring_chunk_bytes
 ```
 
@@ -240,10 +241,14 @@ async def log_block_scan(block_window, log_window, filter, take):
         if start > end:
             continue
 
+        header = await logs.storage.load_block_header(block_num)
+        payload = await logs.storage.read_full_block_blob(block_num)
+        if header is None or payload is None:
+            continue
+
         for log_id in range(start, end + 1):
-            log = await logs.materializer.load_by_id(log_id)
-            if log is None:
-                continue
+            local_ordinal = log_id - log_block_window.first_log_id
+            log = decode_one_log(payload, header.offsets, local_ordinal)
             if not logs.materializer.exact_match(log, filter):
                 continue
 

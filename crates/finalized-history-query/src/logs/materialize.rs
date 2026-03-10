@@ -1,24 +1,34 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 
-use crate::codec::log::{decode_log, decode_log_locator, decode_log_locator_page};
+use crate::codec::log::{decode_block_log_header, decode_log, decode_log_directory_bucket};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
-use crate::domain::keys::{log_locator_key, log_locator_page_key, log_locator_page_start};
+use crate::domain::keys::{
+    LOG_DIRECTORY_BUCKET_SIZE, block_log_header_key, block_logs_blob_key, log_directory_bucket_key,
+    log_directory_bucket_start,
+};
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::state::load_log_block_meta;
-use crate::logs::types::{Log, LogLocator};
+use crate::logs::types::{BlockLogHeader, Log, LogDirectoryBucket};
 use crate::store::traits::{BlobStore, MetaStore};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResolvedLogLocation {
+    pub block_num: u64,
+    pub local_ordinal: usize,
+}
 
 pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     meta_store: &'a M,
     blob_store: &'a B,
     range_resolver: RangeResolver,
-    locator_page_cache: HashMap<u64, HashMap<u16, LogLocator>>,
-    log_pack_cache: HashMap<Vec<u8>, bytes::Bytes>,
+    directory_bucket_cache: HashMap<u64, LogDirectoryBucket>,
+    block_header_cache: HashMap<u64, BlockLogHeader>,
     block_ref_cache: HashMap<u64, BlockRef>,
 }
 
@@ -28,11 +38,124 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
             meta_store,
             blob_store,
             range_resolver: RangeResolver,
-            locator_page_cache: HashMap::new(),
-            log_pack_cache: HashMap::new(),
+            directory_bucket_cache: HashMap::new(),
+            block_header_cache: HashMap::new(),
             block_ref_cache: HashMap::new(),
         }
     }
+
+    pub(crate) async fn load_block_header(
+        &mut self,
+        block_num: u64,
+    ) -> Result<Option<BlockLogHeader>> {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.block_header_cache.entry(block_num)
+        {
+            let Some(record) = self
+                .meta_store
+                .get(&block_log_header_key(block_num))
+                .await?
+            else {
+                return Ok(None);
+            };
+            entry.insert(decode_block_log_header(&record.value)?);
+        }
+        Ok(self.block_header_cache.get(&block_num).cloned())
+    }
+
+    pub(crate) async fn resolve_log_id(&mut self, id: u64) -> Result<Option<ResolvedLogLocation>> {
+        let bucket_start = log_directory_bucket_start(id);
+        if let Some(location) = self.lookup_bucket(id, bucket_start).await? {
+            return Ok(Some(location));
+        }
+        if bucket_start >= LOG_DIRECTORY_BUCKET_SIZE {
+            return self
+                .lookup_bucket(id, bucket_start - LOG_DIRECTORY_BUCKET_SIZE)
+                .await;
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn read_full_block_blob(&self, block_num: u64) -> Result<Option<Bytes>> {
+        self.blob_store
+            .get_blob(&block_logs_blob_key(block_num))
+            .await
+    }
+
+    fn decode_log_from_blob(
+        &self,
+        header: &BlockLogHeader,
+        local_ordinal: usize,
+        blob: &[u8],
+    ) -> Result<Log> {
+        let Some(&start) = header.offsets.get(local_ordinal) else {
+            return Err(Error::Decode("block log ordinal out of range"));
+        };
+        let Some(&end) = header.offsets.get(local_ordinal + 1) else {
+            return Err(Error::Decode("block log header missing sentinel"));
+        };
+        let start = start as usize;
+        let end = end as usize;
+        if start > end || end > blob.len() {
+            return Err(Error::Decode("invalid block log span"));
+        }
+        decode_log(&blob[start..end])
+    }
+
+    async fn lookup_bucket(
+        &mut self,
+        id: u64,
+        bucket_start: u64,
+    ) -> Result<Option<ResolvedLogLocation>> {
+        let bucket = self.load_directory_bucket(bucket_start).await?;
+        let Some(bucket) = bucket else {
+            return Ok(None);
+        };
+        let Some(entry_index) = containing_bucket_entry(&bucket, id) else {
+            return Ok(None);
+        };
+        let block_num = bucket.start_block + entry_index as u64;
+        let local_ordinal = usize::try_from(id - bucket.first_log_ids[entry_index])
+            .map_err(|_| Error::Decode("local ordinal overflow"))?;
+        Ok(Some(ResolvedLogLocation {
+            block_num,
+            local_ordinal,
+        }))
+    }
+
+    async fn load_directory_bucket(
+        &mut self,
+        bucket_start: u64,
+    ) -> Result<Option<LogDirectoryBucket>> {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.directory_bucket_cache.entry(bucket_start)
+        {
+            let Some(record) = self
+                .meta_store
+                .get(&log_directory_bucket_key(bucket_start))
+                .await?
+            else {
+                return Ok(None);
+            };
+            entry.insert(decode_log_directory_bucket(&record.value)?);
+        }
+        Ok(self.directory_bucket_cache.get(&bucket_start).cloned())
+    }
+}
+
+fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: u64) -> Option<usize> {
+    if bucket.first_log_ids.len() < 2 {
+        return None;
+    }
+    let upper = bucket
+        .first_log_ids
+        .partition_point(|first_log_id| *first_log_id <= id);
+    if upper == 0 || upper >= bucket.first_log_ids.len() {
+        return None;
+    }
+    let entry_index = upper - 1;
+    let end = bucket.first_log_ids[upper];
+    if id < end { Some(entry_index) } else { None }
 }
 
 #[async_trait]
@@ -41,58 +164,30 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
     type Filter = LogFilter;
 
     async fn load_by_id(&mut self, id: u64) -> Result<Option<Self::Primary>> {
-        let page_start = log_locator_page_start(id);
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.locator_page_cache.entry(page_start)
-        {
-            let page = match self
-                .meta_store
-                .get(&log_locator_page_key(page_start))
-                .await?
-            {
-                Some(record) => {
-                    let (stored_page_start, entries) = decode_log_locator_page(&record.value)?;
-                    if stored_page_start != page_start {
-                        return Err(Error::Decode("log locator page start mismatch"));
-                    }
-                    entries
-                }
-                None => HashMap::new(),
-            };
-            entry.insert(page);
-        }
-
-        let mut locator = self.locator_page_cache.get(&page_start).and_then(|page| {
-            let slot = u16::try_from(id - page_start).ok()?;
-            page.get(&slot).cloned()
-        });
-        if locator.is_none() {
-            locator = match self.meta_store.get(&log_locator_key(id)).await? {
-                Some(record) => Some(decode_log_locator(&record.value)?),
-                None => None,
-            };
-        }
-        let Some(locator) = locator else {
+        let Some(location) = self.resolve_log_id(id).await? else {
             return Ok(None);
         };
-
-        if !self.log_pack_cache.contains_key(&locator.blob_key) {
-            let Some(blob) = self.blob_store.get_blob(&locator.blob_key).await? else {
-                return Ok(None);
-            };
-            self.log_pack_cache.insert(locator.blob_key.clone(), blob);
-        }
-
-        let Some(blob) = self.log_pack_cache.get(&locator.blob_key) else {
+        let Some(header) = self.load_block_header(location.block_num).await? else {
             return Ok(None);
         };
-        let start = locator.byte_offset as usize;
-        let end = start.saturating_add(locator.byte_len as usize);
-        if end > blob.len() || start > end {
-            return Err(Error::Decode("invalid log locator span"));
-        }
-
-        Ok(Some(decode_log(&blob[start..end])?))
+        let Some(&start) = header.offsets.get(location.local_ordinal) else {
+            return Ok(None);
+        };
+        let Some(&end) = header.offsets.get(location.local_ordinal + 1) else {
+            return Ok(None);
+        };
+        let Some(bytes) = self
+            .blob_store
+            .read_range(
+                &block_logs_blob_key(location.block_num),
+                u64::from(start),
+                u64::from(end),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(decode_log(&bytes)?))
     }
 
     async fn block_ref_for(&mut self, item: &Self::Primary) -> Result<BlockRef> {
@@ -123,5 +218,16 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
 
     fn exact_match(&self, item: &Self::Primary, filter: &Self::Filter) -> bool {
         exact_match(item, filter)
+    }
+}
+
+impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
+    pub(crate) fn decode_log_from_cached_block(
+        &self,
+        header: &BlockLogHeader,
+        local_ordinal: usize,
+        blob: &[u8],
+    ) -> Result<Log> {
+        self.decode_log_from_blob(header, local_ordinal, blob)
     }
 }

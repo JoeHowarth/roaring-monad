@@ -18,10 +18,11 @@ const META_BUCKETS: u16 = 256;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
     "block_meta",
+    "block_log_headers",
     "block_hash_to_num",
+    "log_dir",
     "manifests",
     "tails",
-    "log_locators",
 ];
 
 #[derive(Debug, Clone)]

@@ -62,6 +62,7 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             &self.config,
             &self.meta_store,
             &self.blob_store,
+            block.block_num,
             &block.logs,
             first_log_id,
             epoch,

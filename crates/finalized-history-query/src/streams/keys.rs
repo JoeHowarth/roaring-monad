@@ -1,8 +1,8 @@
 pub use crate::domain::keys::{
-    LOCAL_ID_BITS, LOCAL_ID_MASK, LOG_LOCATOR_PAGE_SIZE, MAX_LOCAL_ID, META_STATE_KEY,
-    block_hash_to_num_key, block_meta_key, chunk_blob_key, compose_global_log_id,
-    local_range_for_shard, log_local, log_locator_key, log_locator_page_key,
-    log_locator_page_start, log_locator_pages_prefix, log_locators_prefix, log_pack_blob_key,
+    LOCAL_ID_BITS, LOCAL_ID_MASK, LOG_DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID, META_STATE_KEY,
+    block_hash_to_num_key, block_log_header_key, block_log_headers_prefix, block_logs_blob_key,
+    block_meta_key, chunk_blob_key, compose_global_log_id, local_range_for_shard,
+    log_directory_bucket_key, log_directory_bucket_start, log_directory_prefix, log_local,
     log_shard, manifest_key, read_u64_be, stream_id, tail_key, u64_be,
 };
 

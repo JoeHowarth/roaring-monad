@@ -59,6 +59,24 @@ pub trait MetaStore: Send + Sync {
 pub trait BlobStore: Send + Sync {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
+    async fn read_range(
+        &self,
+        key: &[u8],
+        start: u64,
+        end_exclusive: u64,
+    ) -> Result<Option<Bytes>> {
+        let Some(blob) = self.get_blob(key).await? else {
+            return Ok(None);
+        };
+        let start = usize::try_from(start)
+            .map_err(|_| crate::error::Error::Decode("blob range start overflow"))?;
+        let end = usize::try_from(end_exclusive)
+            .map_err(|_| crate::error::Error::Decode("blob range end overflow"))?;
+        if start > end || end > blob.len() {
+            return Err(crate::error::Error::Decode("invalid blob range"));
+        }
+        Ok(Some(blob.slice(start..end)))
+    }
     async fn delete_blob(&self, key: &[u8]) -> Result<()>;
     async fn list_prefix(
         &self,

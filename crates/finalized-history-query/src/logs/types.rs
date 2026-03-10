@@ -1,6 +1,8 @@
 use crate::domain::types::{BlockMeta, MetaState};
 
-pub use crate::domain::types::{Block, HealthReport, IngestOutcome, Log, LogLocator};
+pub use crate::domain::types::{
+    Block, BlockLogHeader, HealthReport, IngestOutcome, Log, LogDirectoryBucket,
+};
 
 pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];

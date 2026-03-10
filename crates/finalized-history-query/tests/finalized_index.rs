@@ -1342,12 +1342,12 @@ fn query_only_loads_overlapping_address_chunks() {
         assert_eq!(got.items[0].block_num, 2);
 
         let addr_prefix = b"chunks/addr/";
-        let log_pack_prefix = b"log_packs/";
+        let block_logs_prefix = b"block_logs/";
         assert_eq!(svc.ingest.blob_store.count_gets_with_prefix(addr_prefix), 1);
         assert_eq!(
             svc.ingest
                 .blob_store
-                .count_gets_with_prefix(log_pack_prefix),
+                .count_gets_with_prefix(block_logs_prefix),
             1
         );
     });
@@ -1395,7 +1395,7 @@ fn topic0_queries_use_only_topic0_chunks() {
         assert_eq!(got.items[0].block_num, 2);
 
         let topic0_prefix = b"chunks/topic0/";
-        let log_pack_prefix = b"log_packs/";
+        let block_logs_prefix = b"block_logs/";
         assert_eq!(
             svc.ingest.blob_store.count_gets_with_prefix(topic0_prefix),
             1
@@ -1403,7 +1403,7 @@ fn topic0_queries_use_only_topic0_chunks() {
         assert_eq!(
             svc.ingest
                 .blob_store
-                .count_gets_with_prefix(log_pack_prefix),
+                .count_gets_with_prefix(block_logs_prefix),
             1
         );
     });
