@@ -38,6 +38,11 @@ Keep `BlockMeta` as the authoritative log sequencing record:
 
 - `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
 
+This intentionally duplicates sequencing information that is also derivable from directory buckets. The duplication is deliberate:
+
+- `BlockMeta` remains the authoritative per-block record for finalized-state reads
+- directory buckets are lookup accelerators for `log_id -> block_num`
+
 Replace locator pages and log packs with:
 
 - `log_dir/<bucket_start_log_id> -> LogDirectoryBucket`
@@ -78,6 +83,8 @@ Derived counts:
 
 The final sentinel is required so the last block in the bucket has a closed range.
 
+Blocks can span bucket boundaries. If a lookup does not find a containing range in the computed bucket, it must also probe the previous bucket before failing. This adds at most one extra bucket fetch for the uncommon boundary case and keeps the directory encoding compact.
+
 ## Block Headers
 
 Each block gets a small header object:
@@ -102,6 +109,8 @@ This means:
 
 This object should stay small enough to cache aggressively.
 
+Empty blocks do not need `block_log_headers/<block_num>` or `block_logs/<block_num>` objects. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockMeta`.
+
 ## Block Log Objects
 
 Each block gets one payload object:
@@ -117,19 +126,23 @@ The query and materialization layers should not know whether the backend is:
 - native byte-range capable
 - emulated via chunked blobs
 
+This requires extending the current blob-store abstraction. Today the trait only supports full-object reads; the block-keyed layout requires a logical `read_range(key, start, end)` capability.
+
 ## Lookup Flow
 
 Given a candidate `log_id`:
 
 1. compute `bucket_start = floor(log_id / bucket_size) * bucket_size`
 2. load `log_dir/<bucket_start>`
-3. binary-search `first_log_ids` to find the containing block
-4. compute `block_num = start_block + entry_index`
-5. compute `local_ordinal = log_id - first_log_ids[entry_index]`
-6. load cached `block_log_headers/<block_num>`
-7. read `offsets[local_ordinal]..offsets[local_ordinal + 1]`
-8. issue `read_range(block_logs/<block_num>, start, end)`
-9. decode one log
+3. find the last index `i` where `first_log_ids[i] <= log_id`
+4. verify that `log_id < first_log_ids[i + 1]`
+5. if no containing range exists in that bucket, also check the previous bucket
+6. compute `block_num = start_block + i`
+7. compute `local_ordinal = log_id - first_log_ids[i]`
+8. load cached `block_log_headers/<block_num>`
+9. read `offsets[local_ordinal]..offsets[local_ordinal + 1]`
+10. issue `read_range(block_logs/<block_num>, start, end)`
+11. decode one log
 
 ## Worked Example
 
@@ -159,6 +172,8 @@ Resolve `log_id = 120000006`:
 5. byte range is `offsets[3]..offsets[4] = 110..160`
 6. fetch bytes `[110, 160)` from `block_logs/5003`
 
+The duplicate `120000003` entries matter here. The lookup must choose the last index where `first_log_ids[i] <= 120000006`, not an arbitrary duplicate position.
+
 ## Why This Is Efficient
 
 Good cases:
@@ -173,6 +188,8 @@ The current executor already iterates candidate `log_id`s in ascending order, wh
 - current directory bucket
 - current block header
 - current block payload object
+
+The block-scan path also becomes simpler: load `BlockMeta`, skip blocks with `count == 0`, then load the block header and payload once and decode sequentially without any per-log locator lookups.
 
 ## Bad Cases
 
@@ -211,14 +228,32 @@ Backends may implement that by:
 
 The logs family should only depend on the logical range-read API.
 
+In-memory and simple test backends can implement this by loading the whole object and slicing locally. Remote/object-store backends can implement it with native range GETs.
+
 ## Implementation Shape
 
 Because there is no production compatibility requirement, the implementation can move directly to the new layout:
 
-1. add directory bucket, block-header, and range-read abstractions
-2. switch ingest to write block-keyed artifacts instead of locator pages and packed-log blobs
-3. switch materialization to `log_id -> bucket -> block_num -> header -> byte range`
-4. remove dead locator-page and packed-log code paths
+1. extend the blob-store abstraction with logical range reads
+2. add directory bucket and block-header codecs and keys
+3. switch ingest to write block-keyed artifacts instead of locator pages and packed-log blobs
+4. switch materialization to `log_id -> bucket -> block_num -> header -> byte range`
+5. simplify block scan to read block-keyed artifacts directly
+6. remove dead locator-page and packed-log code paths
+
+## Directory Bucket Writes
+
+Bucket updates are append-like but still rewrite the whole bucket object.
+
+When ingest writes block `N` with `first_log_id = X`:
+
+1. compute the owning bucket from `X`
+2. load the current bucket object, if any
+3. replace the old final sentinel with a real entry for block `N`
+4. append the new final sentinel at `X + count`
+5. write the whole bucket object back with the same fencing / CAS discipline used for other finalized-state metadata
+
+The bucket object is therefore an accelerator index maintained under the same writer-epoch discipline as the rest of ingest metadata.
 
 ## Open Parameters
 
