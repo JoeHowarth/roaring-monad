@@ -34,7 +34,6 @@ impl InMemoryMetaStore {
     }
 }
 
-#[async_trait::async_trait]
 impl MetaStore for InMemoryMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         let guard = self

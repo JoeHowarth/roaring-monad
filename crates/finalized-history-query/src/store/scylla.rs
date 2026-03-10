@@ -321,7 +321,6 @@ impl ScyllaMetaStore {
     }
 }
 
-#[async_trait::async_trait]
 impl MetaStore for ScyllaMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         let grp = extract_group(key);

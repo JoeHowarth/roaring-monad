@@ -11,7 +11,6 @@ pub struct InMemoryBlobStore {
     inner: RwLock<HashMap<Vec<u8>, Bytes>>,
 }
 
-#[async_trait::async_trait]
 impl BlobStore for InMemoryBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         let mut guard = self

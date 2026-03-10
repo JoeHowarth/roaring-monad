@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-
 use crate::core::page::{QueryOrder, QueryPage};
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
@@ -20,7 +18,7 @@ pub struct ExecutionBudget {
     pub max_results: Option<usize>,
 }
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait FinalizedLogQueries: Send + Sync {
     async fn query_logs(
         &self,

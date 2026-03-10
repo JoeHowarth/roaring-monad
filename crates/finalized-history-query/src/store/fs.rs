@@ -46,7 +46,6 @@ impl FsMetaStore {
     }
 }
 
-#[async_trait::async_trait]
 impl MetaStore for FsMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         let kp = self.key_path(key);
@@ -198,7 +197,6 @@ impl FsBlobStore {
     }
 }
 
-#[async_trait::async_trait]
 impl BlobStore for FsBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         let path = self.key_path(key);

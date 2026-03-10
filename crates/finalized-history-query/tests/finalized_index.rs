@@ -111,7 +111,6 @@ struct FlakyMetaStore {
     fail_get_remaining: Arc<AtomicUsize>,
 }
 
-#[async_trait::async_trait]
 impl MetaStore for FlakyMetaStore {
     async fn get(
         &self,
@@ -193,7 +192,6 @@ impl RecordingBlobStore {
     }
 }
 
-#[async_trait::async_trait]
 impl BlobStore for RecordingBlobStore {
     async fn put_blob(
         &self,
@@ -227,7 +225,6 @@ impl BlobStore for RecordingBlobStore {
     }
 }
 
-#[async_trait::async_trait]
 impl MetaStore for RecordingMetaStore {
     async fn get(&self, key: &[u8]) -> finalized_history_query::error::Result<Option<Record>> {
         self.inner.get(key).await

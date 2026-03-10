@@ -81,7 +81,6 @@ impl MinioBlobStore {
     }
 }
 
-#[async_trait::async_trait]
 impl BlobStore for MinioBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         let object_key = self.object_key(key);

@@ -36,7 +36,7 @@ pub struct Page {
     pub next_cursor: Option<Vec<u8>>,
 }
 
-#[async_trait::async_trait]
+#[allow(async_fn_in_trait)]
 pub trait MetaStore: Send + Sync {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
     async fn put(
@@ -55,7 +55,7 @@ pub trait MetaStore: Send + Sync {
     ) -> Result<Page>;
 }
 
-#[async_trait::async_trait]
+#[allow(async_fn_in_trait)]
 pub trait BlobStore: Send + Sync {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;

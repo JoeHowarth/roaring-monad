@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
@@ -85,7 +84,6 @@ struct FaultyMetaStore {
     injector: Arc<FaultInjector>,
 }
 
-#[async_trait]
 impl MetaStore for FaultyMetaStore {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
         self.inner.get(key).await
@@ -122,7 +120,6 @@ struct FaultyBlobStore {
     injector: Arc<FaultInjector>,
 }
 
-#[async_trait]
 impl BlobStore for FaultyBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         self.injector.maybe_fail(FaultOp::BlobPut, key)?;

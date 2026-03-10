@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use async_trait::async_trait;
-
 use crate::core::ids::PrimaryIdRange;
 use crate::core::refs::BlockRef;
 use crate::error::Result;
@@ -13,7 +11,7 @@ pub struct MatchedPrimary<T> {
     pub block_ref: BlockRef,
 }
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait PrimaryMaterializer {
     type Primary;
     type Filter;

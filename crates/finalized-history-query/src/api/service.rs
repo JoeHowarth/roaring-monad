@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use async_trait::async_trait;
-
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
 use crate::config::{Config, GuardrailAction};
@@ -158,7 +156,6 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
     }
 }
 
-#[async_trait]
 impl<M: MetaStore, B: BlobStore> FinalizedHistoryWriter for FinalizedHistoryService<M, B> {
     async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
         if self.state.degraded.load(Ordering::Relaxed) {
@@ -181,7 +178,6 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryWriter for FinalizedHistoryServ
     }
 }
 
-#[async_trait]
 impl<M: MetaStore, B: BlobStore> FinalizedLogQueries for FinalizedHistoryService<M, B> {
     async fn query_logs(
         &self,

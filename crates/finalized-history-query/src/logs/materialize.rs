@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::codec::log::{decode_block_log_header, decode_log, decode_log_directory_bucket};
@@ -148,7 +147,6 @@ fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: u64) -> Option<usize
     if id < end { Some(entry_index) } else { None }
 }
 
-#[async_trait]
 impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, B> {
     type Primary = Log;
     type Filter = LogFilter;
