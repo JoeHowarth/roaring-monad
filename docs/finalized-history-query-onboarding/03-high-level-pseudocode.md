@@ -1,6 +1,6 @@
 # Finalized History Query High-Level Pseudocode
 
-This is intentionally not real code. It is a high-level sketch of the planned wave-1 architecture so the core control flow is easier to understand before reading the current implementation.
+This is intentionally not real code. It is a high-level sketch of the current wave-1 architecture so the core control flow is easier to understand before reading the implementation.
 
 The goal is to show:
 
@@ -335,7 +335,7 @@ async def ingest_finalized_block(block, writer_epoch):
     store_updated_head_and_log_sequencing_state(block, first_log_id, writer_epoch)
 ```
 
-The important target boundary is:
+The important boundary is:
 
 - stream append and seal lifecycle moves into shared stream infrastructure
 - log-specific stream fanout rules stay in the logs family
