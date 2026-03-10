@@ -246,6 +246,7 @@ For each shard in ascending order:
 1. compute shard-local `[from_local, to_local]`
 2. for each clause in planned order:
    - load only this shard's stream data
+   - allow bounded intra-shard concurrency while loading that clause
    - union OR values for this shard only
    - intersect with the shard accumulator
    - short-circuit if the shard becomes empty
@@ -255,6 +256,12 @@ For each shard in ascending order:
    - materialize exact matches immediately
 
 This stage is the core execution change.
+
+Concurrency rule:
+
+- shard traversal is serial in result order
+- clause execution inside a shard is serial by default so clause ordering can short-circuit work
+- stream loads within one clause for one shard may run with bounded concurrency
 
 ### 4. Page assembly
 
@@ -388,6 +395,19 @@ High-level rule:
 
 - prefer the earliest clause that is expected to make a shard empty quickly
 
+The executor should not parallelize all clauses in a shard by default.
+
+Reason:
+
+- clause ordering only helps if later clauses are skipped when earlier clauses empty the shard accumulator
+- eager clause-parallel loading would reintroduce avoidable front-loaded work
+
+So the base design is:
+
+- serial across clauses
+- short-circuit when the accumulator becomes empty
+- bounded concurrency only within the current clause's shard-local loads
+
 ### OR handling
 
 OR lists should stay shard-local.
@@ -395,8 +415,23 @@ OR lists should stay shard-local.
 Do not build a full-window union for a clause before streaming. Instead:
 
 - load OR values for the current shard only
+- allow those value loads to run concurrently up to a bounded per-clause limit
 - union them into one shard-local bitmap
 - discard that union before moving to the next shard
+
+This preserves the important throughput property of the current loader:
+
+- wide OR clauses do not have to serialize every value load one by one
+
+At the same time, it avoids drifting back to the whole-window model:
+
+- do not speculate across many future shards in parallel in the base design
+
+The intended concurrency boundary is therefore:
+
+- parallel within one clause for one shard
+- not parallel across many shards
+- not parallel across all clauses in one shard by default
 
 ### Metadata reuse assumptions
 
@@ -638,6 +673,18 @@ That reuse may exist partly within a request and partly across requests, but it 
 ### More complex control flow
 
 The current executor is conceptually simpler because it centralizes clause loading before execution. Shard streaming adds a more stateful loop.
+
+### Bad concurrency boundaries can erase the win
+
+If the implementation makes shard-local OR and stream loads fully serial, wide-OR queries may regress relative to the current loader.
+
+If the implementation speculatively loads many future shards or all clauses in parallel, it drifts back toward the current front-loaded whole-window cost shape.
+
+So the architecture depends on using the right concurrency boundary:
+
+- bounded concurrency within a clause for one shard
+- ordered traversal across shards
+- clause ordering preserved for short-circuiting
 
 ### Planner quality matters more
 
