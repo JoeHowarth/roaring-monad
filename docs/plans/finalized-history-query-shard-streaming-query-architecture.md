@@ -17,6 +17,8 @@ The goal is to improve first-page latency, bound per-request memory, and make pa
 
 This document is intentionally about executor shape, not cache hierarchy.
 
+Unless stated otherwise, the indexed-path discussion in this document applies to queries that remain within the current OR guardrails. Queries that exceed `planner_max_or_terms` still follow the existing error-or-block-scan policy.
+
 Cross-request metadata caching is a separate architectural concern and is covered only as an assumption and dependency here. A separate stub plan now exists at:
 
 - `docs/plans/finalized-history-query-metadata-caching-architecture.md`
@@ -387,7 +389,7 @@ Pagination becomes a natural continuation of ascending shard traversal:
 
 ### Better alignment with actual hot costs
 
-The current benchmarks show that shard fanout and OR width are major drivers of cost. A shard-streaming executor lets those costs grow incrementally with actual page discovery rather than paying the full resolved-window cost up front.
+For indexed queries that remain within the current OR guardrails, the current benchmarks show that shard fanout and OR width are major drivers of cost. A shard-streaming executor lets those costs grow incrementally with actual page discovery rather than paying the full resolved-window cost up front.
 
 ### Better fit for the expected ingest regime
 
@@ -531,6 +533,21 @@ That is acceptable as a transitional step, but it is not the full intended end s
 Broad-query block scan can remain as a separate path.
 
 The proposed change applies to the indexed path only.
+
+This proposal does not broaden indexed support for super-wide OR queries. If a query currently exceeds `planner_max_or_terms`, it should keep following the existing policy:
+
+- `BroadQueryPolicy::Error` returns `QueryTooBroad`
+- `BroadQueryPolicy::BlockScan` falls back to block scan
+
+So the intended benefit surface here is:
+
+- indexed queries within the current OR guardrails
+- especially multi-shard windows and moderate OR widths
+
+It is not:
+
+- removing the current wide-OR guardrail
+- making arbitrarily wide OR queries part of the indexed path
 
 Decision boundary remains:
 
