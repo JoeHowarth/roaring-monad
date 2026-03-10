@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 
-use crate::codec::finalized_state::{decode_block_meta, decode_meta_state, encode_meta_state};
+use crate::codec::finalized_state::{decode_meta_state, encode_meta_state};
 use crate::config::{Config, IngestMode};
-use crate::domain::keys::{META_STATE_KEY, block_meta_key, chunk_blob_key};
-use crate::domain::types::{Block, BlockMeta, IngestOutcome, MetaState};
+use crate::core::state::load_block_identity;
+use crate::domain::keys::{META_STATE_KEY, chunk_blob_key};
+use crate::domain::types::{Block, IngestOutcome, MetaState};
 use crate::error::{Error, Result};
 use crate::logs::ingest::{
     collect_stream_appends, persist_log_artifacts, persist_log_block_metadata,
@@ -46,9 +47,10 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             let expected_parent = if state.indexed_finalized_head == 0 {
                 [0u8; 32]
             } else {
-                self.load_block_meta(state.indexed_finalized_head)
+                load_block_identity(&self.meta_store, state.indexed_finalized_head)
                     .await?
-                    .block_hash
+                    .ok_or(Error::NotFound)?
+                    .hash
             };
             if block.parent_hash != expected_parent {
                 return Err(Error::InvalidParent);
@@ -166,15 +168,6 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             return Err(Error::CasConflict);
         }
         Ok(())
-    }
-
-    async fn load_block_meta(&self, block_num: u64) -> Result<BlockMeta> {
-        let rec = self
-            .meta_store
-            .get(&block_meta_key(block_num))
-            .await?
-            .ok_or(Error::NotFound)?;
-        decode_block_meta(&rec.value)
     }
 }
 
