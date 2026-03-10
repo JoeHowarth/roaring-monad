@@ -239,6 +239,19 @@ Instead of loading full-window clause sets, derive a lightweight shard plan:
 
 This stage should be cheap and should not load roaring data yet.
 
+Important constraint:
+
+- the current full-window clause-order planner is not cheap enough to satisfy that goal by itself
+
+Today `build_clause_order(...)` estimates clause selectivity by scanning relevant manifests and tails across the full resolved window. That means the current implementation cannot simply be reused unchanged if the intent is to materially improve first-page latency.
+
+So this plan explicitly allows two implementation options:
+
+- first pass: keep the current planner and accept that full-window clause planning remains an up-front limitation
+- target end state: move clause planning to a cheaper or lazier form that does not scan the whole window before execution
+
+This document recommends treating the current planner as a temporary compatibility step, not as the intended steady-state planning model.
+
 ### 3. Per-shard clause execution
 
 For each shard in ascending order:
@@ -321,6 +334,33 @@ Instead:
 
 That preserves exact pagination without turning page construction into a full count.
 
+### Clause-free queries
+
+The clause-free path is part of the required semantics.
+
+Today `LogFilter::default()` is valid and behaves as a sequential traversal of the resolved `log_id` window. The shard-streaming design must preserve that behavior explicitly.
+
+If `clause_order` is empty:
+
+- do not force block scan merely because there are no indexed clauses
+- do not require a shard accumulator built from indexed clause bitmaps
+- instead traverse the resolved `log_id` window directly in ascending shard/local order
+- materialize exact matches immediately
+- stop at `limit + 1`
+
+Conceptually, the clause-free path becomes:
+
+```text
+for shard in overlapping_shards(log_window):
+    local_range = local_range_for_shard(log_window, shard)
+    for local_id in local_range:
+        global_id = compose(shard, local_id)
+        materialize and exact-match
+        stop at limit + 1
+```
+
+This keeps ordinary pagination behavior unchanged for empty filters.
+
 ## Why This Helps
 
 ### First-page latency
@@ -387,9 +427,17 @@ Shard streaming improves the execution order, but it will not realize its full b
 
 ### Clause ordering
 
-The current clause-order planner can still be used, but the best ordering criterion may change slightly.
+Clause ordering remains useful, but the current planner should be treated carefully.
 
-Today the planner optimizes mostly for estimated clause cardinality. In a shard-streaming design, it may also be valuable to favor clauses that collapse shard-local accumulators early.
+Today the planner optimizes mostly for estimated clause cardinality, and it does so by scanning manifests and tails across the full resolved window before execution begins.
+
+That means:
+
+- the current planner may still be used in a first pass
+- but doing so preserves some full-window up-front work
+- so it weakens the first-page latency win claimed for shard streaming
+
+In a stronger end state, clause planning should become cheaper or lazier, and it may also be valuable to favor clauses that collapse shard-local accumulators early.
 
 High-level rule:
 
@@ -468,6 +516,15 @@ Use the same current rule:
 - gather `limit + 1`
 
 Do not compute full counts per shard or full counts for the whole window.
+
+### Planner limitation in the first pass
+
+If the first implementation keeps the current full-window clause-order planner, the document should be read with this explicit limitation:
+
+- shard-streaming still improves memory shape and early-stop behavior after planning
+- but first-page latency will still include one full-window planning pass before shard execution starts
+
+That is acceptable as a transitional step, but it is not the full intended end state.
 
 ## Interaction With Block Scan
 
@@ -548,6 +605,19 @@ build clause order
 
 matched = []
 
+if clause_order is empty:
+    for shard in overlapping_shards(log_window):
+        local_range = local_range_for_shard(log_window, shard)
+        for local_id in local_range:
+            global_id = compose(shard, local_id)
+            item = materialize(global_id)
+            if exact_match(item):
+                matched.push(item)
+                if matched.len == take:
+                    break outer
+    assemble page from matched
+    return
+
 for shard in overlapping_shards(log_window):
     local_range = local_range_for_shard(log_window, shard)
 
@@ -587,6 +657,7 @@ Refactor the indexed path into separable stages:
 
 - window resolution
 - clause ordering
+- clause-free sequential traversal
 - per-shard clause loading
 - page assembly
 
@@ -604,11 +675,23 @@ Introduce a narrow internal helper that can load:
 
 without requiring full-window `ShardBitmapSet` construction.
 
-### Phase 3: Add shard-streaming executor
+### Phase 3: Add shard-streaming executor and explicit clause-free path
 
 Implement the streaming path behind the current indexed-query decision boundary.
 
-### Phase 4: Verify semantics
+That phase must preserve:
+
+- the empty-filter sequential traversal behavior
+- exact pagination semantics for that path
+
+### Phase 4: Revisit clause planning
+
+Decide whether to:
+
+- keep the current full-window planner temporarily, with explicit acknowledgement of the limitation
+- or introduce a cheaper/lazier planner for shard-streaming execution
+
+### Phase 5: Verify semantics
 
 Add tests that lock down:
 
@@ -616,9 +699,10 @@ Add tests that lock down:
 - exact pagination
 - empty-page metadata
 - resume behavior at shard boundaries
+- empty-filter pagination behavior
 - equality against the current executor on representative workloads
 
-### Phase 5: Benchmark and tune
+### Phase 6: Benchmark and tune
 
 Use the current benchmark suite to compare:
 
@@ -632,8 +716,9 @@ with emphasis on:
 - large shard spans
 - sparse vs dense candidates
 - expected-ingest shard spans, not only extreme worst-case shard spans
+- planning cost when the current full-window planner is still in use
 
-### Phase 6: Re-evaluate shard sizing separately
+### Phase 7: Re-evaluate shard sizing separately
 
 Only after the shard-streaming executor is benchmarked under expected workloads should the project decide whether to revisit local-bit width.
 
@@ -689,6 +774,14 @@ So the architecture depends on using the right concurrency boundary:
 ### Planner quality matters more
 
 Because execution is incremental, poor clause ordering can waste work inside every shard.
+
+### Full-window planning can remain a front-loaded cost
+
+If the first implementation keeps the current clause-order planner, then first-page latency still includes a full-window planning scan before shard execution begins.
+
+That is a real limitation, not an accidental omission.
+
+The architecture should treat that as transitional and measure how much it matters in practice.
 
 ### Exact-page semantics can still allow long first pages
 
