@@ -4,6 +4,10 @@ This folder is the current developer documentation for `crates/finalized-history
 
 Historical design docs, migration plans, and superseded onboarding material live under `docs/historical/`.
 
+The active storage-redesign note for moving from locator pages to block-keyed log payloads lives in:
+
+- `docs/04-block-keyed-log-storage.md`
+
 ## Scope
 
 The crate currently implements finalized history queries for the logs family.
@@ -92,6 +96,8 @@ The persisted bytes still use the existing records:
 - manifests, tails, and chunks
 
 The code treats those bytes through cleaner shared and family-local helpers instead of exposing the mixed record shape everywhere.
+
+The next major storage evolution is to keep global `log_id` sequencing while moving payload bytes to block-keyed objects. That design is described in `docs/04-block-keyed-log-storage.md`.
 
 ## Query Semantics
 

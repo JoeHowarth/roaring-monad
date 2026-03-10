@@ -101,3 +101,9 @@ Focus on:
 - broad-query fallback
 - ingest / query invariants
 - differential correctness
+
+## Optional design note
+
+33. `docs/04-block-keyed-log-storage.md`
+
+Read this after the current implementation if you want the proposed next-step storage design for replacing locator pages with block-keyed payloads.
