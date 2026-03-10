@@ -8,8 +8,7 @@ use crate::core::execution::PrimaryMaterializer;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
 use crate::domain::keys::{
-    LOG_DIRECTORY_BUCKET_SIZE, block_log_header_key, block_logs_blob_key, log_directory_bucket_key,
-    log_directory_bucket_start,
+    block_log_header_key, block_logs_blob_key, log_directory_bucket_key, log_directory_bucket_start,
 };
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
@@ -64,16 +63,7 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     }
 
     pub(crate) async fn resolve_log_id(&mut self, id: u64) -> Result<Option<ResolvedLogLocation>> {
-        let bucket_start = log_directory_bucket_start(id);
-        if let Some(location) = self.lookup_bucket(id, bucket_start).await? {
-            return Ok(Some(location));
-        }
-        if bucket_start >= LOG_DIRECTORY_BUCKET_SIZE {
-            return self
-                .lookup_bucket(id, bucket_start - LOG_DIRECTORY_BUCKET_SIZE)
-                .await;
-        }
-        Ok(None)
+        self.lookup_bucket(id, log_directory_bucket_start(id)).await
     }
 
     pub(crate) async fn read_full_block_blob(&self, block_num: u64) -> Result<Option<Bytes>> {
@@ -229,5 +219,58 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         blob: &[u8],
     ) -> Result<Log> {
         self.decode_log_from_blob(header, local_ordinal, blob)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogMaterializer;
+    use crate::codec::log::encode_log_directory_bucket;
+    use crate::domain::keys::{
+        LOG_DIRECTORY_BUCKET_SIZE, log_directory_bucket_key, log_directory_bucket_start,
+    };
+    use crate::domain::types::LogDirectoryBucket;
+    use crate::store::blob::InMemoryBlobStore;
+    use crate::store::meta::InMemoryMetaStore;
+    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+    use futures::executor::block_on;
+
+    #[test]
+    fn resolve_log_id_handles_blocks_spanning_more_than_one_bucket() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+
+            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
+            let log_id = first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5;
+            meta.put(
+                &log_directory_bucket_key(log_directory_bucket_start(log_id)),
+                encode_log_directory_bucket(&LogDirectoryBucket {
+                    start_block: 700,
+                    first_log_ids: vec![
+                        first_log_id,
+                        first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 10,
+                    ],
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write directory bucket");
+
+            let mut materializer = LogMaterializer::new(&meta, &blob);
+            let resolved = materializer
+                .resolve_log_id(log_id)
+                .await
+                .expect("resolve log id");
+
+            assert_eq!(
+                resolved,
+                Some(super::ResolvedLogLocation {
+                    block_num: 700,
+                    local_ordinal: (LOG_DIRECTORY_BUCKET_SIZE + 5) as usize,
+                })
+            );
+        });
     }
 }

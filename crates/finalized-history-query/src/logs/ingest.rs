@@ -8,8 +8,9 @@ use crate::codec::log::{
 };
 use crate::config::Config;
 use crate::domain::keys::{
-    block_hash_to_num_key, block_log_header_key, block_logs_blob_key, block_meta_key,
-    log_directory_bucket_key, log_directory_bucket_start, log_local, log_shard, stream_id,
+    LOG_DIRECTORY_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key, block_logs_blob_key,
+    block_meta_key, log_directory_bucket_key, log_directory_bucket_start, log_local, log_shard,
+    stream_id,
 };
 use crate::domain::types::{BlockLogHeader, BlockMeta, Log, LogDirectoryBucket};
 use crate::error::{Error, Result};
@@ -142,9 +143,38 @@ async fn persist_log_directory_bucket<M: MetaStore>(
     count: u32,
     epoch: u64,
 ) -> Result<()> {
-    let bucket_key = log_directory_bucket_key(log_directory_bucket_start(first_log_id));
     let sentinel = first_log_id.saturating_add(u64::from(count));
+    let mut bucket_start = log_directory_bucket_start(first_log_id);
+    let last_bucket_start =
+        log_directory_bucket_start(sentinel.saturating_sub(1).max(first_log_id));
+    loop {
+        upsert_log_directory_bucket(
+            meta_store,
+            bucket_start,
+            block_num,
+            first_log_id,
+            sentinel,
+            epoch,
+        )
+        .await?;
+        if bucket_start == last_bucket_start {
+            break;
+        }
+        bucket_start = bucket_start.saturating_add(LOG_DIRECTORY_BUCKET_SIZE);
+    }
 
+    Ok(())
+}
+
+async fn upsert_log_directory_bucket<M: MetaStore>(
+    meta_store: &M,
+    bucket_start: u64,
+    block_num: u64,
+    first_log_id: u64,
+    sentinel: u64,
+    epoch: u64,
+) -> Result<()> {
+    let bucket_key = log_directory_bucket_key(bucket_start);
     let mut bucket = match meta_store.get(&bucket_key).await? {
         Some(existing) => decode_log_directory_bucket(&existing.value)?,
         None => LogDirectoryBucket {
@@ -153,35 +183,31 @@ async fn persist_log_directory_bucket<M: MetaStore>(
         },
     };
 
+    if block_num < bucket.start_block {
+        return Err(Error::InvalidSequence {
+            expected: bucket.start_block,
+            got: block_num,
+        });
+    }
+
+    let entry_index = usize::try_from(block_num - bucket.start_block)
+        .map_err(|_| Error::Decode("directory bucket block index overflow"))?;
     if bucket.first_log_ids.is_empty() {
         bucket.first_log_ids.push(first_log_id);
         bucket.first_log_ids.push(sentinel);
+    } else if bucket.first_log_ids.len() < entry_index + 1 {
+        return Err(Error::Decode("directory bucket gap before block"));
+    } else if bucket.first_log_ids.len() == entry_index + 1 {
+        let last = bucket
+            .first_log_ids
+            .last_mut()
+            .ok_or(Error::Decode("log directory bucket missing sentinel"))?;
+        *last = first_log_id;
+        bucket.first_log_ids.push(sentinel);
     } else {
-        if block_num < bucket.start_block {
-            return Err(Error::InvalidSequence {
-                expected: bucket.start_block,
-                got: block_num,
-            });
-        }
-
-        let entry_index = usize::try_from(block_num - bucket.start_block)
-            .map_err(|_| Error::Decode("directory bucket block index overflow"))?;
-        if bucket.first_log_ids.len() < entry_index + 1 {
-            return Err(Error::Decode("directory bucket gap before block"));
-        }
-
-        if bucket.first_log_ids.len() == entry_index + 1 {
-            let last = bucket
-                .first_log_ids
-                .last_mut()
-                .ok_or(Error::Decode("log directory bucket missing sentinel"))?;
-            *last = first_log_id;
-            bucket.first_log_ids.push(sentinel);
-        } else {
-            bucket.first_log_ids[entry_index] = first_log_id;
-            bucket.first_log_ids[entry_index + 1] = sentinel;
-            bucket.first_log_ids.truncate(entry_index + 2);
-        }
+        bucket.first_log_ids[entry_index] = first_log_id;
+        bucket.first_log_ids[entry_index + 1] = sentinel;
+        bucket.first_log_ids.truncate(entry_index + 2);
     }
 
     meta_store
@@ -204,11 +230,13 @@ mod tests {
     };
     use crate::config::Config;
     use crate::domain::keys::{
-        block_hash_to_num_key, block_log_header_key, block_logs_blob_key, block_meta_key,
-        log_directory_bucket_key,
+        LOG_DIRECTORY_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key,
+        block_logs_blob_key, block_meta_key, log_directory_bucket_key,
     };
-    use crate::domain::types::Log;
-    use crate::logs::ingest::{persist_log_artifacts, persist_log_block_metadata};
+    use crate::domain::types::{Log, LogDirectoryBucket};
+    use crate::logs::ingest::{
+        persist_log_artifacts, persist_log_block_metadata, persist_log_directory_bucket,
+    };
     use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -311,6 +339,41 @@ mod tests {
                 decode_log_directory_bucket(&bucket.value).expect("decode directory bucket");
 
             assert_eq!(bucket.first_log_ids, vec![1, 2, 3]);
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_writes_spanning_block_into_each_covered_bucket() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
+            let count = LOG_DIRECTORY_BUCKET_SIZE + 10;
+
+            persist_log_directory_bucket(&meta, 700, first_log_id, count as u32, 3)
+                .await
+                .expect("persist spanning directory buckets");
+
+            let bucket0 = meta
+                .get(&log_directory_bucket_key(0))
+                .await
+                .expect("read bucket0")
+                .expect("bucket0 present");
+            let bucket1 = meta
+                .get(&log_directory_bucket_key(LOG_DIRECTORY_BUCKET_SIZE))
+                .await
+                .expect("read bucket1")
+                .expect("bucket1 present");
+            let bucket0 = decode_log_directory_bucket(&bucket0.value).expect("decode bucket0");
+            let bucket1 = decode_log_directory_bucket(&bucket1.value).expect("decode bucket1");
+
+            assert_eq!(
+                bucket0,
+                LogDirectoryBucket {
+                    start_block: 700,
+                    first_log_ids: vec![first_log_id, first_log_id + count],
+                }
+            );
+            assert_eq!(bucket1, bucket0);
         });
     }
 

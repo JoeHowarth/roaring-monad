@@ -80,7 +80,7 @@ meta_store:
     "meta/state" -> MetaState
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
-    "log_dir/<bucket_start_log_id>" -> LogDirectoryBucket
+    "log_dir/<bucket_start_log_id>" -> LogDirectoryBucket covering all block ranges that touch the bucket
     "block_log_headers/<block_num>" -> BlockLogHeader
     "manifests/<stream_id>" -> Manifest
     "tails/<stream_id>" -> roaring_bitmap

@@ -69,7 +69,7 @@ Derived counts:
 
 The final sentinel is required so the last block in the bucket has a closed range.
 
-Blocks can span bucket boundaries. If a lookup does not find a containing range in the computed bucket, it must also probe the previous bucket before failing. This adds at most one extra bucket fetch for the uncommon boundary case and keeps the directory encoding compact.
+Blocks can span bucket boundaries. When that happens, every covered bucket stores the same block boundary entry so `log_id` lookup stays local to the bucket containing the queried `log_id`.
 
 ## Block Headers
 
@@ -122,13 +122,12 @@ Given a candidate `log_id`:
 2. load `log_dir/<bucket_start>`
 3. find the last index `i` where `first_log_ids[i] <= log_id`
 4. verify that `log_id < first_log_ids[i + 1]`
-5. if no containing range exists in that bucket, also check the previous bucket
-6. compute `block_num = start_block + i`
-7. compute `local_ordinal = log_id - first_log_ids[i]`
-8. load cached `block_log_headers/<block_num>`
-9. read `offsets[local_ordinal]..offsets[local_ordinal + 1]`
-10. issue `read_range(block_logs/<block_num>, start, end)`
-11. decode one log
+5. compute `block_num = start_block + i`
+6. compute `local_ordinal = log_id - first_log_ids[i]`
+7. load cached `block_log_headers/<block_num>`
+8. read `offsets[local_ordinal]..offsets[local_ordinal + 1]`
+9. issue `read_range(block_logs/<block_num>, start, end)`
+10. decode one log
 
 ## Worked Example
 
@@ -232,11 +231,11 @@ Bucket updates are append-like but still rewrite the whole bucket object.
 
 When ingest writes block `N` with `first_log_id = X`:
 
-1. compute the owning bucket from `X`
-2. load the current bucket object, if any
-3. replace the old final sentinel with a real entry for block `N`
-4. append the new final sentinel at `X + count`
-5. write the whole bucket object back with the same fencing / CAS discipline used for other finalized-state metadata
+1. compute every covered bucket from `bucket(X)` through `bucket(max(X, X + count - 1))`
+2. load each bucket object, if any
+3. insert or rewrite the boundary for block `N`
+4. keep the final sentinel at `X + count`
+5. write each covered bucket back with the same fencing / CAS discipline used for other finalized-state metadata
 
 The bucket object is therefore an accelerator index maintained under the same writer-epoch discipline as the rest of ingest metadata.
 
