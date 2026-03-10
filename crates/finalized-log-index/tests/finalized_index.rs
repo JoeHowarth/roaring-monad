@@ -538,6 +538,70 @@ fn empty_page_metadata_uses_resolved_range_endpoint() {
 }
 
 #[test]
+fn exact_limit_without_additional_match_has_no_resume_metadata() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let block = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        svc.ingest_finalized_block(block).await.expect("ingest");
+
+        let page = query_page(&svc, 1, 1, LogFilter::default(), Some(1), None)
+            .await
+            .expect("query");
+
+        assert_eq!(page.items.len(), 1);
+        assert!(!page.meta.has_more);
+        assert_eq!(page.meta.next_resume_log_id, None);
+        assert_eq!(page.meta.cursor_block.number, 1);
+    });
+}
+
+#[test]
+fn cross_block_resume_pagination_advances_without_duplicates() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(1, 10, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let first = query_page(&svc, 1, 2, LogFilter::default(), Some(1), None)
+            .await
+            .expect("first page");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].block_num, 1);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_log_id, Some(0));
+        assert_eq!(first.meta.cursor_block.number, 1);
+
+        let second = query_page(
+            &svc,
+            1,
+            2,
+            LogFilter::default(),
+            Some(1),
+            first.meta.next_resume_log_id,
+        )
+        .await
+        .expect("second page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].block_num, 2);
+        assert!(!second.meta.has_more);
+        assert_eq!(second.meta.next_resume_log_id, None);
+        assert_eq!(second.meta.cursor_block.number, 2);
+    });
+}
+
+#[test]
 fn indexed_query_does_not_leak_logs_past_empty_range_end() {
     block_on(async {
         let svc = FinalizedIndexService::new(
@@ -756,6 +820,45 @@ fn query_above_finalized_head_returns_empty_page_anchored_to_head() {
 }
 
 #[test]
+fn empty_store_returns_zero_anchored_empty_page() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let page = query_page(&svc, 1, 10, LogFilter::default(), Some(10), None)
+            .await
+            .expect("query");
+
+        assert!(page.items.is_empty());
+        assert_eq!(page.meta.resolved_from_block.number, 0);
+        assert_eq!(page.meta.resolved_to_block.number, 0);
+        assert_eq!(page.meta.cursor_block.number, 0);
+    });
+}
+
+#[test]
+fn inverted_block_range_is_invalid() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let err = query_page(&svc, 2, 1, LogFilter::default(), Some(10), None)
+            .await
+            .expect_err("expected invalid block range");
+
+        assert!(matches!(err, Error::InvalidParams(_)));
+    });
+}
+
+#[test]
 fn resume_log_id_below_window_is_invalid() {
     block_on(async {
         let svc = FinalizedIndexService::new(
@@ -770,6 +873,28 @@ fn resume_log_id_below_window_is_invalid() {
         svc.ingest_finalized_block(b2).await.expect("ingest b2");
 
         let err = query_page(&svc, 2, 2, LogFilter::default(), Some(10), Some(0))
+            .await
+            .expect_err("expected invalid resume_log_id");
+
+        assert!(matches!(err, Error::InvalidParams(_)));
+    });
+}
+
+#[test]
+fn resume_log_id_above_window_is_invalid() {
+    block_on(async {
+        let svc = FinalizedIndexService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let b1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
+        let b2 = mk_block(2, b1.block_hash, vec![mk_log(2, 11, 21, 2, 0, 0)]);
+        svc.ingest_finalized_block(b1).await.expect("ingest b1");
+        svc.ingest_finalized_block(b2).await.expect("ingest b2");
+
+        let err = query_page(&svc, 1, 1, LogFilter::default(), Some(10), Some(1))
             .await
             .expect_err("expected invalid resume_log_id");
 
