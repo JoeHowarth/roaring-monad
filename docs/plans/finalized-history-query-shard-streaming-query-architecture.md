@@ -232,40 +232,38 @@ This preserves the current public semantics and metadata rules.
 
 ### 2. Shard plan
 
-Instead of loading full-window clause sets, derive a lightweight shard plan:
+Instead of loading full-window clause sets, derive a lightweight traversal plan:
 
 - first overlapping shard
 - last overlapping shard
 - local range for each shard
-- clause order for the query
 
 This stage should be cheap and should not load roaring data yet.
 
-Important constraint:
+It should only answer:
 
-- the current full-window clause-order planner is not cheap enough to satisfy that goal by itself
+- which shards must be visited
+- what local bounds apply inside each shard
 
-Today `build_clause_order(...)` estimates clause selectivity by scanning relevant manifests and tails across the full resolved window. That means the current implementation cannot simply be reused unchanged if the intent is to materially improve first-page latency.
-
-So this plan explicitly allows two implementation options:
-
-- first pass: keep the current planner and accept that full-window clause planning remains an up-front limitation
-- target end state: move clause planning to a cheaper or lazier form that does not scan the whole window before execution
-
-This document recommends treating the current planner as a temporary compatibility step, not as the intended steady-state planning model.
+Clause planning belongs to shard execution, not this stage.
 
 ### 3. Per-shard clause execution
 
 For each shard in ascending order:
 
 1. compute shard-local `[from_local, to_local]`
-2. for each clause in planned order:
-   - load only this shard's stream data
+2. build a shard-local clause plan:
+   - load only this shard's manifest/tail metadata for each active clause stream
+   - allow bounded intra-shard concurrency while loading that metadata
+   - derive a cheap shard-local estimate from the loaded metadata
+   - choose clause order for this shard
+3. for each clause in shard-local planned order:
+   - reuse the already loaded shard metadata for that clause
    - allow bounded intra-shard concurrency while loading that clause
    - union OR values for this shard only
    - intersect with the shard accumulator
    - short-circuit if the shard becomes empty
-3. if the shard has survivors:
+4. if the shard has survivors:
    - iterate local IDs in order
    - compose global `log_id`
    - materialize exact matches immediately
@@ -277,6 +275,7 @@ Concurrency rule:
 - shard traversal is serial in result order
 - clause execution inside a shard is serial by default so clause ordering can short-circuit work
 - stream loads within one clause for one shard may run with bounded concurrency
+- shard-local planning metadata should be reused by execution rather than fetched twice
 
 ### 4. Page assembly
 
@@ -429,17 +428,20 @@ Shard streaming improves the execution order, but it will not realize its full b
 
 ### Clause ordering
 
-Clause ordering remains useful, but the current planner should be treated carefully.
+Clause ordering remains useful, but it should become shard-local.
 
-Today the planner optimizes mostly for estimated clause cardinality, and it does so by scanning manifests and tails across the full resolved window before execution begins.
+The current global planner optimizes mostly for estimated clause cardinality, and it does so by scanning manifests and tails across the full resolved window before execution begins.
 
-That means:
+That is not the right steady-state shape for shard streaming.
 
-- the current planner may still be used in a first pass
-- but doing so preserves some full-window up-front work
-- so it weakens the first-page latency win claimed for shard streaming
+Instead, for each shard:
 
-In a stronger end state, clause planning should become cheaper or lazier, and it may also be valuable to favor clauses that collapse shard-local accumulators early.
+- load manifest/tail metadata for the active clause streams in that shard
+- derive a cheap estimate from those already-needed reads
+- order clauses for that shard
+- reuse the loaded metadata during execution
+
+This avoids a separate full-window planning pass and aligns planning cost with the shard currently being executed.
 
 High-level rule:
 
@@ -457,6 +459,13 @@ So the base design is:
 - serial across clauses
 - short-circuit when the accumulator becomes empty
 - bounded concurrency only within the current clause's shard-local loads
+
+Examples of shard-local planning signals:
+
+- zero-overlap stream metadata, because it can kill the shard immediately
+- smaller overlapping sealed count from manifest chunk refs
+- smaller overlapping tail count
+- smaller combined sealed-plus-tail estimate
 
 ### OR handling
 
@@ -500,6 +509,11 @@ This document does not define those caches in detail, but the execution model sh
 
 Without that reuse, shard streaming could improve early-stop behavior while still paying too much repeated metadata overhead on expensive traversals.
 
+Within a shard, metadata reuse is mandatory rather than optional:
+
+- if planning loads a manifest or tail for a clause stream, execution should consume that prepared result
+- do not fetch shard metadata once to choose order and then again to run the clause
+
 ### Exact-match materialization
 
 Materialization should remain pointwise and exact:
@@ -518,15 +532,6 @@ Use the same current rule:
 - gather `limit + 1`
 
 Do not compute full counts per shard or full counts for the whole window.
-
-### Planner limitation in the first pass
-
-If the first implementation keeps the current full-window clause-order planner, the document should be read with this explicit limitation:
-
-- shard-streaming still improves memory shape and early-stop behavior after planning
-- but first-page latency will still include one full-window planning pass before shard execution starts
-
-That is acceptable as a transitional step, but it is not the full intended end state.
 
 ## Interaction With Block Scan
 
@@ -618,11 +623,10 @@ resolve block range
 resolve log_id window
 validate resume_log_id
 compute take = limit + 1
-build clause order
 
 matched = []
 
-if clause_order is empty:
+if filter has no active indexed clauses:
     for shard in overlapping_shards(log_window):
         local_range = local_range_for_shard(log_window, shard)
         for local_id in local_range:
@@ -637,11 +641,15 @@ if clause_order is empty:
 
 for shard in overlapping_shards(log_window):
     local_range = local_range_for_shard(log_window, shard)
+    shard_plan = plan_one_shard(filter, shard, local_range)
+
+    if shard_plan.clauses is empty:
+        continue
 
     shard_accumulator = None
 
-    for clause in clause_order:
-        shard_clause = load_clause_for_one_shard(clause, shard, local_range)
+    for clause in shard_plan.clauses:
+        shard_clause = execute_prepared_clause(clause)
         if shard_clause is empty:
             shard_accumulator = empty
             break
@@ -673,8 +681,9 @@ assemble page from matched
 Refactor the indexed path into separable stages:
 
 - window resolution
-- clause ordering
+- shard traversal planning
 - clause-free sequential traversal
+- shard-local clause planning
 - per-shard clause loading
 - page assembly
 
@@ -682,15 +691,18 @@ Goal:
 
 - make the current code structurally ready for shard streaming
 
-### Phase 2: Add one-shard clause loader
+### Phase 2: Add one-shard planner/loader
 
-Introduce a narrow internal helper that can load:
+Introduce a narrow internal helper that can prepare:
 
-- one clause
 - one shard
 - one local range
+- the active clause streams for that shard
+- cheap shard-local estimates derived from manifest/tail metadata
 
 without requiring full-window `ShardBitmapSet` construction.
+
+That helper should return reusable prepared clause state, not just an ordering decision.
 
 ### Phase 3: Add shard-streaming executor and explicit clause-free path
 
@@ -701,12 +713,11 @@ That phase must preserve:
 - the empty-filter sequential traversal behavior
 - exact pagination semantics for that path
 
-### Phase 4: Revisit clause planning
+### Phase 4: Remove or bypass the current full-window planner from the streaming path
 
-Decide whether to:
+The shard-streaming path should not depend on a separate full-window `build_clause_order(...)` prepass.
 
-- keep the current full-window planner temporarily, with explicit acknowledgement of the limitation
-- or introduce a cheaper/lazier planner for shard-streaming execution
+If the old planner remains in the codebase temporarily, it should stay off the shard-streaming critical path.
 
 ### Phase 5: Verify semantics
 
@@ -733,7 +744,8 @@ with emphasis on:
 - large shard spans
 - sparse vs dense candidates
 - expected-ingest shard spans, not only extreme worst-case shard spans
-- planning cost when the current full-window planner is still in use
+- shard-local planning overhead
+- metadata reuse effectiveness between shard planning and execution
 
 ### Phase 7: Re-evaluate shard sizing separately
 
@@ -790,15 +802,18 @@ So the architecture depends on using the right concurrency boundary:
 
 ### Planner quality matters more
 
-Because execution is incremental, poor clause ordering can waste work inside every shard.
+Because execution is incremental, poor shard-local clause ordering can waste work inside every shard.
 
-### Full-window planning can remain a front-loaded cost
+### Planning/execution reuse must be real
 
-If the first implementation keeps the current clause-order planner, then first-page latency still includes a full-window planning scan before shard execution begins.
+If shard-local planning loads manifests and tails and execution then reloads them, the design loses much of its benefit.
 
-That is a real limitation, not an accidental omission.
+The implementation therefore needs a prepared-clause representation that can carry:
 
-The architecture should treat that as transitional and measure how much it matters in practice.
+- decoded manifest or equivalent overlap summary
+- decoded tail or equivalent overlap summary
+- overlapping chunk refs for the shard
+- shard-local estimate used for ordering
 
 ### Exact-page semantics can still allow long first pages
 
