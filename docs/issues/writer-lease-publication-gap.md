@@ -6,6 +6,10 @@ The immutable-frontier implementation introduced a persisted `writer_lease` reco
 
 Today, stale-writer rejection still comes from the existing fence-token mechanism in the storage layer, not from the new `writer_lease` record itself.
 
+The active design follow-up for fixing this is:
+
+- `docs/plans/publication-state-architecture.md`
+
 ## Current Behavior
 
 The ingest path in [`crates/finalized-history-query/src/ingest/engine.rs`](/home/jhow/roaring-monad/crates/finalized-history-query/src/ingest/engine.rs) currently does this:
