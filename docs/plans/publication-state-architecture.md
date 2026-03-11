@@ -36,7 +36,7 @@ The intended end state is:
 - making unpublished artifacts above the published head reader-visible
 - introducing generic multi-key or cross-partition transactions into the main storage abstraction
 - requiring heartbeat-based timed leases in the first implementation
-- preserving compatibility with the current `writer_lease` row as a correctness mechanism
+- carrying compatibility with the current `writer_lease` / `indexed_head` rows into the final design
 
 ## Problem Statement
 
@@ -92,6 +92,9 @@ Readers must treat:
 - `publication_state.indexed_finalized_head`
 
 as the only visibility watermark.
+
+This project has no production state to migrate. The intended implementation is a direct cutover to
+this shape, not a long-lived compatibility layer.
 
 ## Why One Record Is Required
 
@@ -218,6 +221,7 @@ Required properties:
 - sufficient to enumerate stream pages that may newly seal for a proposed `H -> T` publish
 - cheap to prefix-scan by shard and page
 - rebuildable from canonical replay if necessary
+- non-authoritative once a sealed `stream_page_*` summary exists
 
 This inventory is intentionally narrower than persisted mutable summary builders:
 
@@ -263,6 +267,13 @@ The same immutability requirement applies to authoritative metadata. A stale wri
 already-visible authoritative metadata after takeover can corrupt published state even if the blob
 layer is protected. The architecture therefore must not rely on low-level fencing lag plus mutable
 authoritative metadata as a safe steady-state model.
+
+Markers are different:
+
+- they are auxiliary inventory only
+- a stale or duplicated marker may cause repair work
+- a marker must never be interpreted as evidence that a page is still unsealed if a valid sealed
+  `stream_page_*` summary already exists
 
 ## Ownership Token
 
@@ -959,15 +970,15 @@ publication_state (
     id text primary key,
     owner_id bigint,
     epoch bigint,
-    indexed_head bigint
+    indexed_finalized_head bigint
 )
 ```
 
 Implementation guidance:
 
 - use `INSERT ... IF NOT EXISTS` for bootstrap
-- use `UPDATE ... IF owner_id = ? AND epoch = ? AND indexed_head = ?` for publish
-- use `UPDATE ... IF owner_id = ? AND epoch = ? AND indexed_head = ?` or equivalent expected-row CAS for takeover
+- use `UPDATE ... IF owner_id = ? AND epoch = ? AND indexed_finalized_head = ?` for publish
+- use `UPDATE ... IF owner_id = ? AND epoch = ? AND indexed_finalized_head = ?` or equivalent expected-row CAS for takeover
 
 Important constraints:
 
@@ -1122,6 +1133,15 @@ Required outcome:
 - exact-match existing summaries may be reused
 - mismatched existing summaries must block publication and surface a summary conflict
 
+### Case 10: stale open-page marker exists for an already sealed page
+
+Required outcome:
+
+- the marker does not affect visibility
+- if the sealed `stream_page_*` summary is valid, repair deletes the stale marker
+- if the sealed summary is missing, the writer rebuilds it from immutable fragments and then deletes
+  the marker
+
 ## Interaction With `StrictCas`
 
 This plan makes the current `StrictCas` versus `SingleWriterFast` split unnecessary as a correctness model.
@@ -1136,11 +1156,11 @@ The remaining question is only whether local/test backends also implement the sa
 Recommended direction:
 
 - remove `StrictCas` and `SingleWriterFast` as competing production ingest modes
-- if a bypass is kept temporarily, mark it clearly as test-only or migration-only
+- do not keep a production bypass once `PublicationStore` exists
 
-## Migration Plan
+## Rollout Plan
 
-Because this project does not require production backward compatibility yet, prefer a direct cutover.
+Because this project has no production state to preserve, use a direct cutover.
 
 ### Phase 1: add publication state and tests
 
@@ -1170,12 +1190,12 @@ Because this project does not require production backward compatibility yet, pre
 6. implement validate-or-reuse handling for pre-publication Class B summaries that already exist before the publish CAS
 7. add required backfill-oriented publication batching on top of the same publication protocol
 8. switch finalized-head reads to `publication_state.indexed_finalized_head`
-9. stop treating `writer_lease` as correctness-critical
+9. remove `writer_lease` from correctness and reads
 
-### Phase 4: clean up legacy control-plane state
+### Phase 4: remove superseded control-plane state
 
-1. remove or deprecate `writer_lease`
-2. replace direct `indexed_head` reads with `publication_state`
+1. remove `writer_lease`
+2. remove `indexed_head`
 3. simplify `IngestMode`
 4. remove overwrite-based replay assumptions from ingest and recovery paths
 5. update architecture and onboarding docs
@@ -1206,6 +1226,8 @@ Minimum required automated coverage:
   query-visible gaps
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
+- stale open-page markers below the current sealed frontier are repaired without affecting
+  visibility or query correctness
 
 The current failing regression for lease loss before publish should remain until the new protocol is implemented and passing.
 

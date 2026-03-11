@@ -19,10 +19,13 @@ The intended end state is:
 - no persisted mutable summary builders
 - any future in-memory builder treated as cache only
 
+This project has no production state to migrate. The implementation should target this final shape
+directly.
+
 ## Goals
 
 - implement `publication_state` as the sole correctness authority for ownership and visibility
-- remove `writer_lease` from correctness and eventually from the read path
+- remove `writer_lease` from both correctness and the read path
 - make authoritative artifacts and sealed summaries safe under crash, retry, and takeover
 - keep the stream-page sealing protocol bounded without persisting mutable builders
 - preserve current query semantics
@@ -38,12 +41,12 @@ The intended end state is:
 
 Implement this in six phases:
 
-1. add the publication-state control plane and read-path compatibility
+1. add the publication-state control plane
 2. add immutable-create primitives for blobs and create-if-absent behavior for immutable metadata
 3. refactor ingest to publish through `publication_state`
 4. implement cleanup-first unpublished-suffix recovery
 5. add durable `open_stream_page` markers and final stream-page summary sealing
-6. remove legacy `writer_lease` handling and tighten docs/tests
+6. remove superseded `writer_lease` / `indexed_head` handling and tighten docs/tests
 
 Phases 1 through 4 establish the safe baseline. Phase 5 adds efficient stream-page sealing without
 introducing persisted builders.
@@ -88,14 +91,14 @@ pub struct PublicationState {
 }
 ```
 
-If a non-empty marker payload is preferred, add:
+If a non-empty marker payload is used, add:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct OpenStreamPageMarker;
 ```
 
-The marker payload may also be empty. The key carries the real identity.
+The preferred first implementation is an empty marker payload. The key carries the real identity.
 
 ## Keys
 
@@ -105,7 +108,7 @@ Add new key helpers/constants in `src/domain/keys.rs`:
 - `open_stream_page_key(shard, page_start, stream_id)`
 - `open_stream_page_prefix()`
 - `open_stream_page_shard_prefix(shard)`
-- optionally `open_stream_page_shard_page_prefix(shard, page_start)`
+- `open_stream_page_shard_page_prefix(shard, page_start)`
 
 Recommended key layout:
 
@@ -117,14 +120,14 @@ The ordering matters:
 - page must come before stream id
 - the keyspace must support prefix scans by shard and by `(shard, page)`
 
-Do not remove `INDEXED_HEAD_KEY` or `WRITER_LEASE_KEY` until Phase 6.
+The final design removes `INDEXED_HEAD_KEY` and `WRITER_LEASE_KEY`.
 
 ## Codecs
 
 Add codecs in `src/codec/finalized_state.rs` for:
 
 - `PublicationState`
-- optional `OpenStreamPageMarker`
+- `OpenStreamPageMarker`, if a non-empty marker payload is used
 
 Requirements:
 
@@ -197,7 +200,7 @@ rather than silently falling back to overwrite.
 
 ## Open-page marker helpers
 
-The first implementation does not need a separate `OpenSummaryStore`.
+Do not add a separate `OpenSummaryStore`.
 
 Use the existing `MetaStore` plus a helper module such as `src/ingest/open_pages.rs` or
 `src/store/open_pages.rs` with functions like:
@@ -213,22 +216,22 @@ Important design rule:
 - they are not ownership proof
 - a stale or duplicated marker may cause repair work, but must not be able to create a query-visible
   gap because sealed summaries remain authoritative
+- if a marker exists for a page that is already sealed and a valid `stream_page_*` summary exists,
+  repair means deleting the marker, not rebuilding ownership state
 
 ## Reader Changes
 
 ## `load_finalized_head_state`
 
-Update `src/core/state.rs` so readers load visibility from:
+Update `src/core/state.rs` so readers load visibility only from `publication_state`.
 
-1. `publication_state`, if present
-2. otherwise `indexed_head`
+Rules:
 
-Compatibility rules:
-
-- during Phases 1 through 5, readers must understand both formats
-- `writer_epoch` should be populated from `publication_state.epoch` when present
-- `writer_lease` becomes advisory-only immediately
-- if `publication_state` exists, ignore `writer_lease` for correctness
+- `writer_epoch` should be populated from `publication_state.epoch`
+- remove correctness dependence on `indexed_head`
+- remove correctness dependence on `writer_lease`
+- temporary local scaffolding during refactor is acceptable, but the landed design should not keep
+  dual-read compatibility
 
 ## Service surface
 
@@ -427,58 +430,32 @@ Any future in-memory builder must obey:
 
 Update `src/recovery/startup.rs` so startup does all of the following:
 
-1. load `publication_state` if present
+1. load `publication_state`
 2. derive the current published head
 3. detect unpublished suffix above the head
 4. clean or report any unpublished suffix
-5. scan `open_stream_page` markers and repair any stale sealed entries if desired
+5. scan `open_stream_page` markers and repair any stale sealed entries
 6. derive `next_log_id` from the published head after recovery, not from any unpublished block
 
 Recommended first cut:
 
 - cleanup unpublished suffix synchronously on startup
-- leave open-page marker repair to the first maintenance or ingest cycle if that keeps startup
-  simpler
+- repair stale sealed markers before the first publish attempt
 
 The key rule is:
 
 - startup must not silently trust unpublished artifacts from a previous owner
 
-## Migration Plan
+## Direct Cutover Plan
 
-## Phase 1 compatibility
+Because there is no production state to preserve, implement the final layout directly:
 
-Readers:
+- add `publication_state`
+- remove `writer_lease` from ingest and reads
+- remove `indexed_head` from ingest and reads
+- do not land a dual-read or dual-write steady state
 
-- read `publication_state` if present
-- otherwise read `indexed_head`
-
-Writers:
-
-- still write `indexed_head` only until `PublicationStore` is wired
-
-## Phase 3 dual-write transition
-
-Once publication CAS exists:
-
-- write `publication_state`
-- optionally continue writing `indexed_head` for temporary compatibility if any external tools
-  still inspect it
-
-If dual-writing is kept temporarily:
-
-- readers trust `publication_state`
-- `indexed_head` is best-effort compatibility only
-
-## Phase 6 cleanup
-
-Remove:
-
-- `writer_lease` writes from `src/ingest/engine.rs`
-- `writer_lease` decode/use from `src/core/state.rs`
-- legacy docs describing `writer_lease` as meaningful
-
-Optionally remove legacy `indexed_head` reads only after all repo consumers have migrated.
+Temporary local scaffolding during refactor is acceptable, but it should not survive the final cut.
 
 ## Backend-Specific Work
 
@@ -520,7 +497,7 @@ Add typed errors for:
 - publication head mismatch under same owner
 - immutable artifact mismatch
 - immutable summary mismatch
-- optional marker inventory inconsistency, if surfaced explicitly
+- marker inventory inconsistency, if surfaced explicitly
 
 Keep `LeaseLost` for the case where publication owner/epoch changes before publish completes.
 
@@ -557,7 +534,7 @@ Add codec and store tests for:
 - blob `put_blob_if_absent`
 - immutable metadata create and exact-byte validation behavior
 - marker key encoding / decoding helpers
-- optional marker payload codec if a non-empty payload is used
+- marker payload codec if a non-empty payload is used
 
 ## Ingest tests
 
@@ -574,7 +551,7 @@ Required tests:
 7. block artifact duplicate create with mismatched bytes fails
 8. sealed summary duplicate create with identical bytes is accepted
 9. sealed summary duplicate create with mismatched bytes fails
-10. readers use `publication_state` in preference to legacy `indexed_head`
+10. readers use only `publication_state`
 
 ## Crash injection tests
 
@@ -615,13 +592,13 @@ Keep commits small and reviewable.
 Recommended sequence:
 
 1. add `PublicationState` types, codecs, and `PublicationStore`
-2. teach readers to prefer `publication_state`
+2. switch readers to `publication_state`
 3. add blob immutable-create capability
 4. convert Class A and Class B artifact writes to immutable semantics with byte validation
 5. refactor ingest publish path to use `publication_state`
 6. implement cleanup-first recovery and crash tests
 7. add `open_stream_page` markers and final stream-page summary-sealing logic
-8. remove legacy `writer_lease` usage and update docs
+8. remove `writer_lease` and `indexed_head` usage and update docs
 
 Each commit that changes crate code should leave `scripts/verify.sh finalized-history-query`
 passing.
@@ -630,12 +607,11 @@ passing.
 
 These should be made explicitly before Phase 3 starts:
 
-1. whether `indexed_head` will be dual-written during migration or dropped immediately
-2. whether `PublicationStore` will be wired directly into `FinalizedHistoryService::new` or hidden
+1. whether `PublicationStore` will be wired directly into `FinalizedHistoryService::new` or hidden
    behind a composite storage adapter
-3. whether cleanup-first recovery runs automatically on startup or lazily on first ingest
-4. exact `open_stream_page` key layout for efficient shard/page prefix scans
-5. exact error taxonomy for artifact mismatch vs ownership loss vs publish conflict
+2. whether cleanup-first recovery runs automatically on startup or lazily on first ingest
+3. exact `open_stream_page` key layout for efficient shard/page prefix scans
+4. exact error taxonomy for artifact mismatch vs ownership loss vs publish conflict
 
 ## Practical Recommendation
 
