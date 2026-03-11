@@ -552,6 +552,73 @@ Required usage:
 
 This capability is required because object-store immutability is part of the safety model, not merely an implementation detail.
 
+### Correctness-sensitive listing capability
+
+The protocol also requires an explicit distinction between ordinary prefix listing and correctness-critical enumeration.
+
+Conceptual shape:
+
+```rust
+enum ListConsistency {
+    BestEffort,
+    CorrectnessCritical,
+}
+
+#[allow(async_fn_in_trait)]
+trait MetaStore: Send + Sync {
+    async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> Result<PutResult>;
+
+    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()>;
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+        consistency: ListConsistency,
+    ) -> Result<Page>;
+}
+
+#[allow(async_fn_in_trait)]
+trait BlobStore: Send + Sync {
+    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
+
+    async fn put_blob_if_absent(
+        &self,
+        key: &[u8],
+        value: Bytes,
+    ) -> Result<CreateOutcome>;
+
+    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
+
+    async fn delete_blob(&self, key: &[u8]) -> Result<()>;
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+        consistency: ListConsistency,
+    ) -> Result<Page>;
+}
+```
+
+Required usage:
+
+- cleanup-first recovery uses `CorrectnessCritical`
+- shared-summary construction uses `CorrectnessCritical`
+- optional background maintenance, diagnostics, and observability may use `BestEffort`
+
+This requirement is necessary because the protocol now depends on complete prefix enumeration for correctness. The abstraction must make that dependency visible at the call site.
+
 ## Write Frequency Characterization
 
 This section characterizes the current write surface using the expected operating point and the
@@ -985,7 +1052,8 @@ Because this project does not require production backward compatibility yet, pre
 ### Phase 1: add publication state and tests
 
 1. add `PublicationState` types and `PublicationStore` trait
-2. add failing tests for:
+2. add `CreateOutcome`, `put_blob_if_absent`, and explicit listing-consistency types to the storage abstractions
+3. add failing tests for:
    - lease loss before publish
    - concurrent takeover
    - crash before publish
@@ -996,20 +1064,27 @@ Because this project does not require production backward compatibility yet, pre
 1. implement in-memory `PublicationStore`
 2. implement Scylla `PublicationStore` using one-row LWT
 3. implement DynamoDB `PublicationStore` using one-item conditional update
+4. implement `put_blob_if_absent` for all blob backends
+5. implement correctness-sensitive `list_prefix` behavior for all metadata and blob backends used by recovery or summary creation
 
 ### Phase 3: switch ingest and shared-state reads
 
 1. switch ingest ownership and publish flow to `PublicationStore`
-2. stop treating `writer_lease` as correctness-critical
-3. add required backfill-oriented publication batching on top of the same publication protocol
-4. switch finalized-head reads to `publication_state.indexed_finalized_head`
+2. switch Class A and Class B blob writes to `put_blob_if_absent`
+3. switch correctness-sensitive enumeration call sites to explicit `CorrectnessCritical` listing
+4. implement cleanup-first unpublished-suffix recovery
+5. move shared-summary creation fully to the post-publication path
+6. add required backfill-oriented publication batching on top of the same publication protocol
+7. switch finalized-head reads to `publication_state.indexed_finalized_head`
+8. stop treating `writer_lease` as correctness-critical
 
 ### Phase 4: clean up legacy control-plane state
 
 1. remove or deprecate `writer_lease`
 2. replace direct `indexed_head` reads with `publication_state`
 3. simplify `IngestMode`
-4. update architecture and onboarding docs
+4. remove overwrite-based replay assumptions from ingest and recovery paths
+5. update architecture and onboarding docs
 
 ## Test Plan
 
