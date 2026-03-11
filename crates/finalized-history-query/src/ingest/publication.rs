@@ -78,3 +78,84 @@ pub async fn acquire_publication<P: PublicationStore>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use futures::executor::block_on;
+
+    use crate::domain::types::PublicationState;
+    use crate::error::Result;
+    use crate::store::publication::{CasOutcome, PublicationStore};
+
+    use super::acquire_publication;
+
+    struct BootstrapRaceStore {
+        state: Mutex<Option<PublicationState>>,
+        losing_owner: PublicationState,
+    }
+
+    impl BootstrapRaceStore {
+        fn new(losing_owner: PublicationState) -> Self {
+            Self {
+                state: Mutex::new(None),
+                losing_owner,
+            }
+        }
+    }
+
+    impl PublicationStore for BootstrapRaceStore {
+        async fn load(&self) -> Result<Option<PublicationState>> {
+            Ok(self.state.lock().expect("state lock").clone())
+        }
+
+        async fn create_if_absent(
+            &self,
+            _initial: &PublicationState,
+        ) -> Result<CasOutcome<PublicationState>> {
+            let mut guard = self.state.lock().expect("state lock");
+            if guard.is_none() {
+                *guard = Some(self.losing_owner.clone());
+            }
+            Ok(CasOutcome::Failed {
+                current: guard.clone(),
+            })
+        }
+
+        async fn compare_and_set(
+            &self,
+            expected: &PublicationState,
+            next: &PublicationState,
+        ) -> Result<CasOutcome<PublicationState>> {
+            let mut guard = self.state.lock().expect("state lock");
+            match guard.as_ref() {
+                Some(current) if current == expected => {
+                    *guard = Some(next.clone());
+                    Ok(CasOutcome::Applied(next.clone()))
+                }
+                Some(current) => Ok(CasOutcome::Failed {
+                    current: Some(current.clone()),
+                }),
+                None => Ok(CasOutcome::Failed { current: None }),
+            }
+        }
+    }
+
+    #[test]
+    fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
+        block_on(async {
+            let store = BootstrapRaceStore::new(PublicationState {
+                owner_id: 9,
+                epoch: 1,
+                indexed_finalized_head: 0,
+            });
+
+            let lease = acquire_publication(&store, 7)
+                .await
+                .expect("acquire publication");
+
+            assert_eq!(lease.owner_id, 7);
+        });
+    }
+}

@@ -503,3 +503,71 @@ fn service_can_publish_a_contiguous_batch() {
         assert_eq!(head_state.indexed_finalized_head, 2);
     });
 }
+
+#[test]
+fn ingest_uses_publication_epoch_for_fenced_writes() {
+    block_on(async {
+        let meta = InMemoryMetaStore::with_min_epoch(5);
+        let blob = InMemoryBlobStore::default();
+        assert!(matches!(
+            meta.create_if_absent(&PublicationState {
+                owner_id: 1,
+                epoch: 5,
+                indexed_finalized_head: 0,
+            })
+            .await
+            .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+
+        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        svc.startup().await.expect("startup");
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest should use publication epoch as fence token");
+    });
+}
+
+#[test]
+fn startup_cleanup_uses_publication_epoch_for_fenced_deletes() {
+    block_on(async {
+        let meta = InMemoryMetaStore::with_min_epoch(5);
+        let blob = InMemoryBlobStore::default();
+        assert!(matches!(
+            meta.create_if_absent(&PublicationState {
+                owner_id: 1,
+                epoch: 5,
+                indexed_finalized_head: 0,
+            })
+            .await
+            .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        meta.put(
+            &block_meta_key(1),
+            encode_block_meta(&BlockMeta {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_log_id: 0,
+                count: 0,
+            }),
+            PutCond::Any,
+            FenceToken(5),
+        )
+        .await
+        .expect("seed unpublished block meta");
+
+        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        svc.startup()
+            .await
+            .expect("startup cleanup should use publication epoch as fence token");
+        assert!(
+            svc.ingest
+                .meta_store
+                .get(&block_meta_key(1))
+                .await
+                .expect("read block meta after startup")
+                .is_none()
+        );
+    });
+}

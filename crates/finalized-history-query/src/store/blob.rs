@@ -83,3 +83,44 @@ impl BlobStore for InMemoryBlobStore {
         Ok(Page { keys, next_cursor })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures::executor::block_on;
+
+    use super::InMemoryBlobStore;
+    use crate::store::traits::BlobStore;
+
+    #[test]
+    fn list_prefix_pagination_does_not_repeat_cursor_entry() {
+        block_on(async {
+            let store = InMemoryBlobStore::default();
+            for index in 0..1_025u64 {
+                let key = format!("list-prefix/{index:04}").into_bytes();
+                store
+                    .put_blob(&key, Bytes::from_static(b"v"))
+                    .await
+                    .expect("seed blob");
+            }
+
+            let mut cursor = None;
+            let mut seen = Vec::new();
+            loop {
+                let page = store
+                    .list_prefix(b"list-prefix/", cursor.take(), 1_024)
+                    .await
+                    .expect("list prefix");
+                seen.extend(page.keys.iter().cloned());
+                if page.next_cursor.is_none() {
+                    break;
+                }
+                cursor = page.next_cursor;
+            }
+
+            let unique = seen.iter().collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(seen.len(), 1_025);
+            assert_eq!(unique.len(), 1_025);
+        });
+    }
+}

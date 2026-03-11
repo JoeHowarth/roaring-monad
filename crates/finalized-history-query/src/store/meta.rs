@@ -208,3 +208,44 @@ impl PublicationStore for InMemoryMetaStore {
         Ok(CasOutcome::Applied(next.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures::executor::block_on;
+
+    use super::InMemoryMetaStore;
+    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+
+    #[test]
+    fn list_prefix_pagination_does_not_repeat_cursor_entry() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            for index in 0..1_025u64 {
+                let key = format!("list-prefix/{index:04}").into_bytes();
+                store
+                    .put(&key, Bytes::from_static(b"v"), PutCond::Any, FenceToken(0))
+                    .await
+                    .expect("seed key");
+            }
+
+            let mut cursor = None;
+            let mut seen = Vec::new();
+            loop {
+                let page = store
+                    .list_prefix(b"list-prefix/", cursor.take(), 1_024)
+                    .await
+                    .expect("list prefix");
+                seen.extend(page.keys.iter().cloned());
+                if page.next_cursor.is_none() {
+                    break;
+                }
+                cursor = page.next_cursor;
+            }
+
+            let unique = seen.iter().collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(seen.len(), 1_025);
+            assert_eq!(unique.len(), 1_025);
+        });
+    }
+}

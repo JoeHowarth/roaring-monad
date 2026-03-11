@@ -552,6 +552,8 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+    use bytes::Bytes;
     use futures::executor::block_on;
 
     fn unique_temp_root(label: &str) -> PathBuf {
@@ -639,6 +641,64 @@ mod tests {
 
         assert_eq!(applied, 1);
         assert_eq!(failed, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_prefix_pagination_does_not_repeat_cursor_entry() {
+        let root = unique_temp_root("fs-list-prefix");
+        let meta_store = FsMetaStore::new(&root, 0).expect("fs meta store");
+        let blob_store = FsBlobStore::new(&root).expect("fs blob store");
+
+        block_on(async {
+            for index in 0..1_025u64 {
+                let key = format!("list-prefix/{index:04}").into_bytes();
+                meta_store
+                    .put(&key, Bytes::from_static(b"v"), PutCond::Any, FenceToken(0))
+                    .await
+                    .expect("seed meta key");
+                blob_store
+                    .put_blob(&key, Bytes::from_static(b"v"))
+                    .await
+                    .expect("seed blob key");
+            }
+
+            let mut meta_cursor = None;
+            let mut meta_seen = Vec::new();
+            loop {
+                let page = meta_store
+                    .list_prefix(b"list-prefix/", meta_cursor.take(), 1_024)
+                    .await
+                    .expect("list meta prefix");
+                meta_seen.extend(page.keys.iter().cloned());
+                if page.next_cursor.is_none() {
+                    break;
+                }
+                meta_cursor = page.next_cursor;
+            }
+
+            let mut blob_cursor = None;
+            let mut blob_seen = Vec::new();
+            loop {
+                let page = blob_store
+                    .list_prefix(b"list-prefix/", blob_cursor.take(), 1_024)
+                    .await
+                    .expect("list blob prefix");
+                blob_seen.extend(page.keys.iter().cloned());
+                if page.next_cursor.is_none() {
+                    break;
+                }
+                blob_cursor = page.next_cursor;
+            }
+
+            let meta_unique = meta_seen.iter().collect::<std::collections::BTreeSet<_>>();
+            let blob_unique = blob_seen.iter().collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(meta_seen.len(), 1_025);
+            assert_eq!(meta_unique.len(), 1_025);
+            assert_eq!(blob_seen.len(), 1_025);
+            assert_eq!(blob_unique.len(), 1_025);
+        });
+
         let _ = fs::remove_dir_all(root);
     }
 }

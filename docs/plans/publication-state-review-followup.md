@@ -18,6 +18,9 @@ protocol described in the architecture and implementation-plan documents.
 
 The most important gaps are:
 
+- publication acquisition is not actually exclusive
+- stale-writer fencing still uses owner identity instead of publication epoch
+- `list_prefix` cursor semantics are underspecified and can livelock multi-page scans
 - sealed summaries created before publish are not fully covered by recovery
 - stream-page sealing discovery is implemented with a global scan instead of bounded shard/page scans
 - the filesystem `PublicationStore` is not a true compare-and-set
@@ -29,7 +32,150 @@ Those are not cosmetic issues. They are protocol issues.
 
 ## What Needs To Change
 
-## 1. Treat sealed summaries as publication-critical recoverable state
+## 1. Make publication acquisition actually exclusive
+
+### Problem
+
+The current acquisition path still conflates observation with ownership.
+
+There are two specific failure modes:
+
+1. bootstrap does `create_if_absent(initial)` and returns the winning row even when this caller lost
+   the race
+2. acquire returns immediately when `current.owner_id == owner_id`, without proving that this
+   process established or refreshed ownership
+
+That means a caller can treat an old or foreign `publication_state` row as its lease without
+performing a successful compare-and-set.
+
+This violates the central ownership invariant from the architecture:
+
+- publication ownership changes only by CAS on `publication_state`
+
+### Correct fix
+
+`acquire_publication` must return a lease only if this caller:
+
+- created the row, or
+- won a CAS that moved the row to a fresh epoch owned by this caller
+
+It must never return a lease solely because the loaded row happens to contain the same `owner_id`.
+
+### Required implementation shape
+
+For owner `W`:
+
+1. load current `publication_state`
+2. if absent, try `create_if_absent({ owner_id: W, epoch: 1, head: 0 })`
+3. if bootstrap create loses, continue acquisition from the returned current row
+4. attempt `compare_and_set(current, { owner_id: W, epoch: current.epoch + 1, head })`
+5. retry on CAS failure with the returned current row
+6. return only after this caller wins create-or-CAS
+
+### Same-owner restart rule
+
+With the current schema, reusing the same numeric `writer_id` on restart must still force an epoch
+bump.
+
+That is the only safe interpretation absent an additional process/session nonce. It ensures:
+
+- stale processes holding the old epoch lose fencing
+- a restarted process does not silently inherit an unverifiable lease
+
+If a future design wants same-process reattach semantics, it needs an explicit session identity in
+`publication_state`. The current model does not have enough information for that.
+
+## 2. Make publication epoch the only fence token
+
+### Problem
+
+The implementation still threads `owner_id` / `writer_id` into mutable-store operations as the
+`FenceToken`.
+
+But fenced stores compare that token against the minimum valid publication epoch, and publication
+CAS itself is already driven by epoch.
+
+That means stale-writer suppression is not keyed to the same logical clock as ownership. Once
+`owner_id` and `epoch` diverge, fenced deletes and writes can fail or, worse, be authorized on the
+wrong basis.
+
+### Correct fix
+
+All fenced mutable operations must use:
+
+- `FenceToken(publication_epoch)`
+
+and nothing else.
+
+`owner_id` should remain an ownership label inside `publication_state`. It should not be used to
+authorize mutable writes.
+
+### Required implementation shape
+
+Add a single helper on the acquired lease, for example:
+
+- `PublicationLease::fence_token() -> FenceToken`
+
+Then thread that token through:
+
+- startup cleanup
+- startup marker repair
+- ingest artifact writes
+- open-page marker puts/deletes
+- summary compaction writes
+
+### Code-shape rule
+
+Any helper that only needs fencing authority should take:
+
+- `fence: FenceToken`
+
+not `writer_id` and not `owner_id`.
+
+If a helper truly needs both ownership identity and write authorization, those should be passed as
+separate values so the distinction is explicit in the call site.
+
+## 3. Define `list_prefix` cursor semantics as opaque forward progress
+
+### Problem
+
+The `list_prefix` contract does not currently specify whether `next_cursor` is:
+
+- inclusive of the last returned key
+- exclusive of the last returned key
+- an opaque backend continuation token
+
+Some backends currently treat it as inclusive. Callers then pass that cursor back unchanged, which
+can repeat the final key of the previous page forever once a prefix spans multiple pages.
+
+This is not merely a pagination bug. The new bounded-scan recovery and marker-repair loops rely on
+`list_prefix` making forward progress.
+
+### Correct fix
+
+Define `Page.next_cursor` as:
+
+- an opaque token that resumes strictly after the keys in the current page
+
+Callers should never inspect or transform it. They should only pass it back unchanged.
+
+### Required implementation shape
+
+1. document the cursor contract in the store traits
+2. update in-memory and filesystem stores to return an exclusive continuation token
+3. update Scylla to follow the same rule
+4. keep MinIO using its backend continuation token, which already behaves like an opaque forward
+   cursor
+5. keep scan loops simple: `cursor = page.next_cursor`
+
+### Tests that should exist
+
+- meta-store multi-page prefix scan returns every key exactly once
+- blob-store multi-page prefix scan returns every key exactly once
+- filesystem multi-page prefix scan returns every key exactly once
+- bounded recovery / marker scan tests that cross the pagination limit
+
+## 4. Treat sealed summaries as publication-critical recoverable state
 
 ### Problem
 
@@ -100,7 +246,7 @@ During publish, if a sealed summary already exists:
 That gives the implementation an actual cleanup-first story instead of leaving speculative sealed
 state behind indefinitely.
 
-## 2. Replace global open-page scans with bounded shard/page scans
+## 5. Replace global open-page scans with bounded shard/page scans
 
 ### Problem
 
@@ -144,7 +290,7 @@ Then remove the full-keyspace `list_all_open_stream_pages` path from normal inge
 This is not just a performance optimization. The bounded scan is part of the protocol design
 because it defines what state the writer is expected to reason about for a given head advance.
 
-## 3. Implement a real filesystem CAS
+## 6. Implement a real filesystem CAS
 
 ### Problem
 
@@ -188,7 +334,7 @@ Within the critical section:
 - `create_if_absent` races: exactly one creates
 - restart after partial temp-file write does not corrupt the state file
 
-## 4. Make startup recovery a real lifecycle step
+## 7. Make startup recovery a real lifecycle step
 
 ### Problem
 
@@ -235,7 +381,7 @@ Then ingest can assume:
 Do not use `FenceToken(0)` for recovery mutations. Startup recovery must run under an ownership or
 recovery token that is valid for the target backend.
 
-## 5. Complete the direct cutover
+## 8. Complete the direct cutover
 
 ### Problem
 
@@ -281,7 +427,7 @@ Anything else should be either:
 - local cache
 - legacy stream code unrelated to publication correctness
 
-## 6. Add real batched `H -> T` publication
+## 9. Add real batched `H -> T` publication
 
 ### Problem
 
@@ -321,7 +467,7 @@ For proposed `H -> T`:
 Backfill publication is not a separate optimization. It is part of the protocol contract described
 by the plan documents.
 
-## 7. Tighten the tests around protocol invariants
+## 10. Tighten the tests around protocol invariants
 
 ### Problem
 
@@ -357,7 +503,10 @@ Expand tests to cover the actual invariants:
 
 - filesystem publication CAS race tests
 - publication bootstrap / takeover tests
+- same-owner reacquire must bump epoch
+- fenced ingest / recovery use publication epoch, not owner identity
 - startup recovery tests under fenced stores
+- multi-page store listing tests with exact-once pagination
 
 #### Batch tests
 
@@ -369,22 +518,27 @@ Expand tests to cover the actual invariants:
 
 The safest way to fix the current state is:
 
-1. make Class B summaries recoverable and validated
-2. fix filesystem CAS
-3. replace global marker scans with bounded shard/page scans
-4. wire startup recovery into service lifecycle
-5. add batched `H -> T` publication
-6. remove legacy control-plane types/codecs
-7. expand tests to lock the protocol in place
+1. make acquisition exclusive and epoch-driven
+2. switch all fenced mutations to publication epoch
+3. define and fix `list_prefix` forward-progress semantics
+4. make Class B summaries recoverable and validated
+5. fix filesystem CAS
+6. replace global marker scans with bounded shard/page scans
+7. wire startup recovery into service lifecycle
+8. add batched `H -> T` publication
+9. remove legacy control-plane types/codecs
+10. expand tests to lock the protocol in place
 
 This order is deliberate:
 
-- steps 1 and 2 fix correctness gaps
-- step 3 fixes the intended protocol shape
-- step 4 makes recovery explicit and operationally sane
-- step 5 lands the missing feature from the architecture
-- step 6 removes ambiguity
-- step 7 prevents regression
+- steps 1 and 2 fix the ownership/fencing core
+- step 3 fixes forward progress for recovery and bounded scans
+- steps 4 and 5 fix publication-critical storage correctness
+- step 6 fixes the intended protocol shape
+- step 7 makes recovery explicit and operationally sane
+- step 8 lands the missing feature from the architecture
+- step 9 removes ambiguity
+- step 10 prevents regression
 
 ## Implementation Philosophy
 
@@ -393,10 +547,13 @@ The right way to finish this work is not to keep patching isolated symptoms.
 The implementation should be reorganized around these principles:
 
 - one authoritative control-plane record
+- ownership established only by successful create-or-CAS
+- fencing authorized only by publication epoch
 - immutable authoritative artifacts
 - immutable sealed summaries
 - cleanup-first recovery of anything above published head
 - durable marker inventory as bounded discovery state, not as ownership state
+- prefix scans defined by an exact-once forward-progress contract
 - publication visibility changed only by a single CAS on `publication_state`
 
 If a change does not make those invariants clearer, it is probably moving in the wrong direction.
