@@ -101,6 +101,12 @@ The indexed head is the only published truth for how far readers may query.
 
 Writers may persist artifacts beyond the current published head before a block is fully published, but takeover and readers must not treat those artifacts as committed indexed history unless `indexed_head` has advanced to include them.
 
+For recovery purposes, "immutable" therefore means:
+
+- immutable once published
+
+Artifacts written for blocks above `indexed_head` may be leftovers from a failed unpublished attempt. Those artifacts are not committed history and may be deterministically overwritten or deleted-and-rewritten by the next writer during replay.
+
 ### 2. Fixed boundaries, not time-driven sealing
 
 Index publication should be driven by deterministic aligned boundaries in `log_id` space or shard-local ID space.
@@ -361,7 +367,7 @@ This means each 1M-log bucket has at most one current open sub-bucket.
 These writes stay the same:
 
 - write `block_logs/<block_num>`
-- write `block_log_headers/<block_num>`
+- write `block_log_headers/<block_num>` iff `count > 0`
 - write `block_meta/<block_num>`
 - write `block_hash_to_num/<block_hash>`
 
@@ -435,7 +441,7 @@ Because the new frontier fragments are authoritative for the visible tip, `index
 Required ordering for block `N`:
 
 1. write `block_logs/<block_num>`
-2. write `block_log_headers/<block_num>`
+2. write `block_log_headers/<block_num>` iff the block has logs
 3. write `block_meta/<block_num>`
 4. write `block_hash_to_num/<block_hash>`
 5. write every authoritative `log_dir_frag/*` record for the block
@@ -449,6 +455,36 @@ If any required authoritative write fails:
 - `indexed_head` must not advance
 
 This is the publication rule that makes frontier fragments safe as the authoritative source for the latest visible finalized block.
+
+### Unpublished-artifact recovery
+
+Crash recovery must treat artifacts for block numbers above the published `indexed_head` as uncommitted.
+
+The first implementation should use the simplest rule:
+
+1. derive the next block to publish as `indexed_head + 1`
+2. treat any existing artifacts for that block number or later as leftovers from an unpublished attempt
+3. deterministically rewrite that block's artifacts from the canonical finalized block input rather than trying to reuse partial state opportunistically
+
+This applies to unpublished:
+
+- `block_logs/<block_num>`
+- `block_log_headers/<block_num>` when present
+- `block_meta/<block_num>`
+- `block_hash_to_num/<block_hash>`
+- `log_dir_frag/*/<block_num>`
+- `stream_frag_meta/*/<block_num>`
+- `stream_frag_blob/*/<block_num>`
+
+The design intentionally does not require a new writer to prove completeness of unpublished leftovers before proceeding. The new writer may overwrite those deterministic keys, or delete-and-rewrite them, because they were never made visible through `indexed_head`.
+
+If a future version wants stronger immutability for unpublished attempts too, it can add:
+
+- per-block publication markers
+- attempt-scoped staging namespaces
+- explicit GC for abandoned attempts
+
+Those mechanisms are out of scope for this first plan.
 
 For backend profiles with stronger visibility guarantees, the writer should also use a publication protocol strong enough that readers observing the new `indexed_head` can observe the authoritative frontier artifacts written before it. The exact backend-specific contract should follow the same pattern described in the sealing plan: publish dependent artifacts first, then publish the indexed head last.
 
@@ -500,7 +536,7 @@ For `log_id` resolution:
 
 1. if the enclosing sealed 1M bucket `log_dir/<bucket_start>` exists, use it
 2. otherwise, if the relevant sealed sub-bucket `log_dir_sub/<sub_bucket_start>` exists, use it
-3. otherwise, list `log_dir_frag/<sub_bucket_start>/` for the current open sub-bucket
+3. otherwise, list `log_dir_frag/<sub_bucket_start>/` for the relevant sub-bucket, whether it is the live open sub-bucket or a sealed sub-bucket whose compaction is missing or lagging
 4. do not treat `block_meta` continuity alone as proof that later blocks are published for query visibility
 
 After `block_num` is known, materialization continues exactly as it does now:
