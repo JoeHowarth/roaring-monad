@@ -202,28 +202,30 @@ rewritable speculative state. Instead:
 - they are written exactly once
 - if creation races, the first complete writer wins and later writers must treat the key as sealed
 
-#### Class C: open summary state
+#### Class C: open stream-page marker inventory
 
-This is mutable writer-owned state used to track not-yet-sealed summary builders and the inventory
-of summaries that may seal on a future head advance.
+This is a small durable auxiliary keyspace used only to discover which stream pages may need to be
+sealed as the frontier advances.
 
-Conceptually this includes:
+Conceptually it contains one marker per currently open stream page:
 
-- current open directory sub-bucket builder
-- current open directory bucket builder
-- open stream-page inventory and per-page builder state
+- `open_stream_page/<shard>/<page_start>/<stream_id> -> marker`
 
 Required properties:
 
 - not reader-visible query state
 - durable across crash and takeover
-- sufficient to determine which summaries become newly sealed for a proposed `H -> T` publish
-- sufficient to materialize those newly sealed summaries without scanning historical fragment space
-- every record is owned by a specific `(owner_id, epoch)` publication token
-- every mutation is fenced by that token plus record-local CAS/version semantics so stale writers cannot clobber active open state
+- sufficient to enumerate stream pages that may newly seal for a proposed `H -> T` publish
+- cheap to prefix-scan by shard and page
+- rebuildable from canonical replay if necessary
 
-This state exists because sealed summaries are mandatory, while historical prefix scans across all
-fragments and artifacts are not an acceptable correctness dependency on the hot path.
+This inventory is intentionally narrower than persisted mutable summary builders:
+
+- directory summaries do not require persisted open state because their seal set is computable
+  directly from `F_H` and `F_T`
+- stream-page summary bytes are reconstructed from immutable per-page fragments when a known open
+  page seals
+- any future in-memory builder is an optional cache only, not part of correctness
 
 #### Class D: control-plane state
 
@@ -244,7 +246,8 @@ For metadata keys:
 - block-scoped authoritative metadata must be immutable once created
 - block-scoped authoritative metadata may be written by create-if-absent directly, or by a protocol that guarantees absence before an unconditional write
 - sealed query-summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
-- open summary state may be mutable but must remain writer-owned, non-reader-visible, and CAS/fence protected against stale-writer mutation
+- open stream-page markers may be created and deleted as auxiliary inventory, but sealed summaries
+  remain authoritative and markers must never be treated as the publication authority
 
 For blob/object keys:
 
@@ -439,9 +442,11 @@ A publish from `H` to `T` must materialize the exact newly sealed summary set:
 
 The computation of that set is itself correctness-critical. Therefore:
 
-- the writer must load open summary state owned by its current `(owner_id, epoch)` token before computing `NewlySealed(H -> T)`
-- any attempt to mutate open summary state under a stale token must fail before publication-critical state is changed
-- takeover must reclaim or rebuild open summary state under the new token before continuing publish work
+- the writer must derive directory-summary sealing directly from `F_H` and `F_T`
+- the writer must load or rebuild the durable open stream-page marker inventory before computing
+  `NewStreamPages(H -> T)`
+- takeover must either clean unpublished suffix state first or rebuild the marker inventory before
+  continuing publish work
 
 #### Directory summaries
 
@@ -474,31 +479,33 @@ For a stream page `(stream, shard, page_start)`:
 Operationally:
 
 - let `OpenPages_H` be the durable inventory of open stream pages before the proposed publish
-- let `OpenedDuring(H -> T)` be the stream pages first touched while replaying or ingesting blocks `H + 1 ..= T`
+- let `OpenedDuring(H -> T)` be the stream pages first touched while replaying or ingesting blocks
+  `H + 1 ..= T`
 
 Then:
 
 - `NewStreamPages(H -> T) = { p in OpenPages_H union OpenedDuring(H -> T) | not sealed_at(p, F_H) and sealed_at(p, F_T) }`
 
-This is why durable open summary state is required. Without it, the writer would need to discover
-old still-open pages by scanning historical artifacts.
+This is why a durable open stream-page marker inventory is required. Without it, the writer would
+need to discover old still-open pages by scanning historical stream-fragment keyspace.
 
 #### Required publish ordering
 
 For a proposed publish from `H` to `T`:
 
 1. write all required Class A artifacts for blocks `H + 1 ..= T`
-2. update durable open summary state while processing those blocks
+2. create open stream-page markers for pages touched while processing those blocks
 3. compute `NewDirSub(H -> T)`, `NewDirBucket(H -> T)`, and `NewStreamPages(H -> T)`
 4. materialize every newly sealed Class B summary with create-if-absent semantics
-5. remove the newly sealed entries from open summary state
+5. remove the newly sealed stream-page markers
 6. only then CAS `publication_state` from `H` to `T`
 
 Consequences:
 
 - mandatory summaries never lag behind the published query frontier
-- publication does not depend on scanning historical fragment space
-- takeover and replay can rebuild unpublished suffix effects from canonical blocks while relying on durable open summary state below `H`
+- publication does not depend on scanning historical fragment space globally
+- takeover and replay can rebuild unpublished suffix effects from canonical blocks while relying on
+  durable open stream-page markers below `H`
 
 Historical summary repair for already-published ranges below `H` is a separate migration or repair
 workflow. It is not part of ordinary unpublished-suffix recovery.
@@ -656,56 +663,51 @@ Required usage:
 
 This capability is required because object-store immutability is part of the safety model, not merely an implementation detail.
 
-### Open-summary state capability
+### Open-stream-page marker capability
 
-The protocol also requires durable state for currently open summary builders.
+The protocol requires a durable inventory of currently open stream pages, but it does not require
+persisted mutable summary builders.
 
 Conceptual shape:
 
 ```rust
-struct OwnedState<T> {
-    owner_id: u64,
-    epoch: u64,
-    version: u64,
-    value: T,
-}
-
-struct OpenDirectoryState {
-    current_sub_bucket: Option<OpenDirectorySubBucket>,
-    current_bucket: Option<OpenDirectoryBucket>,
+struct OpenStreamPageMarker {
+    shard: u64,
+    page_start: u32,
+    stream_id: String,
 }
 
 #[allow(async_fn_in_trait)]
-trait OpenSummaryStore: Send + Sync {
-    async fn load_open_directory_state(&self) -> Result<Option<OwnedState<OpenDirectoryState>>>;
-    async fn compare_and_set_open_directory_state(
+trait OpenStreamPageStore: Send + Sync {
+    async fn mark_open_if_absent(
         &self,
-        expected: Option<&OwnedState<OpenDirectoryState>>,
-        next: &OwnedState<OpenDirectoryState>,
-    ) -> Result<CasOutcome>;
+        marker: &OpenStreamPageMarker,
+    ) -> Result<CreateOutcome>;
 
-    async fn load_open_stream_pages(&self) -> Result<Vec<OwnedState<OpenStreamPage>>>;
-    async fn compare_and_set_open_stream_page(
+    async fn delete_open_marker(
         &self,
-        expected: Option<&OwnedState<OpenStreamPage>>,
-        next: &OwnedState<OpenStreamPage>,
-    ) -> Result<CasOutcome>;
-    async fn delete_open_stream_page(
+        marker: &OpenStreamPageMarker,
+    ) -> Result<()>;
+
+    async fn list_open_markers(
         &self,
-        expected: &OwnedState<OpenStreamPage>,
-    ) -> Result<CasOutcome>;
+        shard_prefix: Option<u64>,
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Vec<OpenStreamPageMarker>>;
 }
 ```
 
 Required usage:
 
-- load the open summary inventory before computing `NewlySealed(H -> T)`
-- every update or delete must prove ownership of the current `(owner_id, epoch)` token plus the expected record version
-- after takeover, either reclaim the open state under the new token by CAS or rebuild it from published state and unpublished replay before continuing
-- delete entries only after their sealed Class B summary artifacts have been created and validated
+- create a marker when a block first touches `(stream, page)` and the page is not already sealed
+- load the marker inventory before computing `NewStreamPages(H -> T)`
+- delete markers only after their sealed `stream_page_*` summary artifacts have been created and
+  validated
+- allow any future in-memory builder to be reconstructed from fragment keys plus marker inventory
 
-The protocol does not require generic historical listing for sealing correctness. It does require a
-bounded durable inventory of currently open summary state.
+The protocol does not require persisted mutable builders for sealing correctness. It does require a
+bounded durable inventory of currently open stream pages.
 
 ## Write Frequency Characterization
 
@@ -1011,25 +1013,23 @@ For the expected backends:
 
 - Scylla:
   - `publication_state` and metadata CAS operations must use LWT
-  - open summary state mutations must use conditional updates strong enough to reject stale owner/epoch tokens
   - readers must use read/query paths with consistency strong enough to observe already-committed metadata rows
 - DynamoDB:
   - `publication_state` and metadata CAS operations must use conditional single-item writes
-  - open summary state mutations must use conditional item updates strong enough to reject stale owner/epoch tokens
   - readers must use read modes that guarantee visibility of the committed item state they depend on
 - object/blob store:
   - immutable object creation must support conditional create (`if absent`)
   - the deployment must provide read-after-write visibility for newly created objects before the corresponding head advance is considered safe to publish
   - any blob reads used to finalize newly sealed summaries must observe the committed immutable fragment objects they depend on
 
-If the implementation reloads open summary state by enumeration rather than a point-addressable registry,
-that enumeration must be complete for the dedicated open-state prefixes in use.
+If the implementation reloads open stream-page markers by enumeration, that enumeration must be
+complete for the dedicated `open_stream_page/*` prefixes in use.
 
 Required backend notes:
 
 - DynamoDB:
   - strong consistency is acceptable only on the base table or LSIs
-  - if open summary state is reloaded by query rather than a single registry item, that query must not depend on GSIs
+  - if open stream-page markers are reloaded by query, that query must not depend on GSIs
 - S3-compatible object stores:
   - AWS S3 satisfies the required read-after-write object semantics for immutable fragments and summaries
   - any alternate S3-compatible backend must prove equivalent semantics or be treated as unsupported for publication-critical summary finalization
@@ -1037,7 +1037,7 @@ Required backend notes:
 Required publication ordering:
 
 1. write authoritative Class A metadata and blobs
-2. update durable open summary state
+2. update durable open stream-page markers
 3. materialize every newly sealed Class B summary required for the target head
 4. ensure those writes have the backend visibility required by the deployment profile
 5. advance `publication_state`
@@ -1145,7 +1145,7 @@ Because this project does not require production backward compatibility yet, pre
 ### Phase 1: add publication state and tests
 
 1. add `PublicationState` types and `PublicationStore` trait
-2. add `CreateOutcome`, `put_blob_if_absent`, and durable open-summary-state types to the storage abstractions
+2. add `CreateOutcome`, `put_blob_if_absent`, and open-stream-page marker types to the storage abstractions
 3. add failing tests for:
    - lease loss before publish
    - concurrent takeover
@@ -1158,7 +1158,7 @@ Because this project does not require production backward compatibility yet, pre
 2. implement Scylla `PublicationStore` using one-row LWT
 3. implement DynamoDB `PublicationStore` using one-item conditional update
 4. implement `put_blob_if_absent` for all blob backends
-5. implement durable open-summary-state persistence, CAS mutation, and reload for all backends used by publication
+5. implement durable open-stream-page marker persistence and prefix-scan reload for all backends used by publication
 
 ### Phase 3: switch ingest and shared-state reads
 
@@ -1166,7 +1166,7 @@ Because this project does not require production backward compatibility yet, pre
 2. switch Class A and Class B blob writes to `put_blob_if_absent`
 3. write `block_meta/<block_num>` early enough to act as the unpublished-suffix recovery anchor
 4. implement cleanup-first unpublished-suffix recovery by walking contiguous unpublished `block_meta` rows from `H + 1`
-5. implement synchronous summary finalization from open summary state and unpublished replay, without historical artifact scans
+5. implement synchronous summary finalization from directory frontier arithmetic plus open-stream-page markers, without global historical artifact scans
 6. implement validate-or-reuse handling for pre-publication Class B summaries that already exist before the publish CAS
 7. add required backfill-oriented publication batching on top of the same publication protocol
 8. switch finalized-head reads to `publication_state.indexed_finalized_head`
@@ -1189,7 +1189,7 @@ Minimum required automated coverage:
 - stale writer publish fails after takeover
 - stale writer ordinary writes above head remain invisible
 - stale writer cannot mutate already-created Class A metadata or blobs after takeover
-- stale writer cannot mutate open summary state after takeover
+- stale writer cannot create a query-visible gap through open-marker churn after takeover
 - unpublished `block_meta` rows above head remain contiguous from `H + 1`
 - publish advances head only after artifacts exist
 - publish advances head only after all newly sealed required summaries exist
@@ -1202,7 +1202,8 @@ Minimum required automated coverage:
 - shared summary finalization never requires a historical scan over fragment space
 - pre-publication Class B summaries are reused only after exact validation and never overwritten in place
 - mismatched pre-publication Class B summaries surface a conflict and block head advancement
-- takeover reloads durable open summary state and finalizes mandatory summaries without query-visible gaps
+- takeover reloads durable open stream-page markers and finalizes mandatory summaries without
+  query-visible gaps
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
 
