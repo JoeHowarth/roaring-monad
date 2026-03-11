@@ -17,7 +17,7 @@ The intended end state is:
 - one conditional publish operation per visible head advance
 - no cross-row lease/publication race
 - a backend abstraction that maps cleanly to both Scylla and DynamoDB
-- support for single-block publication and batched backfill publication under the same protocol
+- support for single-block publication and required batched backfill publication under the same protocol
 
 ## Goals
 
@@ -26,7 +26,7 @@ The intended end state is:
 - support Scylla using its strongest practical primitive for this case
 - support DynamoDB without requiring a broad transaction abstraction
 - keep per-block overhead acceptable for steady-state ingest
-- allow batched head advancement for backfill indexing
+- require batched head advancement for backfill indexing
 - specify exact behavior for crash, takeover, retry, and duplicate-publication cases
 - make reader visibility rules explicit
 
@@ -307,6 +307,10 @@ to:
 
 - one per published batch
 
+Backfill-oriented batched publication is not optional tuning. It is a required operating mode for
+this design because the peak sustained throughput regime would otherwise pay unnecessary control-plane
+CAS/LWT overhead on every block while publishing data that is already naturally ordered and append-only.
+
 The correctness rule stays unchanged:
 
 - only blocks at or below the published head are visible
@@ -470,7 +474,7 @@ Derived per-block rates:
 - `publication_state`
   - frequency:
     - steady state: `2.5/s` if publishing every block
-    - backfill: operator-chosen batch cadence
+    - backfill: operator-chosen batch cadence and required batched advancement
   - required write type:
     - CAS/LWT
   - reason:
@@ -584,6 +588,96 @@ especially for hot streams. It does not change the conclusion that:
 - publication CAS belongs only on the control plane
 - shared summary keys should be immutable post-publication acceleration artifacts
 - block-scoped hot-path writes should avoid metadata CAS/LWT unless block-qualified create-if-absent is specifically needed
+
+## Future Work: Layout Constant Evaluation
+
+The current plan does not require changing storage-layout constants before the publication protocol
+is implemented. However, the stated normal and peak throughput regimes make several constants worth
+explicit follow-up evaluation.
+
+These are future-work investigations, not part of the immediate protocol rollout.
+
+### 1. Re-evaluate `LOCAL_ID_BITS`
+
+Current value:
+
+- `LOCAL_ID_BITS = 24`
+
+At the stated throughput regimes:
+
+- normal `1,000 logs/s`:
+  - one shard lasts about `4.66 hours`
+- peak `100,000 logs/s`:
+  - one shard lasts about `2.8 minutes`
+
+This may be acceptable, but it materially increases:
+
+- shard churn
+- stream-ID fanout
+- broad-query shard traversal
+- sealing pressure during sustained peak ingest
+
+Recommended future work:
+
+- benchmark `24`, `26`, and `28` local-ID widths
+- compare query cost, stream fanout, compaction cadence, and cache behavior
+
+### 2. Re-evaluate `STREAM_PAGE_LOCAL_ID_SPAN`
+
+Current value:
+
+- `STREAM_PAGE_LOCAL_ID_SPAN = 4,096`
+
+For a single hot `(stream, shard)` page:
+
+- normal `1,000 logs/s`: about `0.244` page seals/s
+- peak `100,000 logs/s`: about `24.4` page seals/s
+
+This is the summary family most likely to see meaningful write-rate pressure under hot-stream skew.
+
+Recommended future work:
+
+- benchmark `4,096` versus larger values such as `16,384`
+- evaluate tradeoffs between:
+  - lower summary-creation frequency
+  - larger summary objects
+  - wider bitmap reads
+  - fallback behavior when summaries lag
+
+### 3. Keep directory bucket sizes under observation
+
+Current values:
+
+- `LOG_DIRECTORY_SUB_BUCKET_SIZE = 10,000`
+- `LOG_DIRECTORY_BUCKET_SIZE = 1,000,000`
+
+At the stated throughput regimes:
+
+- sub-bucket sealing:
+  - normal: `0.1/s`
+  - peak: `10/s`
+- full-bucket sealing:
+  - normal: about `0.001/s`
+  - peak: `0.1/s`
+
+These do not currently look like an immediate reason to change layout, but they should still be
+revisited if future profiling shows:
+
+- expensive summary creation
+- high directory-summary contention
+- poor query locality around bucket boundaries
+
+### 4. Prefer operational adaptation before layout changes
+
+Before changing layout constants, prefer operating-mode changes such as:
+
+- backfill-oriented publication batching
+- summary-creation concurrency tuning
+- cache sizing adjustments
+- optional lag tolerance for post-publication summary creation
+
+This keeps the first implementation focused on correctness and allows measured layout changes later
+based on real benchmark and profiling evidence.
 
 ## Scylla Mapping
 
@@ -774,7 +868,8 @@ Because this project does not require production backward compatibility yet, pre
 
 1. switch ingest ownership and publish flow to `PublicationStore`
 2. stop treating `writer_lease` as correctness-critical
-3. switch finalized-head reads to `publication_state.indexed_finalized_head`
+3. add required backfill-oriented publication batching on top of the same publication protocol
+4. switch finalized-head reads to `publication_state.indexed_finalized_head`
 
 ### Phase 4: clean up legacy control-plane state
 
@@ -795,6 +890,7 @@ Minimum required automated coverage:
 - retry after pre-publish crash succeeds
 - retry after ambiguous post-publish crash is idempotent
 - backfill batch publish advances from `H` to `T` atomically
+- backfill batching reduces publication CAS frequency relative to per-block publish at peak ingest
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
 
