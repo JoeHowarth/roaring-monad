@@ -97,6 +97,10 @@ The intended split is:
 - small published indexed-head watermark written once per block
 - local `next_log_id` derived from authoritative `BlockMeta`, not persisted every block
 
+The indexed head is the only published truth for how far readers may query.
+
+Writers may persist artifacts beyond the current published head before a block is fully published, but takeover and readers must not treat those artifacts as committed indexed history unless `indexed_head` has advanced to include them.
+
 ### 2. Fixed boundaries, not time-driven sealing
 
 Index publication should be driven by deterministic aligned boundaries in `log_id` space or shard-local ID space.
@@ -128,7 +132,7 @@ The architecture should bound ungrouped work by fixed window sizes:
 - one current open stream page per stream per shard
 - one current open log-directory sub-bucket per 1M-log bucket
 
-If the frontier is still too expensive in some cases, readers may fall back to direct recent block metadata and payload reads for that bounded region.
+If the frontier is still too expensive in some cases, readers may still use direct recent block metadata and payload reads for operations that are already block-bounded. This document does not rely on direct block scans as a general substitute for `log_id -> block_num` discovery.
 
 This bounded-frontier claim applies to the not-yet-sealed region.
 
@@ -391,7 +395,8 @@ Required properties:
 
 - lease acquire and renew use strict CAS / versioned conditional writes
 - ordinary ingest writes do not pay per-write CAS cost
-- ordinary ingest writes are still fenced by the active lease epoch so a stale writer cannot continue publishing after lease loss
+- ordinary ingest writes are still fenced by the active lease epoch
+- the final indexed-head publish write uses a lease check strong enough that a stale writer cannot publish visible state after lease loss
 
 The intended write classes are:
 
@@ -414,7 +419,14 @@ One practical Scylla implementation is:
 - one fence epoch stored separately from the hot-path metadata rows
 - ordinary writes validate their fence token against that epoch with a cached periodic refresh rather than a per-write LWT
 
-That model is intentionally amortized-cheap rather than fully linearizable on every hot-path write. The correctness tradeoff is a bounded stale-writer detection window in exchange for avoiding per-write CAS cost.
+That model is intentionally amortized-cheap rather than fully linearizable on every hot-path artifact write.
+
+Under that model:
+
+- a stale writer may still manage to write unpublished orphan artifacts during the fence-refresh window
+- those orphan artifacts are acceptable only because they do not become visible indexed history unless the indexed-head publish step succeeds
+
+Therefore the final indexed-head publish step must not rely solely on the cached periodic fence check. It must use a lease validation strong enough to reject stale ownership at publication time.
 
 ### Publication ordering and failure semantics
 
@@ -439,6 +451,8 @@ If any required authoritative write fails:
 This is the publication rule that makes frontier fragments safe as the authoritative source for the latest visible finalized block.
 
 For backend profiles with stronger visibility guarantees, the writer should also use a publication protocol strong enough that readers observing the new `indexed_head` can observe the authoritative frontier artifacts written before it. The exact backend-specific contract should follow the same pattern described in the sealing plan: publish dependent artifacts first, then publish the indexed head last.
+
+This is also the step that prevents a stale writer from turning unpublished orphan artifacts into visible state.
 
 ### Compaction ordering
 
@@ -487,7 +501,7 @@ For `log_id` resolution:
 1. if the enclosing sealed 1M bucket `log_dir/<bucket_start>` exists, use it
 2. otherwise, if the relevant sealed sub-bucket `log_dir_sub/<sub_bucket_start>` exists, use it
 3. otherwise, list `log_dir_frag/<sub_bucket_start>/` for the current open sub-bucket
-4. if that is still undesirable for the active tip frontier, fall back to bounded `block_meta` search for blocks in that open sub-bucket
+4. do not treat `block_meta` continuity alone as proof that later blocks are published for query visibility
 
 After `block_num` is known, materialization continues exactly as it does now:
 
@@ -497,7 +511,7 @@ After `block_num` is known, materialization continues exactly as it does now:
 
 ### Tip-frontier behavior
 
-The frontier between the latest compacted boundary and the finalized tip is intentionally bounded.
+The frontier between the latest compacted boundary and the finalized tip is intentionally bounded in log-ID and page/sub-bucket space.
 
 For that bounded frontier, readers may:
 
@@ -508,7 +522,9 @@ For that bounded frontier, readers may:
 
 The important invariant is:
 
-- direct recent-block reads are acceptable only because the ungrouped frontier is bounded by design
+- open-frontier fragment lookups are bounded by design in page/sub-bucket space
+
+This document does not rely on a "bounded block scan" fallback for `log_id -> block_num` discovery, because fixed log-ID windows do not bound the number of zero-log blocks.
 
 Compaction lag for already sealed regions is a separate operational concern. When lag exists, readers may need fragment-based fallback outside the live frontier. The architecture permits that for correctness, but production operation should keep the lag small enough that the common case still hits compacted summaries.
 
@@ -530,8 +546,9 @@ On takeover:
 2. read the published `indexed_head` hint
 3. load `block_meta/<indexed_head>` if the head is non-zero
 4. derive local `next_log_id = first_log_id + count`
-5. if the head hint may be stale, probe forward through `block_meta` continuity until the latest contiguous indexed block is found
-6. continue ingest from that derived position
+5. continue ingest from that derived position
+
+Takeover must not advance past the published indexed head merely because later `block_meta/*` records exist. Those later records may belong to a failed or incomplete ingest attempt whose authoritative frontier fragments were never fully published and whose indexed-head publish never committed.
 
 The authoritative source for deriving `next_log_id` is `BlockMeta`, not `block_log_headers`, because empty blocks may have no header object.
 
@@ -624,7 +641,7 @@ Costs:
 - tip queries may need bounded direct block reads before higher-level summaries exist
 - compaction lag still needs operational control even though correctness does not depend on immediate compaction
 - source-fragment GC is intentionally deferred to a later design
-- writers still need a lease/fence mechanism, and stale-writer rejection depends on correct fencing behavior
+- writers still need a lease/fence mechanism, and correctness depends on strong stale-writer rejection at the final indexed-head publish step
 
 ## Open Parameters
 
