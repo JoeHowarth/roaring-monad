@@ -8,6 +8,7 @@ The intended end state is:
 
 - keep block-keyed log payload storage
 - keep `log_id` as the primary ordering and pagination identity
+- stop using one mutable `meta/state` record for both publication and writer-local sequencing state
 - stop persisting mutable stream manifests and mutable stream tails
 - stop persisting mutable open `log_dir` buckets
 - write only immutable index fragments while a shard or bucket is still open
@@ -19,12 +20,15 @@ The key simplification is:
 - sealed data is authoritative
 - open-frontier data is also authoritative, but it is represented as immutable micro-structures rather than read-modify-write mutable summaries
 - large grouped summaries are optimizations built from immutable source fragments, not correctness-critical state
+- lease ownership is a separate concern from indexed-head publication
+- `next_log_id` is writer-local derived state, not a per-block published metadata field
 
 ## Goals
 
 - remove persisted mutable index state from the logs family
 - make writer handoff safe without trusting inherited mutable summaries
 - make every persisted index artifact immutable after write
+- separate strict-CAS lease ownership from normal once-per-block indexed publication
 - preserve the current public query API and pagination semantics
 - preserve block-keyed log payload storage
 - keep tip/frontier queries efficient enough without requiring mutable metadata
@@ -54,6 +58,10 @@ That state creates several coupled problems:
 - mutable cache safety depends on writer tenure and backend visibility semantics
 - read-modify-write metadata complicates correctness reasoning
 - sealing logic becomes responsible for turning mutable state into immutable state at exactly the right time
+- one mutable `meta/state` record mixes three different concerns:
+  - indexed publication watermark
+  - writer-local sequencing state
+  - lease/fencing identity
 
 The underlying data does not require that complexity.
 
@@ -72,6 +80,22 @@ Specifically, the new design should remove:
 - mutable open `log_dir` buckets
 
 Process-local in-memory batching may still exist as an optimization, but persisted state should remain valid if that batching layer is absent.
+
+### 1a. Separate lease ownership from publication state
+
+The design should distinguish:
+
+- lease ownership: who is allowed to publish writes
+- indexed publication watermark: how far readers may query
+- writer-local derived state: what the active writer keeps in memory while ingesting
+
+These should not be collapsed into one per-block mutable record.
+
+The intended split is:
+
+- dedicated lease record with strict CAS / versioned acquire and renew
+- small published indexed-head watermark written once per block
+- local `next_log_id` derived from authoritative `BlockMeta`, not persisted every block
 
 ### 2. Fixed boundaries, not time-driven sealing
 
@@ -118,16 +142,44 @@ These objects remain authoritative and continue to exist:
 
 Metadata store:
 
-- `meta/state -> MetaState { indexed_finalized_head, next_log_id, writer_epoch }`
+- `indexed_head -> IndexedHead { indexed_finalized_head }`
 - `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
 - `block_hash_to_num/<block_hash> -> block_num`
 - `block_log_headers/<block_num> -> BlockLogHeader`
+
+Lease / fencing store:
+
+- `writer_lease -> WriterLease { owner_id, epoch, expiry or heartbeat metadata }`
 
 Blob store:
 
 - `block_logs/<block_num> -> concatenated encoded log bytes`
 
-These remain the authoritative per-block finalized history records.
+These remain the authoritative per-block finalized history records plus the minimal publication watermark needed by readers.
+
+`indexed_head` and `writer_lease` serve different purposes:
+
+- `indexed_head` tells readers how far indexing has been published
+- `writer_lease` tells writers who may publish
+
+Only the lease record needs strict CAS / conditional update on acquire and renew.
+
+### Writer-local derived state
+
+The active writer may keep these values locally:
+
+- `next_log_id`
+- current open frontier batching state, if any
+
+`next_log_id` is derived from `BlockMeta`, not treated as a correctness-critical published record.
+
+For block `N`:
+
+- if `N == 0`, then `next_log_id = 0`
+- otherwise load `block_meta/<indexed_head>` and compute:
+  - `next_log_id = first_log_id + count`
+
+Empty blocks still work under this rule because `BlockMeta.count` is authoritative even when `block_log_headers/<block_num>` is absent.
 
 ### New log-directory structures
 
@@ -331,9 +383,42 @@ For each touched stream:
 
 No manifest or tail rewrite occurs.
 
+### Lease and stale-writer protection
+
+The active writer must hold a dedicated lease before publishing indexed artifacts or advancing `indexed_head`.
+
+Required properties:
+
+- lease acquire and renew use strict CAS / versioned conditional writes
+- ordinary ingest writes do not pay per-write CAS cost
+- ordinary ingest writes are still fenced by the active lease epoch so a stale writer cannot continue publishing after lease loss
+
+The intended write classes are:
+
+- lease writes:
+  - infrequent
+  - strict CAS / conditional
+- ordinary artifact writes:
+  - frequent
+  - unconditional or lightweight writes, but fenced by current epoch
+- indexed-head publish writes:
+  - once per block
+  - written last
+  - fenced by current epoch
+
+This keeps split-brain prevention strong without forcing every per-block or per-fragment write through heavyweight CAS.
+
+One practical Scylla implementation is:
+
+- one dedicated lease row acquired and renewed with LWT / CAS
+- one fence epoch stored separately from the hot-path metadata rows
+- ordinary writes validate their fence token against that epoch with a cached periodic refresh rather than a per-write LWT
+
+That model is intentionally amortized-cheap rather than fully linearizable on every hot-path write. The correctness tradeoff is a bounded stale-writer detection window in exchange for avoiding per-write CAS cost.
+
 ### Publication ordering and failure semantics
 
-Because the new frontier fragments are authoritative for the visible tip, `meta/state` must not advance past a block until every authoritative artifact for that block has already been written successfully.
+Because the new frontier fragments are authoritative for the visible tip, `indexed_head` must not advance past a block until every authoritative artifact for that block has already been written successfully.
 
 Required ordering for block `N`:
 
@@ -344,16 +429,16 @@ Required ordering for block `N`:
 5. write every authoritative `log_dir_frag/*` record for the block
 6. write every authoritative `stream_frag_meta/*` and `stream_frag_blob/*` pair for the block
 7. optionally write any derived compaction artifacts that were eagerly produced in the same step
-8. only then write `meta/state` with the new `indexed_finalized_head` and `next_log_id`
+8. only then write `indexed_head` with the new `indexed_finalized_head`
 
 If any required authoritative write fails:
 
 - the ingest step fails
-- `meta/state` must not advance
+- `indexed_head` must not advance
 
 This is the publication rule that makes frontier fragments safe as the authoritative source for the latest visible finalized block.
 
-For backend profiles with stronger visibility guarantees, the writer should also use a publication protocol strong enough that readers observing the new `meta/state` can observe the authoritative frontier artifacts written before it. The exact backend-specific contract should follow the same pattern described in the sealing plan: publish dependent artifacts first, then publish `meta/state` last.
+For backend profiles with stronger visibility guarantees, the writer should also use a publication protocol strong enough that readers observing the new `indexed_head` can observe the authoritative frontier artifacts written before it. The exact backend-specific contract should follow the same pattern described in the sealing plan: publish dependent artifacts first, then publish the indexed head last.
 
 ### Compaction ordering
 
@@ -378,6 +463,8 @@ This path stays unchanged:
 - derive the inclusive `log_id` window
 
 The current `block_meta/<block_num>` records remain the authoritative source for this.
+
+Readers only need `indexed_head` to know the highest block number that has been published. They do not need a persisted published `next_log_id`.
 
 ### Candidate stream loading
 
@@ -432,9 +519,21 @@ This design does not require the next writer to inherit any persisted mutable su
 The next writer only needs:
 
 - authoritative per-block finalized state
+- the published `indexed_head` hint
 - immutable frontier fragments already published by earlier writers
 
 If the next writer wants process-local batching, it can rebuild that in-memory state from immutable inputs. No persisted mutable manifest, tail, or open bucket needs to be trusted or merged.
+
+On takeover:
+
+1. acquire the writer lease via strict CAS / versioned write
+2. read the published `indexed_head` hint
+3. load `block_meta/<indexed_head>` if the head is non-zero
+4. derive local `next_log_id = first_log_id + count`
+5. if the head hint may be stale, probe forward through `block_meta` continuity until the latest contiguous indexed block is found
+6. continue ingest from that derived position
+
+The authoritative source for deriving `next_log_id` is `BlockMeta`, not `block_log_headers`, because empty blocks may have no header object.
 
 ## Source Retention and GC
 
@@ -461,10 +560,14 @@ Until that separate design exists, grouped summaries are acceleration-only and s
 
 Shared:
 
-- `meta/state`
+- `indexed_head`
 - `block_meta/<block_num>`
 - `block_hash_to_num/<block_hash>`
 - `block_log_headers/<block_num>`
+
+Lease / fencing:
+
+- `writer_lease`
 
 Directory:
 
@@ -496,6 +599,8 @@ The implementation should measure:
 - fragment writes
 - page compactions
 - sub-bucket compactions
+- indexed-head publish latency
+- lease acquire / renew latency and conflict count
 - fallback reads that hit raw fragments instead of compacted summaries
 - fallback reads that hit direct recent block metadata or payloads
 - frontier width in blocks, log IDs, sub-buckets, and pages
@@ -510,6 +615,7 @@ Benefits:
 - simpler writer handoff semantics
 - immutable artifacts are naturally cacheable
 - compaction is retryable and not correctness-critical
+- strict CAS is paid for lease ownership, not for every hot-path metadata write
 
 Costs:
 
@@ -518,6 +624,7 @@ Costs:
 - tip queries may need bounded direct block reads before higher-level summaries exist
 - compaction lag still needs operational control even though correctness does not depend on immediate compaction
 - source-fragment GC is intentionally deferred to a later design
+- writers still need a lease/fence mechanism, and stale-writer rejection depends on correct fencing behavior
 
 ## Open Parameters
 
