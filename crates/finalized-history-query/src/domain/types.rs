@@ -75,6 +75,13 @@ pub struct WriterLease {
     pub epoch: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PublicationState {
+    pub owner_id: u64,
+    pub epoch: u64,
+    pub indexed_finalized_head: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct IngestOutcome {
     pub indexed_finalized_head: u64,

@@ -9,7 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
+use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
+use crate::domain::keys::PUBLICATION_STATE_KEY;
+use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
+use crate::store::publication::{CasOutcome, PublicationStore};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 const DEFAULT_FENCE_KEY: &str = "global";
@@ -17,14 +21,14 @@ const DEFAULT_FENCE_CHECK_INTERVAL_MS: u64 = 1000;
 const META_BUCKETS: u16 = 256;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
-    "indexed_head",
-    "writer_lease",
+    "publication_state",
     "block_meta",
     "block_log_headers",
     "block_hash_to_num",
     "log_dir",
     "log_dir_sub",
     "log_dir_frag",
+    "open_stream_page",
     "stream_frag_meta",
     "stream_page_meta",
     "manifests",
@@ -604,6 +608,67 @@ fn lwt_applied(res: scylla::QueryResult) -> Result<bool> {
     match first_col {
         CqlValue::Boolean(b) => Ok(*b),
         _ => Err(Error::Decode("invalid [applied] column type")),
+    }
+}
+
+impl PublicationStore for ScyllaMetaStore {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        let Some(record) = self.get(PUBLICATION_STATE_KEY).await? else {
+            return Ok(None);
+        };
+        Ok(Some(decode_publication_state(&record.value)?))
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let result = self
+            .put(
+                PUBLICATION_STATE_KEY,
+                encode_publication_state(initial),
+                PutCond::IfAbsent,
+                FenceToken(initial.epoch),
+            )
+            .await?;
+        if result.applied {
+            return Ok(CasOutcome::Applied(initial.clone()));
+        }
+        Ok(CasOutcome::Failed {
+            current: self.load().await?,
+        })
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let Some(current) = self.get(PUBLICATION_STATE_KEY).await? else {
+            return Ok(CasOutcome::Failed { current: None });
+        };
+        let current_state = decode_publication_state(&current.value)?;
+        if current_state != *expected {
+            return Ok(CasOutcome::Failed {
+                current: Some(current_state),
+            });
+        }
+
+        let result = self
+            .put(
+                PUBLICATION_STATE_KEY,
+                encode_publication_state(next),
+                PutCond::IfVersion(current.version),
+                FenceToken(next.epoch),
+            )
+            .await?;
+        if result.applied {
+            return Ok(CasOutcome::Applied(next.clone()));
+        }
+
+        Ok(CasOutcome::Failed {
+            current: self.load().await?,
+        })
     }
 }
 

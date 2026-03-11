@@ -1,8 +1,9 @@
-use crate::codec::finalized_state::{decode_block_meta, decode_indexed_head, decode_writer_lease};
+use crate::codec::finalized_state::decode_block_meta;
 use crate::core::refs::BlockRef;
-use crate::domain::keys::{INDEXED_HEAD_KEY, WRITER_LEASE_KEY, block_meta_key};
-use crate::domain::types::{BlockMeta, IndexedHead, MetaState};
+use crate::domain::keys::block_meta_key;
+use crate::domain::types::{BlockMeta, MetaState, PublicationState};
 use crate::error::{Error, Result};
+use crate::store::publication::PublicationStore;
 use crate::store::traits::MetaStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,11 +21,11 @@ impl From<&MetaState> for FinalizedHeadState {
     }
 }
 
-impl From<&IndexedHead> for FinalizedHeadState {
-    fn from(value: &IndexedHead) -> Self {
+impl From<&PublicationState> for FinalizedHeadState {
+    fn from(value: &PublicationState) -> Self {
         Self {
             indexed_finalized_head: value.indexed_finalized_head,
-            writer_epoch: 0,
+            writer_epoch: value.epoch,
         }
     }
 }
@@ -56,18 +57,16 @@ impl From<(u64, &BlockMeta)> for BlockIdentity {
     }
 }
 
-pub async fn load_finalized_head_state<M: MetaStore>(meta_store: &M) -> Result<FinalizedHeadState> {
-    let mut state = match meta_store.get(INDEXED_HEAD_KEY).await? {
-        Some(record) => FinalizedHeadState::from(&decode_indexed_head(&record.value)?),
+pub async fn load_finalized_head_state<P: PublicationStore>(
+    publication_store: &P,
+) -> Result<FinalizedHeadState> {
+    Ok(match publication_store.load().await? {
+        Some(state) => FinalizedHeadState::from(&state),
         None => FinalizedHeadState {
             indexed_finalized_head: 0,
             writer_epoch: 0,
         },
-    };
-    if let Some(record) = meta_store.get(WRITER_LEASE_KEY).await? {
-        state.writer_epoch = decode_writer_lease(&record.value)?.epoch;
-    }
-    Ok(state)
+    })
 }
 
 pub async fn load_block_identity<M: MetaStore>(
@@ -104,12 +103,11 @@ pub async fn derive_next_log_id<M: MetaStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
-    use crate::codec::finalized_state::{
-        encode_block_meta, encode_indexed_head, encode_writer_lease,
-    };
-    use crate::domain::keys::{INDEXED_HEAD_KEY, WRITER_LEASE_KEY, block_meta_key};
-    use crate::domain::types::{BlockMeta, IndexedHead, WriterLease};
+    use crate::codec::finalized_state::encode_block_meta;
+    use crate::domain::keys::block_meta_key;
+    use crate::domain::types::{BlockMeta, PublicationState};
     use crate::store::meta::InMemoryMetaStore;
+    use crate::store::publication::{CasOutcome, PublicationStore};
     use crate::store::traits::{FenceToken, MetaStore, PutCond};
     use futures::executor::block_on;
 
@@ -129,27 +127,16 @@ mod tests {
     fn load_block_identity_returns_shared_block_fields() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            meta.put(
-                INDEXED_HEAD_KEY,
-                encode_indexed_head(&IndexedHead {
-                    indexed_finalized_head: 7,
-                }),
-                PutCond::Any,
-                FenceToken(1),
-            )
-            .await
-            .expect("write indexed head");
-            meta.put(
-                WRITER_LEASE_KEY,
-                encode_writer_lease(&WriterLease {
+            assert!(matches!(
+                meta.create_if_absent(&PublicationState {
                     owner_id: 5,
                     epoch: 12,
-                }),
-                PutCond::Any,
-                FenceToken(1),
-            )
-            .await
-            .expect("write writer lease");
+                    indexed_finalized_head: 7,
+                })
+                .await
+                .expect("write publication state"),
+                CasOutcome::Applied(_)
+            ));
             meta.put(
                 &block_meta_key(7),
                 encode_block_meta(&BlockMeta {

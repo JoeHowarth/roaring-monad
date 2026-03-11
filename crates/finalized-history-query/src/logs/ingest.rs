@@ -11,20 +11,82 @@ use crate::codec::log::{
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, block_hash_to_num_key,
-    block_log_header_key, block_logs_blob_key, block_meta_key, log_directory_bucket_key,
-    log_directory_bucket_start, log_directory_fragment_key, log_directory_fragment_prefix,
-    log_directory_sub_bucket_key, log_directory_sub_bucket_start, log_local, log_shard,
-    stream_fragment_blob_key, stream_fragment_meta_key, stream_id, stream_page_blob_key,
-    stream_page_meta_key, stream_page_start_local,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key,
+    block_logs_blob_key, block_meta_key, log_directory_bucket_key, log_directory_bucket_start,
+    log_directory_fragment_key, log_directory_fragment_prefix, log_directory_sub_bucket_key,
+    log_directory_sub_bucket_start, log_local, log_shard, stream_fragment_blob_key,
+    stream_fragment_meta_key, stream_id, stream_page_blob_key, stream_page_meta_key,
+    stream_page_start_local,
 };
 use crate::domain::types::{
     BlockLogHeader, BlockMeta, Log, LogDirFragment, LogDirectoryBucket, StreamBitmapMeta,
 };
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use crate::store::traits::{BlobStore, CreateOutcome, FenceToken, MetaStore, PutCond};
 use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
+
+#[derive(Clone, Copy)]
+enum ImmutableClass {
+    Artifact,
+    Summary,
+}
+
+async fn put_immutable_meta<M: MetaStore>(
+    meta_store: &M,
+    key: &[u8],
+    value: Bytes,
+    epoch: u64,
+    class: ImmutableClass,
+) -> Result<()> {
+    let result = meta_store
+        .put(key, value.clone(), PutCond::IfAbsent, FenceToken(epoch))
+        .await?;
+    if result.applied {
+        return Ok(());
+    }
+
+    let Some(existing) = meta_store.get(key).await? else {
+        return Err(Error::Backend(
+            "immutable metadata create reported existing row but row is missing".to_string(),
+        ));
+    };
+    if existing.value == value {
+        return Ok(());
+    }
+
+    match class {
+        ImmutableClass::Artifact => Err(Error::ArtifactConflict),
+        ImmutableClass::Summary => Err(Error::SummaryConflict),
+    }
+}
+
+async fn put_immutable_blob<B: BlobStore>(
+    blob_store: &B,
+    key: &[u8],
+    value: Bytes,
+    class: ImmutableClass,
+) -> Result<()> {
+    match blob_store.put_blob_if_absent(key, value.clone()).await? {
+        CreateOutcome::Created => Ok(()),
+        CreateOutcome::AlreadyExists => {
+            let Some(existing) = blob_store.get_blob(key).await? else {
+                return Err(Error::Backend(
+                    "immutable blob create reported existing object but object is missing"
+                        .to_string(),
+                ));
+            };
+            if existing == value {
+                Ok(())
+            } else {
+                match class {
+                    ImmutableClass::Artifact => Err(Error::ArtifactConflict),
+                    ImmutableClass::Summary => Err(Error::SummaryConflict),
+                }
+            }
+        }
+    }
+}
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
@@ -40,17 +102,21 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     }
 
     let (block_blob, header) = encode_block_logs(logs)?;
-    blob_store
-        .put_blob(&block_logs_blob_key(block_num), block_blob)
-        .await?;
-    meta_store
-        .put(
-            &block_log_header_key(block_num),
-            encode_block_log_header(&header),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
+    put_immutable_blob(
+        blob_store,
+        &block_logs_blob_key(block_num),
+        block_blob,
+        ImmutableClass::Artifact,
+    )
+    .await?;
+    put_immutable_meta(
+        meta_store,
+        &block_log_header_key(block_num),
+        encode_block_log_header(&header),
+        epoch,
+        ImmutableClass::Artifact,
+    )
+    .await?;
     Ok(())
 }
 
@@ -67,23 +133,23 @@ pub async fn persist_log_block_metadata<M: MetaStore>(
         count: block.logs.len() as u32,
     };
 
-    meta_store
-        .put(
-            &block_meta_key(block.block_num),
-            encode_block_meta(&block_meta),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
+    put_immutable_meta(
+        meta_store,
+        &block_meta_key(block.block_num),
+        encode_block_meta(&block_meta),
+        epoch,
+        ImmutableClass::Artifact,
+    )
+    .await?;
 
-    meta_store
-        .put(
-            &block_hash_to_num_key(&block.block_hash),
-            encode_u64(block.block_num),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
+    put_immutable_meta(
+        meta_store,
+        &block_hash_to_num_key(&block.block_hash),
+        encode_u64(block.block_num),
+        epoch,
+        ImmutableClass::Artifact,
+    )
+    .await?;
 
     Ok(())
 }
@@ -107,16 +173,17 @@ pub async fn persist_log_directory_fragments<M: MetaStore>(
     } else {
         log_directory_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
     };
+    let encoded_fragment = encode_log_dir_fragment(&fragment);
 
     loop {
-        meta_store
-            .put(
-                &log_directory_fragment_key(sub_bucket_start, block_num),
-                encode_log_dir_fragment(&fragment),
-                PutCond::Any,
-                FenceToken(epoch),
-            )
-            .await?;
+        put_immutable_meta(
+            meta_store,
+            &log_directory_fragment_key(sub_bucket_start, block_num),
+            encoded_fragment.clone(),
+            epoch,
+            ImmutableClass::Artifact,
+        )
+        .await?;
         if sub_bucket_start == last_sub_bucket_start {
             break;
         }
@@ -227,20 +294,21 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
                 bitmap,
             };
 
-            meta_store
-                .put(
-                    &stream_fragment_meta_key(&stream, page_start, block.block_num),
-                    encode_stream_bitmap_meta(&meta),
-                    PutCond::Any,
-                    FenceToken(epoch),
-                )
-                .await?;
-            blob_store
-                .put_blob(
-                    &stream_fragment_blob_key(&stream, page_start, block.block_num),
-                    encode_chunk(&chunk)?,
-                )
-                .await?;
+            put_immutable_meta(
+                meta_store,
+                &stream_fragment_meta_key(&stream, page_start, block.block_num),
+                encode_stream_bitmap_meta(&meta),
+                epoch,
+                ImmutableClass::Artifact,
+            )
+            .await?;
+            put_immutable_blob(
+                blob_store,
+                &stream_fragment_blob_key(&stream, page_start, block.block_num),
+                encode_chunk(&chunk)?,
+                ImmutableClass::Artifact,
+            )
+            .await?;
             touched_pages.insert((stream.clone(), page_start));
         }
     }
@@ -251,34 +319,15 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
-    touched_pages: &[(String, u32)],
-    next_log_id: u64,
+    sealed_pages: &[(String, u32)],
     epoch: u64,
 ) -> Result<()> {
-    if touched_pages.is_empty() {
+    if sealed_pages.is_empty() {
         return Ok(());
     }
 
-    let frontier_id = LogId::new(next_log_id);
-    let frontier_shard = log_shard(frontier_id);
-    let frontier_open_page = stream_page_start_local(log_local(frontier_id).get());
-
-    for (stream_id, page_start) in touched_pages {
-        let Some(stream_shard) = parse_stream_shard(stream_id) else {
-            continue;
-        };
-        let sealed = if stream_shard < frontier_shard {
-            true
-        } else if stream_shard > frontier_shard {
-            false
-        } else {
-            *page_start < frontier_open_page
-                || (next_log_id > 0
-                    && *page_start + STREAM_PAGE_LOCAL_ID_SPAN <= log_local(frontier_id).get())
-        };
-        if sealed {
-            compact_stream_page(meta_store, blob_store, stream_id, *page_start, epoch).await?;
-        }
+    for (stream_id, page_start) in sealed_pages {
+        compact_stream_page(meta_store, blob_store, stream_id, *page_start, epoch).await?;
     }
 
     Ok(())
@@ -335,14 +384,14 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
         start_block: fragments[0].block_num,
         first_log_ids,
     };
-    meta_store
-        .put(
-            &log_directory_sub_bucket_key(sub_bucket_start),
-            encode_log_directory_bucket(&bucket),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
+    put_immutable_meta(
+        meta_store,
+        &log_directory_sub_bucket_key(sub_bucket_start),
+        encode_log_directory_bucket(&bucket),
+        epoch,
+        ImmutableClass::Summary,
+    )
+    .await?;
     Ok(())
 }
 
@@ -408,27 +457,27 @@ async fn compact_directory_bucket<M: MetaStore>(
     let mut first_log_ids = boundaries.into_values().collect::<Vec<_>>();
     first_log_ids.push(sentinel);
 
-    meta_store
-        .put(
-            &log_directory_bucket_key(bucket_start),
-            encode_log_directory_bucket(&LogDirectoryBucket {
-                start_block,
-                first_log_ids,
-            }),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
+    put_immutable_meta(
+        meta_store,
+        &log_directory_bucket_key(bucket_start),
+        encode_log_directory_bucket(&LogDirectoryBucket {
+            start_block,
+            first_log_ids,
+        }),
+        epoch,
+        ImmutableClass::Summary,
+    )
+    .await?;
     Ok(())
 }
 
-async fn compact_stream_page<M: MetaStore, B: BlobStore>(
+pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     stream_id: &str,
     page_start: u32,
     epoch: u64,
-) -> Result<()> {
+) -> Result<bool> {
     let page = meta_store
         .list_prefix(
             &crate::domain::keys::stream_fragment_meta_prefix(stream_id, page_start),
@@ -448,7 +497,7 @@ async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         merged |= &decode_chunk(&blob)?.bitmap;
     }
     if merged.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let count = merged.len() as u32;
@@ -468,24 +517,25 @@ async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         bitmap: merged,
     };
 
-    blob_store
-        .put_blob(
-            &stream_page_blob_key(stream_id, page_start),
-            encode_chunk(&chunk)?,
-        )
-        .await?;
-    meta_store
-        .put(
-            &stream_page_meta_key(stream_id, page_start),
-            encode_stream_bitmap_meta(&meta),
-            PutCond::Any,
-            FenceToken(epoch),
-        )
-        .await?;
-    Ok(())
+    put_immutable_blob(
+        blob_store,
+        &stream_page_blob_key(stream_id, page_start),
+        encode_chunk(&chunk)?,
+        ImmutableClass::Summary,
+    )
+    .await?;
+    put_immutable_meta(
+        meta_store,
+        &stream_page_meta_key(stream_id, page_start),
+        encode_stream_bitmap_meta(&meta),
+        epoch,
+        ImmutableClass::Summary,
+    )
+    .await?;
+    Ok(true)
 }
 
-fn parse_stream_shard(stream_id: &str) -> Option<crate::core::ids::LogShard> {
+pub fn parse_stream_shard(stream_id: &str) -> Option<crate::core::ids::LogShard> {
     let (_, shard_hex) = stream_id.rsplit_once('/')?;
     let raw = u64::from_str_radix(shard_hex, 16).ok()?;
     crate::core::ids::LogShard::new(raw).ok()
@@ -674,15 +724,9 @@ mod tests {
             let touched_pages = persist_stream_fragments(&meta, &blob, &block, first_log_id, 5)
                 .await
                 .expect("persist stream fragments");
-            compact_sealed_stream_pages(
-                &meta,
-                &blob,
-                &touched_pages,
-                first_log_id + block.logs.len() as u64,
-                5,
-            )
-            .await
-            .expect("compact stream pages");
+            compact_sealed_stream_pages(&meta, &blob, &touched_pages, 5)
+                .await
+                .expect("compact stream pages");
 
             let sid = collect_stream_appends(&block, first_log_id)
                 .into_keys()

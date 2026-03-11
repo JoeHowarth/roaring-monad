@@ -3959,6 +3959,7 @@ dependencies = [
  "futures",
  "hex",
  "monad-compress",
+ "monad-eth-types",
  "monad-triedb-utils",
  "monad-types",
  "mongodb",
@@ -4022,6 +4023,7 @@ dependencies = [
 name = "monad-cxx"
 version = "0.1.0"
 dependencies = [
+ "bindgen",
  "cmake",
  "tracing",
 ]
@@ -4054,6 +4056,7 @@ dependencies = [
  "rand 0.8.5",
  "secp256k1 0.31.1",
  "serde",
+ "serde_with",
  "sha2",
  "zeroize",
 ]
@@ -4066,10 +4069,18 @@ dependencies = [
  "alloy-primitives",
  "monad-crypto",
  "monad-eth-types",
+ "monad-tfm",
  "monad-types",
  "monad-validator",
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "monad-tfm"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
 ]
 
 [[package]]
@@ -4103,7 +4114,6 @@ dependencies = [
  "monad-state-backend",
  "monad-triedb",
  "monad-types",
- "serde",
  "tokio",
  "tracing",
 ]

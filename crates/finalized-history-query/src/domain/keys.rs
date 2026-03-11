@@ -1,8 +1,7 @@
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 
 pub const META_STATE_KEY: &[u8] = b"meta/state";
-pub const INDEXED_HEAD_KEY: &[u8] = b"indexed_head";
-pub const WRITER_LEASE_KEY: &[u8] = b"writer_lease";
+pub const PUBLICATION_STATE_KEY: &[u8] = b"publication_state";
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
@@ -148,6 +147,30 @@ pub fn stream_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
 pub fn stream_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
     let mut k = format!("stream_page_blob/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k
+}
+
+pub fn open_stream_page_key(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
+    let mut k = open_stream_page_shard_page_prefix(shard, page_start_local);
+    k.extend_from_slice(stream_id.as_bytes());
+    k
+}
+
+pub fn open_stream_page_prefix() -> &'static [u8] {
+    b"open_stream_page/"
+}
+
+pub fn open_stream_page_shard_prefix(shard: LogShard) -> Vec<u8> {
+    let mut k = open_stream_page_prefix().to_vec();
+    k.extend_from_slice(&u64_be(shard.get()));
+    k.push(b'/');
+    k
+}
+
+pub fn open_stream_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
+    let mut k = open_stream_page_shard_prefix(shard);
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k.push(b'/');
     k
 }
 

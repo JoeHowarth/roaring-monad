@@ -1,6 +1,7 @@
 pub mod blob;
 pub mod fs;
 pub mod meta;
+pub mod publication;
 pub mod traits;
 
 #[cfg(feature = "distributed-stores")]

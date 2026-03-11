@@ -77,14 +77,14 @@ class LogBlockWindow:
 
 ```python
 meta_store:
-    "indexed_head" -> IndexedHead
-    "writer_lease" -> WriterLease
+    "publication_state" -> PublicationState
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
     "log_dir_frag/<sub_bucket_start>/<block_num>" -> LogDirFragment
     "log_dir_sub/<sub_bucket_start>" -> LogDirectoryBucket
     "log_dir/<bucket_start_log_id>" -> optional compacted LogDirectoryBucket
     "block_log_headers/<block_num>" -> BlockLogHeader
+    "open_stream_page/<shard>/<page_start>/<stream_id>" -> marker
     "stream_frag_meta/<stream_id>/<page_start>/<block_num>" -> StreamBitmapMeta
     "stream_page_meta/<stream_id>/<page_start>" -> StreamBitmapMeta
 
@@ -233,30 +233,35 @@ Queries without at least one indexed address/topic clause are rejected at the bo
 ## Ingest Flow
 
 ```python
-async def ingest_finalized_block(block, writer_epoch):
-    indexed_head = load_indexed_head()
-    validate_block_sequence_and_parent(block, indexed_head)
+async def ingest_finalized_block(block, writer_id):
+    lease = acquire_publication(writer_id)
+    cleanup_unpublished_suffix(lease.indexed_finalized_head)
 
-    first_log_id = derive_next_log_id_from_block_meta(indexed_head)
+    validate_block_sequence_and_parent(block, lease.indexed_finalized_head)
+
+    first_log_id = derive_next_log_id_from_block_meta(lease.indexed_finalized_head)
     next_log_id = first_log_id + len(block.logs)
 
-    await store_writer_lease(owner_id=writer_epoch, epoch=writer_epoch)
     await logs.persist_log_artifacts(block.logs, first_log_id)
     await logs.persist_log_block_metadata(block, first_log_id)
     await logs.persist_log_directory_fragments(block, first_log_id)
     touched_pages = await logs.persist_stream_fragments(block, first_log_id)
+    await mark_open_stream_pages(touched_pages, next_log_id)
 
     await logs.compact_sealed_directory_boundaries(first_log_id, next_log_id)
-    await logs.compact_sealed_stream_pages(touched_pages, next_log_id)
+    await repair_and_seal_stream_pages(next_log_id)
 
-    await store_indexed_head(block.block_num)
+    await compare_and_set_publication_state(
+        expected=lease,
+        next_head=block.block_num,
+    )
 ```
 
 Important boundary:
 
-- `ingest/engine.rs` validates finalized sequencing and orchestrates work
+- `ingest/engine.rs` acquires publication ownership, runs cleanup-first recovery, validates finalized sequencing, and orchestrates work
 - `logs/ingest.rs` owns immutable directory/stream fragment publication plus eager compaction
-- `indexed_head` is published last and is the only reader-visible watermark
+- `publication_state.indexed_finalized_head` is published last and is the only reader-visible watermark
 
 ## Current Non-Goals
 

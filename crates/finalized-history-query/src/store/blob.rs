@@ -4,7 +4,7 @@ use std::sync::RwLock;
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
-use crate::store::traits::{BlobStore, Page};
+use crate::store::traits::{BlobStore, CreateOutcome, Page};
 
 #[derive(Default)]
 pub struct InMemoryBlobStore {
@@ -19,6 +19,18 @@ impl BlobStore for InMemoryBlobStore {
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
         guard.insert(key.to_vec(), value);
         Ok(())
+    }
+
+    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome> {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+        if guard.contains_key(key) {
+            return Ok(CreateOutcome::AlreadyExists);
+        }
+        guard.insert(key.to_vec(), value);
+        Ok(CreateOutcome::Created)
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {

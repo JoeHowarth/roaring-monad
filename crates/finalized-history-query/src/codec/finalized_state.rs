@@ -1,7 +1,9 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockMeta, IndexedHead, MetaState, WriterLease};
+use crate::domain::types::{BlockMeta, IndexedHead, MetaState, PublicationState, WriterLease};
 use crate::error::{Error, Result};
+
+const PUBLICATION_STATE_VERSION: u8 = 1;
 
 pub fn encode_meta_state(state: &MetaState) -> Bytes {
     let mut out = Vec::with_capacity(24);
@@ -57,6 +59,36 @@ pub fn decode_writer_lease(bytes: &[u8]) -> Result<WriterLease> {
     Ok(WriterLease {
         owner_id: u64::from_be_bytes(owner_id),
         epoch: u64::from_be_bytes(epoch),
+    })
+}
+
+pub fn encode_publication_state(state: &PublicationState) -> Bytes {
+    let mut out = Vec::with_capacity(25);
+    out.push(PUBLICATION_STATE_VERSION);
+    out.extend_from_slice(&state.owner_id.to_be_bytes());
+    out.extend_from_slice(&state.epoch.to_be_bytes());
+    out.extend_from_slice(&state.indexed_finalized_head.to_be_bytes());
+    Bytes::from(out)
+}
+
+pub fn decode_publication_state(bytes: &[u8]) -> Result<PublicationState> {
+    if bytes.len() != 25 {
+        return Err(Error::Decode("invalid publication_state length"));
+    }
+    if bytes[0] != PUBLICATION_STATE_VERSION {
+        return Err(Error::Decode("invalid publication_state version"));
+    }
+
+    let mut owner_id = [0u8; 8];
+    let mut epoch = [0u8; 8];
+    let mut indexed_finalized_head = [0u8; 8];
+    owner_id.copy_from_slice(&bytes[1..9]);
+    epoch.copy_from_slice(&bytes[9..17]);
+    indexed_finalized_head.copy_from_slice(&bytes[17..25]);
+    Ok(PublicationState {
+        owner_id: u64::from_be_bytes(owner_id),
+        epoch: u64::from_be_bytes(epoch),
+        indexed_finalized_head: u64::from_be_bytes(indexed_finalized_head),
     })
 }
 
@@ -146,6 +178,17 @@ mod tests {
         assert_eq!(
             decode_writer_lease(&encode_writer_lease(&lease)).expect("decode writer lease"),
             lease
+        );
+
+        let publication_state = PublicationState {
+            owner_id: 8,
+            epoch: 13,
+            indexed_finalized_head: 21,
+        };
+        assert_eq!(
+            decode_publication_state(&encode_publication_state(&publication_state))
+                .expect("decode publication state"),
+            publication_state
         );
     }
 }

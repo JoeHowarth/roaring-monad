@@ -4,7 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 
+use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
+use crate::domain::keys::PUBLICATION_STATE_KEY;
+use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
+use crate::store::publication::{CasOutcome, PublicationStore};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Default)]
@@ -136,5 +140,71 @@ impl MetaStore for InMemoryMetaStore {
         }
 
         Ok(Page { keys, next_cursor })
+    }
+}
+
+impl PublicationStore for InMemoryMetaStore {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+        let Some(record) = guard.get(PUBLICATION_STATE_KEY) else {
+            return Ok(None);
+        };
+        Ok(Some(decode_publication_state(&record.value)?))
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+        if let Some(record) = guard.get(PUBLICATION_STATE_KEY) {
+            return Ok(CasOutcome::Failed {
+                current: Some(decode_publication_state(&record.value)?),
+            });
+        }
+
+        guard.insert(
+            PUBLICATION_STATE_KEY.to_vec(),
+            Record {
+                value: encode_publication_state(initial),
+                version: 1,
+            },
+        );
+        Ok(CasOutcome::Applied(initial.clone()))
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+        let Some(record) = guard.get(PUBLICATION_STATE_KEY).cloned() else {
+            return Ok(CasOutcome::Failed { current: None });
+        };
+        let current = decode_publication_state(&record.value)?;
+        if current != *expected {
+            return Ok(CasOutcome::Failed {
+                current: Some(current),
+            });
+        }
+
+        guard.insert(
+            PUBLICATION_STATE_KEY.to_vec(),
+            Record {
+                value: encode_publication_state(next),
+                version: record.version.saturating_add(1),
+            },
+        );
+        Ok(CasOutcome::Applied(next.clone()))
     }
 }

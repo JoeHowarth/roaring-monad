@@ -1,10 +1,10 @@
 use crate::core::ids::LogId;
 use crate::domain::types::BlockMeta;
 
+pub use crate::domain::types::PublicationState;
 pub use crate::domain::types::{
     Block, BlockLogHeader, HealthReport, IngestOutcome, Log, LogDirectoryBucket,
 };
-pub use crate::domain::types::{IndexedHead, WriterLease};
 
 pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];

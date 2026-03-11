@@ -17,7 +17,7 @@ Follow the main path first:
 1. a finalized block is ingested
 2. logs receive monotonic finalized `log_id`
 3. immutable log-directory fragments and immutable stream-page fragments are written
-4. `indexed_head` is advanced only after all authoritative artifacts for the block exist
+4. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for the block exist
 5. `query_logs` resolves a finalized block window
 6. the logs family maps that block window to a log-ID window
 7. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
@@ -61,7 +61,7 @@ The shared layer owns:
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - runtime degraded / throttled state
-- indexed-head publication reads
+- publication-state reads
 - shared finalized-state and block-identity reads
 
 Important shared view types:
@@ -92,8 +92,7 @@ Important log-specific view types:
 
 Shared metadata:
 
-- `indexed_head -> IndexedHead { indexed_finalized_head }`
-- `writer_lease -> WriterLease { owner_id, epoch }`
+- `publication_state -> PublicationState { owner_id, epoch, indexed_finalized_head }`
 - `block_meta/<block_num> -> BlockMeta`
 - `block_hash_to_num/<block_hash> -> block_num`
 - `block_log_headers/<block_num> -> BlockLogHeader`
@@ -138,9 +137,11 @@ The executor preserves primary IDs through page assembly so `has_more`, `next_re
 It is responsible for:
 
 - finalized sequence and parent validation
+- publication ownership acquisition
+- cleanup-first recovery of unpublished suffix artifacts
 - coordinating log artifact writes
 - coordinating immutable directory and stream frontier publication
-- advancing `indexed_head` last
+- advancing `publication_state.indexed_finalized_head` last
 
 The logs family owns:
 

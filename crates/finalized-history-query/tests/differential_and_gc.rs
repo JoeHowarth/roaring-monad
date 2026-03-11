@@ -240,7 +240,7 @@ fn recovery_and_gc_cleanup() {
         assert_eq!(stats.deleted_stale_tails, 1);
         assert_eq!(stats.deleted_orphan_chunks, 1);
 
-        let rec = startup_plan(&meta, 0).await.expect("startup plan");
+        let rec = startup_plan(&meta, &blob, 0).await.expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
         assert_eq!(rec.log_state.next_log_id, LogId::new(0));
     });

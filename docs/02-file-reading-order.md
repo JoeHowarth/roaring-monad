@@ -38,7 +38,7 @@ Look for:
 11. `crates/finalized-history-query/src/core/runtime.rs`
     Read this for the in-memory degraded/throttled state machine driven by backend failures and guardrails.
 12. `crates/finalized-history-query/src/domain/keys.rs`
-    Read this for the immutable-frontier key layout: `indexed_head`, directory fragments/sub-buckets, and stream fragments/pages.
+    Read this for the immutable-frontier key layout: `publication_state`, open stream-page markers, directory fragments/sub-buckets, and stream fragments/pages.
 13. `crates/finalized-history-query/src/streams/chunk.rs`
     Read this for the roaring bitmap blob format reused by immutable stream fragments and compacted stream pages.
 
@@ -84,7 +84,7 @@ Look for:
 22. `crates/finalized-history-query/src/domain/types.rs`
     Read this for the core persisted/data model structs shared across codecs, ingest, and query paths.
 23. `crates/finalized-history-query/src/codec/finalized_state.rs`
-    Read this for the fixed-width encoding of `MetaState`, `BlockMeta`, and block-hash lookup values.
+    Read this for the fixed-width encoding of `PublicationState`, `BlockMeta`, and block-hash lookup values.
 24. `crates/finalized-history-query/src/codec/log.rs`
     Read this for the byte encodings of three log artifacts: individual logs, directory buckets, and block log headers.
 25. `crates/finalized-history-query/src/store/traits.rs`
@@ -103,23 +103,23 @@ Look for:
 ## Pass 5: Ingest orchestration
 
 28. `crates/finalized-history-query/src/ingest/engine.rs`
-    Read this for the ingest orchestrator: sequence and parent checks, authoritative artifact persistence, eager compaction, and indexed-head publication.
+    Read this for the ingest orchestrator: publication ownership, cleanup-first recovery, authoritative artifact persistence, eager compaction, and publication-state CAS.
 29. `crates/finalized-history-query/src/recovery/startup.rs`
-    Read this for the current startup view, which is intentionally small: load indexed head, derive `next_log_id` from `BlockMeta`, and report warmed streams.
+    Read this for the current startup view: load `publication_state`, clean any unpublished suffix, repair sealed open-page markers, derive `next_log_id`, and report warmed streams.
 
 Look for:
 
 - finalized sequence and parent validation
 - log-family delegation from ingest
-- indexed-head persistence and derived `next_log_id`
+- publication-state persistence and derived `next_log_id`
 - startup recovery state views
 
 ## Pass 6: End-to-end behavior
 
 30. `crates/finalized-history-query/tests/finalized_index.rs`
-    Read this for the main end-to-end contract: immutable-frontier publication, pagination metadata, boundary compaction, validation errors, and indexed-head CAS behavior.
+    Read this for the main end-to-end contract: immutable-frontier publication, publication-state ownership/visibility, pagination metadata, and boundary compaction.
 31. `crates/finalized-history-query/tests/crash_injection_matrix.rs`
-    Read this for crash-retry behavior around authoritative artifact publication and indexed-head publication.
+    Read this for crash-retry behavior around authoritative artifact publication and publication-state CAS.
 32. `crates/finalized-history-query/tests/differential_and_gc.rs`
     Read this for the naive differential query check plus the basic recovery and legacy-GC cleanup behaviors.
 

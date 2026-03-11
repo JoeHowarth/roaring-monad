@@ -23,6 +23,7 @@ use crate::logs::index_spec::{
 use crate::logs::materialize::LogMaterializer;
 use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
+use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::chunk::decode_chunk;
 
@@ -58,7 +59,7 @@ impl LogsQueryEngine {
         }
     }
 
-    pub async fn query_logs<M: MetaStore, B: BlobStore>(
+    pub async fn query_logs<M: MetaStore + PublicationStore, B: BlobStore>(
         &self,
         meta_store: &M,
         blob_store: &B,

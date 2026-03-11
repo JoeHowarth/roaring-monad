@@ -11,24 +11,25 @@ use crate::gc::worker::{GcStats, GcWorker};
 use crate::ingest::engine::{IngestEngine, MaintenanceStats};
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
+use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
-pub struct FinalizedHistoryService<M: MetaStore, B: BlobStore> {
+pub struct FinalizedHistoryService<M: MetaStore + PublicationStore, B: BlobStore> {
     pub ingest: IngestEngine<M, B>,
     query: LogsQueryEngine,
-    writer_epoch: u64,
+    writer_id: u64,
     config: Config,
     state: Arc<RuntimeState>,
 }
 
-impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
-    pub fn new(config: Config, meta_store: M, blob_store: B, writer_epoch: u64) -> Self {
+impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryService<M, B> {
+    pub fn new(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
         let query = LogsQueryEngine::from_config(&config);
         let ingest = IngestEngine::new(config.clone(), meta_store, blob_store);
         Self {
             ingest,
             query,
-            writer_epoch,
+            writer_id,
             config,
             state: Arc::new(RuntimeState::default()),
         }
@@ -76,10 +77,7 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let result = self
-            .ingest
-            .run_periodic_maintenance(self.writer_epoch)
-            .await;
+        let result = self.ingest.run_periodic_maintenance(self.writer_id).await;
         self.update_backend_state(&result);
         result
     }
@@ -137,7 +135,7 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
             &self.config,
         );
         let result = worker
-            .prune_block_hash_index_below(min_block_num, self.writer_epoch)
+            .prune_block_hash_index_below(min_block_num, self.writer_id)
             .await;
         self.update_backend_state(&result);
         result
@@ -156,7 +154,9 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryService<M, B> {
     }
 }
 
-impl<M: MetaStore, B: BlobStore> FinalizedHistoryWriter for FinalizedHistoryService<M, B> {
+impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryWriter
+    for FinalizedHistoryService<M, B>
+{
     async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
         if self.state.degraded.load(Ordering::Relaxed) {
             return Err(Error::Degraded(self.state.reason()));
@@ -167,7 +167,7 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryWriter for FinalizedHistoryServ
 
         let result = self
             .ingest
-            .ingest_finalized_block(&block, self.writer_epoch)
+            .ingest_finalized_block(&block, self.writer_id)
             .await;
         self.update_backend_state(&result);
         if let Err(Error::InvalidParent | Error::FinalityViolation) = &result {
@@ -178,7 +178,9 @@ impl<M: MetaStore, B: BlobStore> FinalizedHistoryWriter for FinalizedHistoryServ
     }
 }
 
-impl<M: MetaStore, B: BlobStore> FinalizedLogQueries for FinalizedHistoryService<M, B> {
+impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedLogQueries
+    for FinalizedHistoryService<M, B>
+{
     async fn query_logs(
         &self,
         request: QueryLogsRequest,

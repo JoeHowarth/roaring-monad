@@ -2,6 +2,7 @@ use crate::core::page::QueryOrder;
 use crate::core::refs::BlockRef;
 use crate::core::state::{load_block_identity, load_finalized_head_state};
 use crate::error::{Error, Result};
+use crate::store::publication::PublicationStore;
 use crate::store::traits::MetaStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +34,7 @@ impl ResolvedBlockRange {
 pub struct RangeResolver;
 
 impl RangeResolver {
-    pub async fn resolve<M: MetaStore>(
+    pub async fn resolve<M: MetaStore + PublicationStore>(
         &self,
         meta_store: &M,
         from_block: u64,

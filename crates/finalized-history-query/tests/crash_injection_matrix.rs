@@ -7,13 +7,14 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::INDEXED_HEAD_KEY;
-use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::domain::keys::PUBLICATION_STATE_KEY;
+use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
 use futures::executor::block_on;
 
@@ -21,6 +22,7 @@ use futures::executor::block_on;
 enum FaultOp {
     MetaPut,
     BlobPut,
+    PublicationCas,
 }
 
 #[derive(Clone)]
@@ -75,7 +77,9 @@ impl FaultInjector {
 fn matches_op(a: FaultOp, b: FaultOp) -> bool {
     matches!(
         (a, b),
-        (FaultOp::MetaPut, FaultOp::MetaPut) | (FaultOp::BlobPut, FaultOp::BlobPut)
+        (FaultOp::MetaPut, FaultOp::MetaPut)
+            | (FaultOp::BlobPut, FaultOp::BlobPut)
+            | (FaultOp::PublicationCas, FaultOp::PublicationCas)
     )
 }
 
@@ -115,6 +119,31 @@ impl MetaStore for FaultyMetaStore {
     }
 }
 
+impl PublicationStore for FaultyMetaStore {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        self.inner.load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        self.injector
+            .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
+        self.inner.create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        self.injector
+            .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
+        self.inner.compare_and_set(expected, next).await
+    }
+}
+
 #[derive(Clone)]
 struct FaultyBlobStore {
     inner: Arc<InMemoryBlobStore>,
@@ -125,6 +154,11 @@ impl BlobStore for FaultyBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         self.injector.maybe_fail(FaultOp::BlobPut, key)?;
         self.inner.put_blob(key, value).await
+    }
+
+    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome> {
+        self.injector.maybe_fail(FaultOp::BlobPut, key)?;
+        self.inner.put_blob_if_absent(key, value).await
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
@@ -258,7 +292,11 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
                 FaultOp::BlobPut,
                 b"stream_frag_blob/".as_slice(),
             ),
-            ("indexed_head_put", FaultOp::MetaPut, INDEXED_HEAD_KEY),
+            (
+                "publication_state_cas",
+                FaultOp::PublicationCas,
+                PUBLICATION_STATE_KEY,
+            ),
         ];
 
         for (label, op, prefix) in cases {
@@ -291,7 +329,7 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
 }
 
 #[test]
-fn failed_indexed_head_publish_keeps_partial_artifacts_invisible_until_retry() {
+fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
     block_on(async {
         let injector = Arc::new(FaultInjector::default());
         let meta = Arc::new(InMemoryMetaStore::default());
@@ -303,11 +341,11 @@ fn failed_indexed_head_publish_keeps_partial_artifacts_invisible_until_retry() {
             vec![mk_log(7, 10, 20, 1, 0, 0), mk_log(8, 11, 21, 1, 0, 1)],
         );
 
-        injector.arm(FaultOp::MetaPut, INDEXED_HEAD_KEY, 1);
+        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 2);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
-            .expect_err("indexed head publish should fail");
+            .expect_err("publication CAS should fail");
         assert!(matches!(err, Error::Backend(_)));
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
         assert!(query_range(&svc, 1, 1).await.is_empty());

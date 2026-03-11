@@ -6,7 +6,7 @@ use bytes::Bytes;
 use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
-use crate::store::traits::{BlobStore, Page};
+use crate::store::traits::{BlobStore, CreateOutcome, Page};
 
 #[derive(Clone)]
 pub struct MinioBlobStore {
@@ -97,6 +97,12 @@ impl BlobStore for MinioBlobStore {
             Ok(())
         })
         .await
+    }
+
+    async fn put_blob_if_absent(&self, _key: &[u8], _value: Bytes) -> Result<CreateOutcome> {
+        Err(Error::Unsupported(
+            "minio put_blob_if_absent is not implemented",
+        ))
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {

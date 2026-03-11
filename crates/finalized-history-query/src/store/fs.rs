@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
 
+use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
+use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
+use crate::store::publication::{CasOutcome, PublicationStore};
 use crate::store::traits::{
-    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
 
 #[derive(Debug, Clone)]
@@ -38,11 +41,80 @@ impl FsMetaStore {
         p
     }
 
+    fn publication_state_path(&self) -> PathBuf {
+        self.root.join("meta").join("publication_state")
+    }
+
+    fn publication_state_version_path(&self) -> PathBuf {
+        self.root.join("meta").join("publication_state.ver")
+    }
+
     fn validate_fence(&self, fence: FenceToken) -> Result<()> {
         if fence.0 < self.min_epoch {
             return Err(Error::LeaseLost);
         }
         Ok(())
+    }
+}
+
+impl PublicationStore for FsMetaStore {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        let path = self.publication_state_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(decode_publication_state(&read_file_bytes(&path)?)?))
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let path = self.publication_state_path();
+        let version_path = self.publication_state_version_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Backend(format!("create fs publication dir: {e}")))?;
+        }
+        match write_file_bytes_create_new(&path, &encode_publication_state(initial)) {
+            Ok(()) => {
+                write_file_bytes(&version_path, &1u64.to_be_bytes())?;
+                Ok(CasOutcome::Applied(initial.clone()))
+            }
+            Err(Error::Backend(message)) if message.contains("exists") => Ok(CasOutcome::Failed {
+                current: self.load().await?,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let path = self.publication_state_path();
+        if !path.exists() {
+            return Ok(CasOutcome::Failed { current: None });
+        }
+        let current = decode_publication_state(&read_file_bytes(&path)?)?;
+        if current != *expected {
+            return Ok(CasOutcome::Failed {
+                current: Some(current),
+            });
+        }
+
+        write_file_bytes(&path, &encode_publication_state(next))?;
+        let version_path = self.publication_state_version_path();
+        let next_version = if version_path.exists() {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&read_file_bytes(&version_path)?);
+            u64::from_be_bytes(bytes).saturating_add(1)
+        } else {
+            1
+        };
+        write_file_bytes(&version_path, &next_version.to_be_bytes())?;
+        Ok(CasOutcome::Applied(next.clone()))
     }
 }
 
@@ -207,6 +279,21 @@ impl BlobStore for FsBlobStore {
         write_file_bytes(&path, &value)
     }
 
+    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome> {
+        let path = self.key_path(key);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Backend(format!("create fs blob group dir: {e}")))?;
+        }
+        match write_file_bytes_create_new(&path, &value) {
+            Ok(()) => Ok(CreateOutcome::Created),
+            Err(Error::Backend(message)) if message.contains("exists") => {
+                Ok(CreateOutcome::AlreadyExists)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let p = self.key_path(key);
         if !p.exists() {
@@ -289,6 +376,18 @@ fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     set_no_cache(&file)?;
     file.write_all(bytes)
         .map_err(|e| Error::Backend(format!("fs write: {e}")))?;
+    Ok(())
+}
+
+fn write_file_bytes_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| Error::Backend(format!("fs create_new open: {e}")))?;
+    set_no_cache(&file)?;
+    file.write_all(bytes)
+        .map_err(|e| Error::Backend(format!("fs create_new write: {e}")))?;
     Ok(())
 }
 
