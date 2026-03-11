@@ -18,7 +18,7 @@ That means:
 
 - `writer_lease` is written as advisory metadata
 - `indexed_head` publication does not verify that the caller still owns the lease it wrote
-- the design goal in `docs/plans/immutable-frontier-index-architecture.md` is not fully implemented
+- the design goal in `docs/plans/completed/immutable-frontier-index-architecture.md` is not fully implemented
 
 ## Why This Matters
 

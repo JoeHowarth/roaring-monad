@@ -348,7 +348,7 @@ For derived decoded chunks, also record:
 
 This document complements:
 
-- `docs/plans/finalized-history-query-shard-streaming-query-architecture.md`
+- `docs/plans/completed/finalized-history-query-shard-streaming-query-architecture.md`
 
 The shard-streaming plan defines executor shape and pagination behavior.
 
