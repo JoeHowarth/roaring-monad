@@ -136,27 +136,95 @@ Optional future fields:
 
 The first implementation should not require timed fields for correctness.
 
-### Artifact records
+### Artifact taxonomy
 
-The existing artifact layout remains authoritative below the publication boundary:
+The existing artifact layout falls into three different classes. The protocol and storage
+requirements are different for each class.
+
+#### Class A: block-scoped authoritative artifacts
+
+These artifacts are keyed by block number or by `(stream, page, block_num)` and are part of
+the authoritative published history for the corresponding blocks.
 
 - `block_meta/<block_num>`
 - `block_hash_to_num/<block_hash>`
 - `block_log_headers/<block_num>`
 - `block_logs/<block_num>`
 - `log_dir_frag/*`
-- `log_dir_sub/*`
-- optional `log_dir/*`
 - `stream_frag_meta/*`
 - `stream_frag_blob/*`
-- `stream_page_meta/*`
-- `stream_page_blob/*`
 
-Artifacts for blocks above `publication_state.indexed_finalized_head` are:
+Required properties:
+
+- deterministic from finalized block input
+- immutable once successfully written
+- safe to exist above the published head without becoming visible
+
+Artifacts in this class for blocks above `publication_state.indexed_finalized_head` are:
 
 - allowed to exist
 - not reader-visible committed history
-- safe to overwrite deterministically during retry or takeover replay
+- never trusted as committed state until the head advances past them
+
+For takeover and retry:
+
+- a writer may rewrite or reuse only after validating against authoritative finalized input
+- a writer must never rely on unpublished artifacts from a prior owner as implicitly trusted state
+
+#### Class B: shared summary artifacts
+
+These artifacts are acceleration structures written to shared keys that may summarize many blocks:
+
+- `log_dir_sub/<sub_bucket>`
+- optional `log_dir/<bucket>`
+- `stream_page_meta/<stream>/<page>`
+- `stream_page_blob/<stream>/<page>`
+
+Required properties:
+
+- derived only from already published Class A artifacts below the current head
+- not required for correctness because readers can fall back to authoritative fragments
+- immutable once created
+- safe to be missing
+
+These artifacts are not part of the unpublished "suffix above head" model. They must not be
+treated as rewritable speculative state. Instead:
+
+- they are created only after the source blocks they summarize are already published
+- they are written with create-if-absent semantics
+- if creation races, the first complete writer wins and later writers must treat the key as sealed
+
+This distinction is required because shared summary keys are reader-preferred when present and do
+not fit the simple "unpublished block suffix" category.
+
+#### Class C: control-plane state
+
+These records define ownership and visibility:
+
+- `publication_state`
+
+Optional implementation-local auxiliary state may exist, but only `publication_state` is allowed
+to determine published visibility.
+
+### Artifact mutability rules
+
+To make stale-writer behavior actually safe, the storage contract must distinguish metadata writes
+from blob writes.
+
+For metadata keys:
+
+- block-scoped authoritative metadata may use ordinary fenced writes or create-if-absent where appropriate
+- shared summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
+
+For blob/object keys:
+
+- block-scoped authoritative blobs must use conditional create (`if absent`)
+- shared summary blobs must use conditional create (`if absent`)
+
+The architecture must not assume that stale blob overwrites are harmless. A stale writer that can
+overwrite an already-visible blob can corrupt published state even if publication ownership is
+correctly protected. Object-store conditional create is therefore part of the required safety model,
+not an optional optimization.
 
 ## Ownership Token
 
@@ -258,6 +326,25 @@ If a writer crashes after publish succeeds but before receiving acknowledgment:
 
 This makes publish idempotent with respect to ambiguous client-visible completion.
 
+### Summary creation protocol
+
+Shared summary creation is intentionally outside the correctness-critical publish step.
+
+Required sequence:
+
+1. write and publish Class A authoritative artifacts
+2. after the head has advanced, derive any newly sealed summaries from published Class A artifacts
+3. write the shared summary keys with create-if-absent semantics
+
+Consequences:
+
+- shared summaries may lag without affecting correctness
+- a failed or stale summary writer cannot poison publication of new blocks
+- readers may prefer summaries when present and fall back to authoritative fragments otherwise
+
+This is required because create-if-absent on a shared summary key is only safe if the first writer
+cannot win with an incomplete source set.
+
 ## Reader Semantics
 
 Readers must use only:
@@ -294,8 +381,9 @@ Recommended rule:
 Consequences:
 
 - correctness does not depend on the fence update completing first
-- until the fence is raised, a stale writer may still waste work by writing unpublished artifacts
-- that wasted work is harmless because stale writers cannot publish without winning the `publication_state` CAS
+- until the fence is raised, a stale writer may still attempt some metadata writes
+- blob/object writes still require conditional-create protection independently of metadata fencing
+- stale writers may still waste work, but must be unable to mutate already-created immutable objects
 
 This separation keeps the protocol principled:
 
@@ -348,6 +436,154 @@ Why this is the right level:
 - the ingest protocol does not need a broader correctness primitive
 
 If the implementation needs richer error classification, add typed failure reasons above this trait rather than widening the storage primitive itself.
+
+## Write Frequency Characterization
+
+This section characterizes the current write surface using the expected operating point and the
+stated worst-case sustained throughput.
+
+Assumptions:
+
+- block time: `400 ms`
+- normal expected throughput: `1,000 tx/s` with `1` log per transaction
+- peak sustained throughput: `10,000 tx/s` with `10` logs per transaction
+- therefore:
+  - normal: `1,000 logs/s`
+  - peak: `100,000 logs/s`
+- current constants:
+  - `LOG_DIRECTORY_SUB_BUCKET_SIZE = 10,000`
+  - `LOG_DIRECTORY_BUCKET_SIZE = 1,000,000`
+  - `STREAM_PAGE_LOCAL_ID_SPAN = 4,096`
+  - shard size = `2^24 = 16,777,216` logs
+
+Derived per-block rates:
+
+- normal:
+  - `400 tx/block`
+  - `400 logs/block`
+- peak:
+  - `4,000 tx/block`
+  - `40,000 logs/block`
+
+### Control-plane writes
+
+- `publication_state`
+  - frequency:
+    - steady state: `2.5/s` if publishing every block
+    - backfill: operator-chosen batch cadence
+  - required write type:
+    - CAS/LWT
+  - reason:
+    - this is the ownership and visibility gate
+
+### Block-scoped authoritative metadata
+
+- `block_meta/<block_num>`
+- `block_hash_to_num/<block_hash>`
+- `block_log_headers/<block_num>`
+- `log_dir_frag/<sub_bucket>/<block_num>`
+- `stream_frag_meta/<stream>/<page>/<block_num>`
+
+Frequency:
+
+- `block_meta` / `block_hash_to_num`: `1` per block
+- `block_log_headers`: `0` or `1` per block depending on log count
+- `log_dir_frag`: about `1` per covered 10k-log sub-bucket, minimum `1` per block today
+- `stream_frag_meta`: once per touched `(stream, page, block)` pair
+
+Required write type:
+
+- simple writer-side fenced metadata write by default
+- create-if-absent is acceptable for block-qualified records if replay behavior stays deterministic
+
+Reason:
+
+- these keys are block-qualified and do not require shared-key arbitration in the hot path
+
+### Block-scoped authoritative blobs
+
+- `block_logs/<block_num>`
+- `stream_frag_blob/<stream>/<page>/<block_num>`
+
+Frequency:
+
+- `block_logs`: `0` or `1` per block
+- `stream_frag_blob`: once per touched `(stream, page, block)` pair
+
+Required write type:
+
+- object-store conditional create (`if absent`)
+
+Reason:
+
+- stale overwrites of visible immutable objects are not safe
+
+### Shared summary metadata
+
+- `log_dir_sub/<sub_bucket>`
+- optional `log_dir/<bucket>`
+- `stream_page_meta/<stream>/<page>`
+
+Frequency:
+
+- `log_dir_sub`
+  - normal: `1 every 10s` = `0.1/s`
+  - peak: `10/s`
+- `log_dir`
+  - normal: `1 every 1000s` = about `0.001/s`
+  - peak: `1 every 10s` = `0.1/s`
+- `stream_page_meta`
+  - one write per sealed stream page
+  - worst-case if a single `(stream, shard)` receives all matching logs:
+    - normal: `1000 / 4096 = 0.244/s`
+    - peak: `100000 / 4096 = 24.4/s`
+  - actual rate depends heavily on skew and stream fanout
+
+Required write type:
+
+- create-if-absent / CAS/LWT
+
+Reason:
+
+- these are shared keys and must become immutable once first created from a complete published source set
+
+Performance guidance:
+
+- `log_dir_sub` and `log_dir` are comfortably in CAS/LWT territory even at peak
+- `stream_page_meta` is the only summary key family that can become materially frequent under hot-stream workloads
+- even there, the write rate remains far below fragment write volume, and the operation is outside the correctness-critical publish path
+
+### Shared summary blobs
+
+- `stream_page_blob/<stream>/<page>`
+
+Frequency:
+
+- matches `stream_page_meta`
+
+Required write type:
+
+- object-store conditional create (`if absent`)
+
+Reason:
+
+- this is a shared reader-visible immutable object
+
+### Shard progression and sealing pressure
+
+One shard contains `16,777,216` logs.
+
+- normal:
+  - one shard fills in about `4.66 hours`
+- peak:
+  - one shard fills in about `2.8 minutes`
+
+This matters because the peak regime increases the rate of page and shard sealing substantially,
+especially for hot streams. It does not change the conclusion that:
+
+- publication CAS belongs only on the control plane
+- shared summary keys should be immutable post-publication acceleration artifacts
+- block-scoped hot-path writes should avoid metadata CAS/LWT unless block-qualified create-if-absent is specifically needed
 
 ## Scylla Mapping
 
@@ -412,9 +648,22 @@ A supported deployment profile must ensure:
 
 For the expected backends:
 
-- Scylla metadata is strongly consistent enough for the publication row itself
-- DynamoDB is strongly consistent for the item write itself
-- any paired blob/object store used for artifacts must provide the necessary read-after-write visibility for published keys
+- Scylla:
+  - `publication_state` and metadata CAS operations must use LWT
+  - readers must use normal Scylla reads against already-committed metadata rows
+- DynamoDB:
+  - `publication_state` and metadata CAS operations must use conditional single-item writes
+  - readers must use read modes that guarantee visibility of the committed item state they depend on
+- object/blob store:
+  - immutable object creation must support conditional create (`if absent`)
+  - the deployment must provide read-after-write visibility for newly created objects before the corresponding head advance is considered safe to publish
+
+Required publication ordering:
+
+1. write authoritative Class A metadata and blobs
+2. ensure those writes have the backend visibility required by the deployment profile
+3. advance `publication_state`
+4. only after that, optionally create Class B shared summaries
 
 If a deployment cannot provide that visibility contract, then:
 
@@ -481,8 +730,9 @@ Required outcome:
 
 Required outcome:
 
-- old writer may still write unpublished artifacts
+- old writer may still attempt some unfenced metadata writes or conditional-create object writes
 - old writer still cannot publish
+- already-created immutable objects remain protected from overwrite
 - correctness remains intact
 
 ## Interaction With `StrictCas`
