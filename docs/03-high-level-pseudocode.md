@@ -77,17 +77,21 @@ class LogBlockWindow:
 
 ```python
 meta_store:
-    "meta/state" -> MetaState
+    "indexed_head" -> IndexedHead
+    "writer_lease" -> WriterLease
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
-    "log_dir/<bucket_start_log_id>" -> LogDirectoryBucket covering all block ranges that touch the bucket
+    "log_dir_frag/<sub_bucket_start>/<block_num>" -> LogDirFragment
+    "log_dir_sub/<sub_bucket_start>" -> LogDirectoryBucket
+    "log_dir/<bucket_start_log_id>" -> optional compacted LogDirectoryBucket
     "block_log_headers/<block_num>" -> BlockLogHeader
-    "manifests/<stream_id>" -> Manifest
-    "tails/<stream_id>" -> roaring_bitmap
+    "stream_frag_meta/<stream_id>/<page_start>/<block_num>" -> StreamBitmapMeta
+    "stream_page_meta/<stream_id>/<page_start>" -> StreamBitmapMeta
 
 blob_store:
     "block_logs/<block_num>" -> concatenated encoded logs
-    "chunks/<stream_id>/<chunk_seq>" -> roaring_chunk_bytes
+    "stream_frag_blob/<stream_id>/<page_start>/<block_num>" -> roaring_bitmap_blob
+    "stream_page_blob/<stream_id>/<page_start>" -> roaring_bitmap_blob
 ```
 
 The current code treats those bytes through shared and family-local helpers:
@@ -182,7 +186,7 @@ async def execute(filter, id_window, take):
     for shard in overlapping_shards(id_window):
         local_range = local_range_for_shard(id_window, shard)
         clauses = await prepare_shard_clauses(filter, shard, local_range)
-        clauses.sort_by(sealed_estimate)
+        clauses.sort_by(estimated_count)
 
         shard_accumulator = None
         for clause in clauses:
@@ -230,30 +234,29 @@ Queries without at least one indexed address/topic clause are rejected at the bo
 
 ```python
 async def ingest_finalized_block(block, writer_epoch):
-    shared_state = load_meta_state()
-    validate_block_sequence_and_parent(block, shared_state)
+    indexed_head = load_indexed_head()
+    validate_block_sequence_and_parent(block, indexed_head)
 
-    first_log_id = shared_state.next_log_id
+    first_log_id = derive_next_log_id_from_block_meta(indexed_head)
+    next_log_id = first_log_id + len(block.logs)
 
+    await store_writer_lease(owner_id=writer_epoch, epoch=writer_epoch)
     await logs.persist_log_artifacts(block.logs, first_log_id)
     await logs.persist_log_block_metadata(block, first_log_id)
+    await logs.persist_log_directory_fragments(block, first_log_id)
+    touched_pages = await logs.persist_stream_fragments(block, first_log_id)
 
-    appends = logs.collect_stream_appends(block, first_log_id)
-    await streams.writer.apply(appends)
+    await logs.compact_sealed_directory_boundaries(first_log_id, next_log_id)
+    await logs.compact_sealed_stream_pages(touched_pages, next_log_id)
 
-    next_state = MetaState(
-        indexed_finalized_head=block.block_num,
-        next_log_id=first_log_id + len(block.logs),
-        writer_epoch=writer_epoch,
-    )
-    await store_meta_state(next_state)
+    await store_indexed_head(block.block_num)
 ```
 
 Important boundary:
 
 - `ingest/engine.rs` validates finalized sequencing and orchestrates work
-- `logs/ingest.rs` owns log-family write layout and stream fanout
-- `streams/writer.rs` owns append / seal mechanics
+- `logs/ingest.rs` owns immutable directory/stream fragment publication plus eager compaction
+- `indexed_head` is published last and is the only reader-visible watermark
 
 ## Current Non-Goals
 

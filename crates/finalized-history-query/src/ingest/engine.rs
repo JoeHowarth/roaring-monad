@@ -1,26 +1,22 @@
-use std::collections::HashMap;
-
-use futures::stream::{FuturesUnordered, StreamExt};
-
-use crate::codec::finalized_state::{decode_meta_state, encode_meta_state};
+use crate::codec::finalized_state::{
+    decode_indexed_head, encode_indexed_head, encode_writer_lease,
+};
 use crate::config::{Config, IngestMode};
-use crate::core::state::load_block_identity;
-use crate::domain::keys::{META_STATE_KEY, chunk_blob_key};
-use crate::domain::types::{Block, IngestOutcome, MetaState};
+use crate::core::state::{derive_next_log_id, load_block_identity};
+use crate::domain::keys::{INDEXED_HEAD_KEY, WRITER_LEASE_KEY, chunk_blob_key};
+use crate::domain::types::{Block, IndexedHead, IngestOutcome, WriterLease};
 use crate::error::{Error, Result};
 use crate::logs::ingest::{
-    collect_stream_appends, persist_log_artifacts, persist_log_block_metadata,
+    compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
+    persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
 };
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use crate::streams::chunk::{ChunkBlob, decode_chunk};
-use crate::streams::keys::parse_stream_from_tail_key;
-use crate::streams::writer::{CachedStreamState, StreamWriter};
 
 pub struct IngestEngine<M: MetaStore, B: BlobStore> {
     pub config: Config,
     pub meta_store: M,
     pub blob_store: B,
-    stream_state_cache: std::sync::RwLock<HashMap<String, CachedStreamState>>,
 }
 
 impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
@@ -29,13 +25,12 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             config,
             meta_store,
             blob_store,
-            stream_state_cache: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
     pub async fn ingest_finalized_block(&self, block: &Block, epoch: u64) -> Result<IngestOutcome> {
-        let (state, state_version) = self.load_state().await?;
-        let expected = state.indexed_finalized_head + 1;
+        let (head, head_version) = self.load_indexed_head().await?;
+        let expected = head.indexed_finalized_head + 1;
         if block.block_num != expected {
             return Err(Error::InvalidSequence {
                 expected,
@@ -44,10 +39,10 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         }
 
         if block.block_num > 0 {
-            let expected_parent = if state.indexed_finalized_head == 0 {
+            let expected_parent = if head.indexed_finalized_head == 0 {
                 [0u8; 32]
             } else {
-                load_block_identity(&self.meta_store, state.indexed_finalized_head)
+                load_block_identity(&self.meta_store, head.indexed_finalized_head)
                     .await?
                     .ok_or(Error::NotFound)?
                     .hash
@@ -57,7 +52,22 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             }
         }
 
-        let first_log_id = state.next_log_id;
+        let first_log_id =
+            derive_next_log_id(&self.meta_store, head.indexed_finalized_head).await?;
+        let next_log_id = first_log_id + block.logs.len() as u64;
+
+        self.meta_store
+            .put(
+                WRITER_LEASE_KEY,
+                encode_writer_lease(&WriterLease {
+                    owner_id: epoch,
+                    epoch,
+                }),
+                PutCond::Any,
+                FenceToken(epoch),
+            )
+            .await?;
+
         persist_log_artifacts(
             &self.config,
             &self.meta_store,
@@ -69,38 +79,47 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         )
         .await?;
         persist_log_block_metadata(&self.meta_store, block, first_log_id, epoch).await?;
-
-        let appends = collect_stream_appends(block, first_log_id);
-        let stream_writer = StreamWriter::new(
-            &self.config,
+        persist_log_directory_fragments(
+            &self.meta_store,
+            block.block_num,
+            first_log_id,
+            block.logs.len() as u32,
+            epoch,
+        )
+        .await?;
+        let touched_pages = persist_stream_fragments(
             &self.meta_store,
             &self.blob_store,
-            &self.stream_state_cache,
-        );
-        let mut appends_in_flight = FuturesUnordered::new();
-        for (stream_id, values) in appends {
-            let writer = stream_writer;
-            appends_in_flight
-                .push(async move { writer.apply_appends(&stream_id, &values, epoch).await });
-            if appends_in_flight.len() >= self.config.stream_append_concurrency.max(1) {
-                match appends_in_flight.next().await {
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => return Err(e),
-                    None => break,
-                }
-            }
-        }
-        while let Some(res) = appends_in_flight.next().await {
-            let _ = res?;
-        }
+            block,
+            first_log_id,
+            epoch,
+        )
+        .await?;
+        compact_sealed_directory(
+            &self.meta_store,
+            first_log_id,
+            block.logs.len() as u32,
+            next_log_id,
+            epoch,
+        )
+        .await?;
+        compact_sealed_stream_pages(
+            &self.meta_store,
+            &self.blob_store,
+            &touched_pages,
+            next_log_id,
+            epoch,
+        )
+        .await?;
 
-        let next = MetaState {
-            indexed_finalized_head: block.block_num,
-            next_log_id: first_log_id + block.logs.len() as u64,
-            writer_epoch: epoch,
-        };
-
-        self.store_state(&next, state_version, epoch).await?;
+        self.store_indexed_head(
+            &IndexedHead {
+                indexed_finalized_head: block.block_num,
+            },
+            head_version,
+            epoch,
+        )
+        .await?;
 
         Ok(IngestOutcome {
             indexed_finalized_head: block.block_num,
@@ -108,41 +127,20 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
         })
     }
 
-    pub async fn run_periodic_maintenance(&self, epoch: u64) -> Result<MaintenanceStats> {
-        let stream_writer = StreamWriter::new(
-            &self.config,
-            &self.meta_store,
-            &self.blob_store,
-            &self.stream_state_cache,
-        );
-        stream_writer.clear_cache();
-        let mut stats = MaintenanceStats::default();
-        let page = self
-            .meta_store
-            .list_prefix(b"tails/", None, usize::MAX)
-            .await?;
-        for key in page.keys {
-            if let Some(stream) = parse_stream_from_tail_key(&key) {
-                let sealed = stream_writer.apply_appends(&stream, &[], epoch).await?;
-                if sealed {
-                    stats.sealed_streams = stats.sealed_streams.saturating_add(1);
-                }
-                stats.flushed_streams = stats.flushed_streams.saturating_add(1);
-            }
-        }
-        Ok(stats)
+    pub async fn run_periodic_maintenance(&self, _epoch: u64) -> Result<MaintenanceStats> {
+        Ok(MaintenanceStats::default())
     }
 
-    async fn load_state(&self) -> Result<(MetaState, Option<u64>)> {
-        match self.meta_store.get(META_STATE_KEY).await? {
-            Some(rec) => Ok((decode_meta_state(&rec.value)?, Some(rec.version))),
-            None => Ok((MetaState::default(), None)),
+    async fn load_indexed_head(&self) -> Result<(IndexedHead, Option<u64>)> {
+        match self.meta_store.get(INDEXED_HEAD_KEY).await? {
+            Some(rec) => Ok((decode_indexed_head(&rec.value)?, Some(rec.version))),
+            None => Ok((IndexedHead::default(), None)),
         }
     }
 
-    async fn store_state(
+    async fn store_indexed_head(
         &self,
-        next: &MetaState,
+        next: &IndexedHead,
         current_version: Option<u64>,
         epoch: u64,
     ) -> Result<()> {
@@ -156,16 +154,16 @@ impl<M: MetaStore, B: BlobStore> IngestEngine<M, B> {
             ),
             IngestMode::SingleWriterFast => (PutCond::Any, false),
         };
-        let r = self
+        let result = self
             .meta_store
             .put(
-                META_STATE_KEY,
-                encode_meta_state(next),
+                INDEXED_HEAD_KEY,
+                encode_indexed_head(next),
                 cond,
                 FenceToken(epoch),
             )
             .await?;
-        if strict_applied_check && !r.applied {
+        if strict_applied_check && !result.applied {
             return Err(Error::CasConflict);
         }
         Ok(())

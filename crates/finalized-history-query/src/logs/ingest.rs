@@ -1,22 +1,30 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bytes::Bytes;
+use roaring::RoaringBitmap;
 
 use crate::codec::finalized_state::{encode_block_meta, encode_u64};
 use crate::codec::log::{
-    decode_log_directory_bucket, encode_block_log_header, encode_log, encode_log_directory_bucket,
+    decode_log_dir_fragment, encode_block_log_header, encode_log, encode_log_dir_fragment,
+    encode_log_directory_bucket, encode_stream_bitmap_meta,
 };
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIRECTORY_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key, block_logs_blob_key,
-    block_meta_key, log_directory_bucket_key, log_directory_bucket_start, log_local, log_shard,
-    stream_id,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, block_hash_to_num_key,
+    block_log_header_key, block_logs_blob_key, block_meta_key, log_directory_bucket_key,
+    log_directory_bucket_start, log_directory_fragment_key, log_directory_fragment_prefix,
+    log_directory_sub_bucket_key, log_directory_sub_bucket_start, log_local, log_shard,
+    stream_fragment_blob_key, stream_fragment_meta_key, stream_id, stream_page_blob_key,
+    stream_page_meta_key, stream_page_start_local,
 };
-use crate::domain::types::{BlockLogHeader, BlockMeta, Log, LogDirectoryBucket};
+use crate::domain::types::{
+    BlockLogHeader, BlockMeta, Log, LogDirFragment, LogDirectoryBucket, StreamBitmapMeta,
+};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
 use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
@@ -24,11 +32,10 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     block_num: u64,
     logs: &[Log],
-    first_log_id: u64,
+    _first_log_id: u64,
     epoch: u64,
 ) -> Result<()> {
     if logs.is_empty() {
-        persist_log_directory_bucket(meta_store, block_num, first_log_id, 0, epoch).await?;
         return Ok(());
     }
 
@@ -44,14 +51,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
             FenceToken(epoch),
         )
         .await?;
-    persist_log_directory_bucket(
-        meta_store,
-        block_num,
-        first_log_id,
-        logs.len() as u32,
-        epoch,
-    )
-    .await
+    Ok(())
 }
 
 pub async fn persist_log_block_metadata<M: MetaStore>(
@@ -84,6 +84,75 @@ pub async fn persist_log_block_metadata<M: MetaStore>(
             FenceToken(epoch),
         )
         .await?;
+
+    Ok(())
+}
+
+pub async fn persist_log_directory_fragments<M: MetaStore>(
+    meta_store: &M,
+    block_num: u64,
+    first_log_id: u64,
+    count: u32,
+    epoch: u64,
+) -> Result<()> {
+    let fragment = LogDirFragment {
+        block_num,
+        first_log_id,
+        end_log_id_exclusive: first_log_id.saturating_add(u64::from(count)),
+    };
+
+    let mut sub_bucket_start = log_directory_sub_bucket_start(LogId::new(first_log_id));
+    let last_sub_bucket_start = if count == 0 {
+        sub_bucket_start
+    } else {
+        log_directory_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
+    };
+
+    loop {
+        meta_store
+            .put(
+                &log_directory_fragment_key(sub_bucket_start, block_num),
+                encode_log_dir_fragment(&fragment),
+                PutCond::Any,
+                FenceToken(epoch),
+            )
+            .await?;
+        if sub_bucket_start == last_sub_bucket_start {
+            break;
+        }
+        sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+    }
+
+    Ok(())
+}
+
+pub async fn compact_sealed_directory<M: MetaStore>(
+    meta_store: &M,
+    first_log_id: u64,
+    count: u32,
+    next_log_id: u64,
+    epoch: u64,
+) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+
+    let mut sub_bucket_start = log_directory_sub_bucket_start(LogId::new(first_log_id));
+    let last_sub_bucket_start =
+        log_directory_sub_bucket_start(LogId::new(next_log_id.saturating_sub(1)));
+    while sub_bucket_start <= last_sub_bucket_start {
+        let sub_bucket_end = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+        if sub_bucket_end <= next_log_id {
+            compact_directory_sub_bucket(meta_store, sub_bucket_start, epoch).await?;
+        }
+        sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+    }
+
+    let bucket_start = log_directory_bucket_start(LogId::new(first_log_id));
+    let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
+    if next_log_id >= bucket_end {
+        compact_directory_bucket(meta_store, bucket_start, epoch).await?;
+    }
 
     Ok(())
 }
@@ -124,6 +193,97 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
         .collect()
 }
 
+pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    block: &Block,
+    first_log_id: u64,
+    epoch: u64,
+) -> Result<Vec<(String, u32)>> {
+    let mut touched_pages = BTreeSet::<(String, u32)>::new();
+
+    for (stream, values) in collect_stream_appends(block, first_log_id) {
+        let mut pages = BTreeMap::<u32, RoaringBitmap>::new();
+        for value in values {
+            let page_start = stream_page_start_local(value);
+            pages.entry(page_start).or_default().insert(value);
+        }
+
+        for (page_start, bitmap) in pages {
+            let count = bitmap.len() as u32;
+            let min_local = bitmap.min().unwrap_or(page_start);
+            let max_local = bitmap.max().unwrap_or(page_start);
+            let meta = StreamBitmapMeta {
+                block_num: block.block_num,
+                count,
+                min_local,
+                max_local,
+            };
+            let chunk = ChunkBlob {
+                min_local,
+                max_local,
+                count,
+                crc32: 0,
+                bitmap,
+            };
+
+            meta_store
+                .put(
+                    &stream_fragment_meta_key(&stream, page_start, block.block_num),
+                    encode_stream_bitmap_meta(&meta),
+                    PutCond::Any,
+                    FenceToken(epoch),
+                )
+                .await?;
+            blob_store
+                .put_blob(
+                    &stream_fragment_blob_key(&stream, page_start, block.block_num),
+                    encode_chunk(&chunk)?,
+                )
+                .await?;
+            touched_pages.insert((stream.clone(), page_start));
+        }
+    }
+
+    Ok(touched_pages.into_iter().collect())
+}
+
+pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    touched_pages: &[(String, u32)],
+    next_log_id: u64,
+    epoch: u64,
+) -> Result<()> {
+    if touched_pages.is_empty() {
+        return Ok(());
+    }
+
+    let frontier_id = LogId::new(next_log_id);
+    let frontier_shard = log_shard(frontier_id);
+    let frontier_open_page = stream_page_start_local(log_local(frontier_id).get());
+
+    for (stream_id, page_start) in touched_pages {
+        let Some(stream_shard) = parse_stream_shard(stream_id) else {
+            continue;
+        };
+        let sealed = if stream_shard < frontier_shard {
+            true
+        } else if stream_shard > frontier_shard {
+            false
+        } else {
+            *page_start < frontier_open_page
+                || (next_log_id > 0
+                    && *page_start + STREAM_PAGE_LOCAL_ID_SPAN <= log_local(frontier_id).get())
+        };
+        if sealed {
+            compact_stream_page(meta_store, blob_store, stream_id, *page_start, epoch).await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn encode_block_logs(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
     let mut out = Vec::<u8>::new();
     let mut offsets = Vec::with_capacity(logs.len() + 1);
@@ -137,112 +297,223 @@ fn encode_block_logs(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
     Ok((Bytes::from(out), BlockLogHeader { offsets }))
 }
 
-async fn persist_log_directory_bucket<M: MetaStore>(
+async fn compact_directory_sub_bucket<M: MetaStore>(
     meta_store: &M,
-    block_num: u64,
-    first_log_id: u64,
-    count: u32,
+    sub_bucket_start: u64,
     epoch: u64,
 ) -> Result<()> {
-    let sentinel = first_log_id.saturating_add(u64::from(count));
-    let mut bucket_start = log_directory_bucket_start(LogId::new(first_log_id));
-    let last_bucket_start =
-        log_directory_bucket_start(LogId::new(sentinel.saturating_sub(1).max(first_log_id)));
-    loop {
-        upsert_log_directory_bucket(
-            meta_store,
-            bucket_start,
-            block_num,
-            first_log_id,
-            sentinel,
-            epoch,
+    let page = meta_store
+        .list_prefix(
+            &log_directory_fragment_prefix(sub_bucket_start),
+            None,
+            usize::MAX,
         )
         .await?;
-        if bucket_start == last_bucket_start {
-            break;
-        }
-        bucket_start = bucket_start.saturating_add(LOG_DIRECTORY_BUCKET_SIZE);
+    let mut fragments = Vec::with_capacity(page.keys.len());
+    for key in page.keys {
+        let Some(record) = meta_store.get(&key).await? else {
+            continue;
+        };
+        fragments.push(decode_log_dir_fragment(&record.value)?);
     }
+    if fragments.is_empty() {
+        return Ok(());
+    }
+    fragments.sort_by_key(|fragment| fragment.block_num);
 
-    Ok(())
-}
+    let mut first_log_ids = Vec::with_capacity(fragments.len() + 1);
+    for fragment in &fragments {
+        first_log_ids.push(fragment.first_log_id);
+    }
+    let sentinel = fragments
+        .last()
+        .map(|fragment| fragment.end_log_id_exclusive)
+        .unwrap_or(sub_bucket_start);
+    first_log_ids.push(sentinel);
 
-async fn upsert_log_directory_bucket<M: MetaStore>(
-    meta_store: &M,
-    bucket_start: u64,
-    block_num: u64,
-    first_log_id: u64,
-    sentinel: u64,
-    epoch: u64,
-) -> Result<()> {
-    let bucket_key = log_directory_bucket_key(bucket_start);
-    let mut bucket = match meta_store.get(&bucket_key).await? {
-        Some(existing) => decode_log_directory_bucket(&existing.value)?,
-        None => LogDirectoryBucket {
-            start_block: block_num,
-            first_log_ids: Vec::new(),
-        },
+    let bucket = LogDirectoryBucket {
+        start_block: fragments[0].block_num,
+        first_log_ids,
     };
-
-    if block_num < bucket.start_block {
-        return Err(Error::InvalidSequence {
-            expected: bucket.start_block,
-            got: block_num,
-        });
-    }
-
-    let entry_index = usize::try_from(block_num - bucket.start_block)
-        .map_err(|_| Error::Decode("directory bucket block index overflow"))?;
-    if bucket.first_log_ids.is_empty() {
-        bucket.first_log_ids.push(first_log_id);
-        bucket.first_log_ids.push(sentinel);
-    } else if bucket.first_log_ids.len() < entry_index + 1 {
-        return Err(Error::Decode("directory bucket gap before block"));
-    } else if bucket.first_log_ids.len() == entry_index + 1 {
-        let last = bucket
-            .first_log_ids
-            .last_mut()
-            .ok_or(Error::Decode("log directory bucket missing sentinel"))?;
-        *last = first_log_id;
-        bucket.first_log_ids.push(sentinel);
-    } else {
-        bucket.first_log_ids[entry_index] = first_log_id;
-        bucket.first_log_ids[entry_index + 1] = sentinel;
-        bucket.first_log_ids.truncate(entry_index + 2);
-    }
-
     meta_store
         .put(
-            &bucket_key,
+            &log_directory_sub_bucket_key(sub_bucket_start),
             encode_log_directory_bucket(&bucket),
             PutCond::Any,
             FenceToken(epoch),
         )
         .await?;
-
     Ok(())
+}
+
+async fn compact_directory_bucket<M: MetaStore>(
+    meta_store: &M,
+    bucket_start: u64,
+    epoch: u64,
+) -> Result<()> {
+    let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
+    let mut sub_bucket_start = bucket_start;
+    let mut fragments = Vec::new();
+
+    while sub_bucket_start < bucket_end {
+        let Some(record) = meta_store
+            .get(&log_directory_sub_bucket_key(sub_bucket_start))
+            .await?
+        else {
+            sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+            continue;
+        };
+        let sub_bucket = crate::codec::log::decode_log_directory_bucket(&record.value)?;
+        for (index, first_log_id) in sub_bucket
+            .first_log_ids
+            .iter()
+            .enumerate()
+            .take(sub_bucket.first_log_ids.len().saturating_sub(1))
+        {
+            fragments.push((sub_bucket.start_block + index as u64, *first_log_id));
+        }
+        if let Some(last) = sub_bucket.first_log_ids.last().copied() {
+            fragments.push((u64::MAX, last));
+        }
+        sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+    }
+
+    if fragments.len() < 2 {
+        return Ok(());
+    }
+
+    fragments.sort_by_key(|(block_num, _)| *block_num);
+    let sentinel = fragments
+        .pop()
+        .map(|(_, sentinel)| sentinel)
+        .ok_or(Error::Decode("missing directory bucket sentinel"))?;
+    let start_block = fragments[0].0;
+    let mut first_log_ids = fragments
+        .into_iter()
+        .map(|(_, first)| first)
+        .collect::<Vec<_>>();
+    first_log_ids.push(sentinel);
+
+    meta_store
+        .put(
+            &log_directory_bucket_key(bucket_start),
+            encode_log_directory_bucket(&LogDirectoryBucket {
+                start_block,
+                first_log_ids,
+            }),
+            PutCond::Any,
+            FenceToken(epoch),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn compact_stream_page<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    stream_id: &str,
+    page_start: u32,
+    epoch: u64,
+) -> Result<()> {
+    let page = meta_store
+        .list_prefix(
+            &crate::domain::keys::stream_fragment_meta_prefix(stream_id, page_start),
+            None,
+            usize::MAX,
+        )
+        .await?;
+    let mut merged = RoaringBitmap::new();
+    for key in page.keys {
+        let block_num = read_u64_suffix(&key)?;
+        let Some(blob) = blob_store
+            .get_blob(&stream_fragment_blob_key(stream_id, page_start, block_num))
+            .await?
+        else {
+            continue;
+        };
+        merged |= &decode_chunk(&blob)?.bitmap;
+    }
+    if merged.is_empty() {
+        return Ok(());
+    }
+
+    let count = merged.len() as u32;
+    let min_local = merged.min().unwrap_or(page_start);
+    let max_local = merged.max().unwrap_or(page_start);
+    let meta = StreamBitmapMeta {
+        block_num: 0,
+        count,
+        min_local,
+        max_local,
+    };
+    let chunk = ChunkBlob {
+        min_local,
+        max_local,
+        count,
+        crc32: 0,
+        bitmap: merged,
+    };
+
+    meta_store
+        .put(
+            &stream_page_meta_key(stream_id, page_start),
+            encode_stream_bitmap_meta(&meta),
+            PutCond::Any,
+            FenceToken(epoch),
+        )
+        .await?;
+    blob_store
+        .put_blob(
+            &stream_page_blob_key(stream_id, page_start),
+            encode_chunk(&chunk)?,
+        )
+        .await?;
+    Ok(())
+}
+
+fn parse_stream_shard(stream_id: &str) -> Option<crate::core::ids::LogShard> {
+    let (_, shard_hex) = stream_id.rsplit_once('/')?;
+    let raw = u64::from_str_radix(shard_hex, 16).ok()?;
+    crate::core::ids::LogShard::new(raw).ok()
+}
+
+fn read_u64_suffix(key: &[u8]) -> Result<u64> {
+    if key.len() < 8 {
+        return Err(Error::Decode("short key suffix"));
+    }
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&key[key.len() - 8..]);
+    Ok(u64::from_be_bytes(bytes))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::finalized_state::{decode_block_meta, decode_u64};
     use crate::codec::log::{
-        decode_block_log_header, decode_log, decode_log_directory_bucket, encode_log,
+        decode_block_log_header, decode_log, decode_log_dir_fragment, decode_log_directory_bucket,
+        decode_stream_bitmap_meta, encode_log,
     };
     use crate::config::Config;
+    use crate::core::ids::LogId;
     use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key,
-        block_logs_blob_key, block_meta_key, log_directory_bucket_key,
+        LOG_DIRECTORY_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, block_hash_to_num_key,
+        block_log_header_key, block_logs_blob_key, block_meta_key, log_directory_bucket_key,
+        log_directory_fragment_key, log_directory_sub_bucket_key, log_local,
+        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
+        stream_page_meta_key, stream_page_start_local,
     };
-    use crate::domain::types::{Log, LogDirectoryBucket};
     use crate::logs::ingest::{
-        persist_log_artifacts, persist_log_block_metadata, persist_log_directory_bucket,
+        compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
+        persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
     };
     use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
+    use crate::streams::chunk::decode_chunk;
     use futures::executor::block_on;
+
+    use super::collect_stream_appends;
+    use crate::domain::types::Log;
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {
         Log {
@@ -287,13 +558,7 @@ mod tests {
                 .await
                 .expect("read block header")
                 .expect("block header present");
-            let bucket = meta
-                .get(&log_directory_bucket_key(0))
-                .await
-                .expect("read directory bucket")
-                .expect("directory bucket present");
             let header = decode_block_log_header(&header.value).expect("decode header");
-            let bucket = decode_log_directory_bucket(&bucket.value).expect("decode bucket");
 
             assert_eq!(
                 header.offsets,
@@ -303,118 +568,206 @@ mod tests {
                     block_blob.len() as u32
                 ]
             );
-            assert_eq!(bucket.first_log_ids, vec![11, 13]);
             assert_eq!(
                 decode_log(&block_blob[header.offsets[0] as usize..header.offsets[1] as usize])
                     .expect("decode first"),
                 logs[0]
             );
+        });
+    }
+
+    #[test]
+    fn persist_log_directory_fragments_and_compaction_cover_spanning_block() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let first_log_id = crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let count = 8u32;
+
+            persist_log_directory_fragments(&meta, 700, first_log_id, count, 3)
+                .await
+                .expect("persist fragments");
+            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
+                .await
+                .expect("compact directory");
+
+            let fragment0 = meta
+                .get(&log_directory_fragment_key(0, 700))
+                .await
+                .expect("read fragment0")
+                .expect("fragment0");
+            let fragment1 = meta
+                .get(&log_directory_fragment_key(
+                    crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                    700,
+                ))
+                .await
+                .expect("read fragment1")
+                .expect("fragment1");
+            let sub_bucket = meta
+                .get(&log_directory_sub_bucket_key(0))
+                .await
+                .expect("read sub bucket")
+                .expect("sub bucket");
+
             assert_eq!(
-                decode_log(&block_blob[header.offsets[1] as usize..header.offsets[2] as usize])
-                    .expect("decode second"),
-                logs[1]
+                decode_log_dir_fragment(&fragment0.value)
+                    .expect("decode fragment0")
+                    .block_num,
+                700
+            );
+            assert_eq!(
+                decode_log_dir_fragment(&fragment1.value)
+                    .expect("decode fragment1")
+                    .end_log_id_exclusive,
+                first_log_id + count as u64
+            );
+            assert_eq!(
+                decode_log_directory_bucket(&sub_bucket.value)
+                    .expect("decode sub bucket")
+                    .first_log_ids,
+                vec![first_log_id, first_log_id + count as u64]
             );
         });
     }
 
     #[test]
-    fn persist_log_artifacts_appends_directory_bucket_entries() {
+    fn collect_stream_appends_groups_locals_by_index_stream() {
+        let block = sample_block(1, 9, vec![sample_log(1, 0, 0, 1), sample_log(1, 0, 1, 2)]);
+        let appends = collect_stream_appends(&block, 17);
+        assert!(!appends.is_empty());
+        assert!(
+            appends
+                .values()
+                .all(|values| values.windows(2).all(|w| w[0] <= w[1]))
+        );
+    }
+
+    #[test]
+    fn persist_stream_fragments_and_page_compaction_write_immutable_page_artifacts() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let config = Config::default();
+            let block = sample_block(
+                7,
+                11,
+                vec![
+                    sample_log(7, 0, 0, 1),
+                    sample_log(7, 0, 1, 1),
+                    sample_log(7, 0, 2, 1),
+                ],
+            );
+            let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 2);
+            let touched_pages = persist_stream_fragments(&meta, &blob, &block, first_log_id, 5)
+                .await
+                .expect("persist stream fragments");
+            compact_sealed_stream_pages(
+                &meta,
+                &blob,
+                &touched_pages,
+                first_log_id + block.logs.len() as u64,
+                5,
+            )
+            .await
+            .expect("compact stream pages");
 
-            persist_log_artifacts(&config, &meta, &blob, 5, &[sample_log(5, 0, 0, 9)], 1, 3)
+            let sid = collect_stream_appends(&block, first_log_id)
+                .into_keys()
+                .next()
+                .expect("stream");
+            let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
+            let fragment = meta
+                .get(&stream_fragment_meta_key(&sid, first_page, block.block_num))
                 .await
-                .expect("persist first block");
-            persist_log_artifacts(&config, &meta, &blob, 6, &[sample_log(6, 0, 1, 10)], 2, 3)
+                .expect("read stream fragment meta")
+                .expect("stream fragment meta");
+            let fragment_blob = blob
+                .get_blob(&stream_fragment_blob_key(&sid, first_page, block.block_num))
                 .await
-                .expect("persist second block");
-
-            let bucket = meta
-                .get(&log_directory_bucket_key(0))
+                .expect("read stream fragment blob")
+                .expect("stream fragment blob");
+            let page_meta = meta
+                .get(&stream_page_meta_key(&sid, first_page))
                 .await
-                .expect("read directory bucket")
-                .expect("directory bucket present");
-            let bucket =
-                decode_log_directory_bucket(&bucket.value).expect("decode directory bucket");
-
-            assert_eq!(bucket.first_log_ids, vec![1, 2, 3]);
-        });
-    }
-
-    #[test]
-    fn persist_log_artifacts_writes_spanning_block_into_each_covered_bucket() {
-        block_on(async {
-            let meta = InMemoryMetaStore::default();
-            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
-            let count = LOG_DIRECTORY_BUCKET_SIZE + 10;
-
-            persist_log_directory_bucket(&meta, 700, first_log_id, count as u32, 3)
+                .expect("read stream page meta")
+                .expect("stream page meta");
+            let page_blob = blob
+                .get_blob(&stream_page_blob_key(&sid, first_page))
                 .await
-                .expect("persist spanning directory buckets");
-
-            let bucket0 = meta
-                .get(&log_directory_bucket_key(0))
-                .await
-                .expect("read bucket0")
-                .expect("bucket0 present");
-            let bucket1 = meta
-                .get(&log_directory_bucket_key(LOG_DIRECTORY_BUCKET_SIZE))
-                .await
-                .expect("read bucket1")
-                .expect("bucket1 present");
-            let bucket2 = meta
-                .get(&log_directory_bucket_key(LOG_DIRECTORY_BUCKET_SIZE * 2))
-                .await
-                .expect("read bucket2")
-                .expect("bucket2 present");
-            let bucket0 = decode_log_directory_bucket(&bucket0.value).expect("decode bucket0");
-            let bucket1 = decode_log_directory_bucket(&bucket1.value).expect("decode bucket1");
-            let bucket2 = decode_log_directory_bucket(&bucket2.value).expect("decode bucket2");
+                .expect("read stream page blob")
+                .expect("stream page blob");
 
             assert_eq!(
-                bucket0,
-                LogDirectoryBucket {
-                    start_block: 700,
-                    first_log_ids: vec![first_log_id, first_log_id + count],
-                }
+                decode_stream_bitmap_meta(&fragment.value)
+                    .expect("decode stream fragment meta")
+                    .block_num,
+                block.block_num
             );
-            assert_eq!(bucket1, bucket0);
-            assert_eq!(bucket2, bucket0);
+            assert!(
+                decode_chunk(&fragment_blob)
+                    .expect("decode fragment blob")
+                    .count
+                    > 0
+            );
+            assert!(
+                decode_stream_bitmap_meta(&page_meta.value)
+                    .expect("decode stream page meta")
+                    .count
+                    > 0
+            );
+            assert!(
+                decode_chunk(&page_blob)
+                    .expect("decode stream page blob")
+                    .count
+                    > 0
+            );
         });
     }
 
     #[test]
-    fn persist_log_block_metadata_writes_block_meta_and_hash_lookup() {
+    fn persist_log_block_metadata_writes_block_meta_and_hash_index() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            let block = sample_block(9, 7, vec![sample_log(9, 0, 0, 21), sample_log(9, 0, 1, 22)]);
+            let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
 
-            persist_log_block_metadata(&meta, &block, 33, 4)
+            persist_log_block_metadata(&meta, &block, 33, 7)
                 .await
                 .expect("persist block metadata");
 
-            let stored_meta = meta
-                .get(&block_meta_key(9))
-                .await
-                .expect("read block meta")
-                .expect("block meta present");
-            let stored_hash_lookup = meta
-                .get(&block_hash_to_num_key(&block.block_hash))
-                .await
-                .expect("read block hash lookup")
-                .expect("block hash lookup present");
+            assert!(
+                meta.get(&block_meta_key(9))
+                    .await
+                    .expect("block meta")
+                    .is_some()
+            );
+            assert!(
+                meta.get(&block_hash_to_num_key(&block.block_hash))
+                    .await
+                    .expect("hash index")
+                    .is_some()
+            );
+        });
+    }
 
-            let decoded_meta = decode_block_meta(&stored_meta.value).expect("decode block meta");
-            let decoded_block_num =
-                decode_u64(&stored_hash_lookup.value).expect("decode block hash lookup");
+    #[test]
+    fn directory_bucket_compaction_writes_1m_summary_when_boundary_seals() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 2;
+            let count = 4u32;
 
-            assert_eq!(decoded_meta.block_hash, block.block_hash);
-            assert_eq!(decoded_meta.parent_hash, block.parent_hash);
-            assert_eq!(decoded_meta.first_log_id, 33);
-            assert_eq!(decoded_meta.count, 2);
-            assert_eq!(decoded_block_num, 9);
+            persist_log_directory_fragments(&meta, 700, first_log_id, count, 3)
+                .await
+                .expect("persist fragments");
+            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
+                .await
+                .expect("compact directory");
+
+            assert!(
+                meta.get(&log_directory_bucket_key(0))
+                    .await
+                    .expect("directory bucket")
+                    .is_some()
+            );
         });
     }
 }

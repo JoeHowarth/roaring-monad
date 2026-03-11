@@ -15,11 +15,13 @@ The crate currently implements finalized history queries for the logs family.
 Follow the main path first:
 
 1. a finalized block is ingested
-2. logs receive monotonic finalized log IDs
-3. roaring stream indexes are updated
-4. `query_logs` resolves a finalized block window
-5. the logs family maps that block window to a log-ID window
-6. the query returns `QueryPage<Log>` with resume and reorg metadata
+2. logs receive monotonic finalized `log_id`
+3. immutable log-directory fragments and immutable stream-page fragments are written
+4. `indexed_head` is advanced only after all authoritative artifacts for the block exist
+5. `query_logs` resolves a finalized block window
+6. the logs family maps that block window to a log-ID window
+7. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
+8. the query returns `QueryPage<Log>` with exact resume metadata
 
 ## Layering
 
@@ -59,7 +61,7 @@ The shared layer owns:
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - runtime degraded / throttled state
-- stream tail / manifest / chunk lifecycle
+- indexed-head publication reads
 - shared finalized-state and block-identity reads
 
 Important shared view types:
@@ -77,6 +79,8 @@ The logs layer owns:
 - exact-match materialization
 - log artifact writes
 - log block metadata reads and writes
+- immutable directory fragment writes and summary compaction
+- immutable stream fragment writes and page compaction
 - stream fanout for address/topic indexes
 
 Important log-specific view types:
@@ -86,16 +90,30 @@ Important log-specific view types:
 
 ## Persisted Model
 
-The persisted bytes still use the existing records:
+Shared metadata:
 
-- `MetaState`
-- `BlockMeta`
-- `LogDirectoryBucket`
-- `BlockLogHeader`
-- block-keyed log blobs
-- manifests, tails, and chunks
+- `indexed_head -> IndexedHead { indexed_finalized_head }`
+- `writer_lease -> WriterLease { owner_id, epoch }`
+- `block_meta/<block_num> -> BlockMeta`
+- `block_hash_to_num/<block_hash> -> block_num`
+- `block_log_headers/<block_num> -> BlockLogHeader`
 
-The code treats those bytes through cleaner shared and family-local helpers instead of exposing the mixed record shape everywhere.
+Directory metadata:
+
+- `log_dir_frag/<sub_bucket_start>/<block_num> -> LogDirFragment`
+- `log_dir_sub/<sub_bucket_start> -> LogDirectoryBucket`
+- optional `log_dir/<bucket_start> -> LogDirectoryBucket`
+
+Stream index metadata/blob pairs:
+
+- `stream_frag_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta`
+- `stream_frag_blob/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
+- `stream_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta`
+- `stream_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
+
+Payload blobs:
+
+- `block_logs/<block_num> -> concatenated encoded logs`
 
 ## Query Semantics
 
@@ -104,7 +122,9 @@ The code treats those bytes through cleaner shared and family-local helpers inst
 - `RangeResolver` clips the request to the indexed finalized head.
 - `LogWindowResolver` maps the resolved block range to a log-ID range.
 - queries must include at least one indexed address/topic clause
-- indexed queries execute one shard at a time in ascending `log_id` order.
+- indexed queries execute one shard at a time in ascending `log_id` order
+- stream scans prefer compacted `stream_page_*` blobs and fall back to `stream_frag_*` blobs for the bounded frontier or compaction lag
+- `log_id -> block_num` resolution prefers compacted `log_dir_sub/*` or `log_dir/*` summaries and falls back to `log_dir_frag/*`
 - non-indexed queries are rejected instead of falling back to a scan.
 - pagination uses `resume_log_id` as a declarative lower bound.
 - responses return `cursor_block` separately from `next_resume_log_id`.
@@ -119,19 +139,20 @@ It is responsible for:
 
 - finalized sequence and parent validation
 - coordinating log artifact writes
-- coordinating stream appends
-- advancing shared finalized state
+- coordinating immutable directory and stream frontier publication
+- advancing `indexed_head` last
 
 The logs family owns:
 
-- directory-bucket writes
+- directory-fragment writes
+- directory sub-bucket and optional 1M-bucket compaction
 - block-log-header writes
 - block-log blob writes
 - log block-metadata writes
 - block-hash lookup writes
+- immutable stream-fragment writes
+- stream-page compaction
 - stream fanout rules
-
-The shared stream layer owns append/seal lifecycle.
 
 ## Deferred Scope
 

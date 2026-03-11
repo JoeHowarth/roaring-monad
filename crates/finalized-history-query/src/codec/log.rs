@@ -1,6 +1,8 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockLogHeader, Log, LogDirectoryBucket, Topic32};
+use crate::domain::types::{
+    BlockLogHeader, Log, LogDirFragment, LogDirectoryBucket, StreamBitmapMeta, Topic32,
+};
 use crate::error::{Error, Result};
 
 pub fn validate_log(log: &Log) -> bool {
@@ -186,6 +188,82 @@ pub fn decode_block_log_header(bytes: &[u8]) -> Result<BlockLogHeader> {
     Ok(BlockLogHeader { offsets })
 }
 
+pub fn encode_log_dir_fragment(fragment: &LogDirFragment) -> Bytes {
+    let mut out = Vec::with_capacity(1 + 8 + 8 + 8);
+    out.push(1);
+    out.extend_from_slice(&fragment.block_num.to_be_bytes());
+    out.extend_from_slice(&fragment.first_log_id.to_be_bytes());
+    out.extend_from_slice(&fragment.end_log_id_exclusive.to_be_bytes());
+    Bytes::from(out)
+}
+
+pub fn decode_log_dir_fragment(bytes: &[u8]) -> Result<LogDirFragment> {
+    if bytes.len() != 1 + 8 + 8 + 8 {
+        return Err(Error::Decode("invalid log_dir fragment length"));
+    }
+    if bytes[0] != 1 {
+        return Err(Error::Decode("unsupported log_dir fragment version"));
+    }
+    Ok(LogDirFragment {
+        block_num: u64::from_be_bytes(
+            bytes[1..9]
+                .try_into()
+                .map_err(|_| Error::Decode("log_dir fragment block_num"))?,
+        ),
+        first_log_id: u64::from_be_bytes(
+            bytes[9..17]
+                .try_into()
+                .map_err(|_| Error::Decode("log_dir fragment first_log_id"))?,
+        ),
+        end_log_id_exclusive: u64::from_be_bytes(
+            bytes[17..25]
+                .try_into()
+                .map_err(|_| Error::Decode("log_dir fragment end_log_id_exclusive"))?,
+        ),
+    })
+}
+
+pub fn encode_stream_bitmap_meta(meta: &StreamBitmapMeta) -> Bytes {
+    let mut out = Vec::with_capacity(1 + 8 + 4 + 4 + 4);
+    out.push(1);
+    out.extend_from_slice(&meta.block_num.to_be_bytes());
+    out.extend_from_slice(&meta.count.to_be_bytes());
+    out.extend_from_slice(&meta.min_local.to_be_bytes());
+    out.extend_from_slice(&meta.max_local.to_be_bytes());
+    Bytes::from(out)
+}
+
+pub fn decode_stream_bitmap_meta(bytes: &[u8]) -> Result<StreamBitmapMeta> {
+    if bytes.len() != 1 + 8 + 4 + 4 + 4 {
+        return Err(Error::Decode("invalid stream bitmap meta length"));
+    }
+    if bytes[0] != 1 {
+        return Err(Error::Decode("unsupported stream bitmap meta version"));
+    }
+    Ok(StreamBitmapMeta {
+        block_num: u64::from_be_bytes(
+            bytes[1..9]
+                .try_into()
+                .map_err(|_| Error::Decode("stream bitmap meta block_num"))?,
+        ),
+        count: u32::from_be_bytes(
+            bytes[9..13]
+                .try_into()
+                .map_err(|_| Error::Decode("stream bitmap meta count"))?,
+        ),
+        min_local: u32::from_be_bytes(
+            bytes[13..17]
+                .try_into()
+                .map_err(|_| Error::Decode("stream bitmap meta min_local"))?,
+        ),
+        max_local: u32::from_be_bytes(
+            bytes[17..21]
+                .try_into()
+                .map_err(|_| Error::Decode("stream bitmap meta max_local"))?,
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +340,30 @@ mod tests {
         let enc = encode_block_log_header(&header);
         let dec = decode_block_log_header(&enc).expect("decode large block log header");
         assert_eq!(dec, header);
+    }
+
+    #[test]
+    fn roundtrip_log_dir_fragment() {
+        let fragment = LogDirFragment {
+            block_num: 9,
+            first_log_id: 100,
+            end_log_id_exclusive: 105,
+        };
+        let enc = encode_log_dir_fragment(&fragment);
+        let dec = decode_log_dir_fragment(&enc).expect("decode fragment");
+        assert_eq!(dec, fragment);
+    }
+
+    #[test]
+    fn roundtrip_stream_bitmap_meta() {
+        let meta = StreamBitmapMeta {
+            block_num: 9,
+            count: 3,
+            min_local: 17,
+            max_local: 29,
+        };
+        let enc = encode_stream_bitmap_meta(&meta);
+        let dec = decode_stream_bitmap_meta(&enc).expect("decode stream bitmap meta");
+        assert_eq!(dec, meta);
     }
 }

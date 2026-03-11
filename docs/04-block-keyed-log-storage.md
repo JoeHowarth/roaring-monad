@@ -216,24 +216,24 @@ In-memory and simple test backends can implement this by loading the whole objec
 The crate implements the layout directly:
 
 1. the blob-store abstraction exposes logical range reads
-2. ingest writes directory buckets, block headers, and block-keyed payload blobs
-3. materialization resolves `log_id -> bucket -> block_num -> header -> byte range`
-4. indexed materialization reads block-keyed artifacts directly
-5. locator-page and packed-log code paths are gone
+2. ingest writes block headers and block-keyed payload blobs
+3. ingest writes immutable `log_dir_frag/<sub_bucket_start>/<block_num>` records as the authoritative `log_id -> block_num` frontier
+4. ingest eagerly compacts sealed sub-buckets into immutable `log_dir_sub/<sub_bucket_start>` summaries and may compact full 1M buckets into immutable `log_dir/<bucket_start>`
+5. materialization resolves `log_id -> summary-or-fragment -> block_num -> header -> byte range`
+6. locator-page and packed-log code paths are gone
 
-## Directory Bucket Writes
+## Directory Fragment Writes
 
-Bucket updates are append-like but still rewrite the whole bucket object.
+Directory publication is immutable.
 
 When ingest writes block `N` with `first_log_id = X`:
 
-1. compute every covered bucket from `bucket(X)` through `bucket(max(X, X + count - 1))`
-2. load each bucket object, if any
-3. insert or rewrite the boundary for block `N`
-4. keep the final sentinel at `X + count`
-5. write each covered bucket back with the same fencing / CAS discipline used for other finalized-state metadata
+1. compute every covered sub-bucket from `sub_bucket(X)` through `sub_bucket(max(X, X + count - 1))`
+2. write one immutable `log_dir_frag/<sub_bucket_start>/<block_num>` record for each covered sub-bucket
+3. once `next_log_id` crosses a sub-bucket end, compact its immutable fragments into `log_dir_sub/<sub_bucket_start>`
+4. once `next_log_id` crosses a 1M-bucket end, optionally compact the sealed sub-buckets into `log_dir/<bucket_start>`
 
-The bucket object is therefore an accelerator index maintained under the same writer-epoch discipline as the rest of ingest metadata.
+The grouped summary objects are acceleration artifacts built from immutable source fragments. They are never the only authoritative source for the frontier.
 
 ## Open Parameters
 

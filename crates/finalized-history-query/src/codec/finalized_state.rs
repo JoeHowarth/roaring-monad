@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockMeta, MetaState};
+use crate::domain::types::{BlockMeta, IndexedHead, MetaState, WriterLease};
 use crate::error::{Error, Result};
 
 pub fn encode_meta_state(state: &MetaState) -> Bytes {
@@ -25,6 +25,38 @@ pub fn decode_meta_state(bytes: &[u8]) -> Result<MetaState> {
         indexed_finalized_head: u64::from_be_bytes(a),
         next_log_id: u64::from_be_bytes(b),
         writer_epoch: u64::from_be_bytes(c),
+    })
+}
+
+pub fn encode_indexed_head(head: &IndexedHead) -> Bytes {
+    Bytes::copy_from_slice(&head.indexed_finalized_head.to_be_bytes())
+}
+
+pub fn decode_indexed_head(bytes: &[u8]) -> Result<IndexedHead> {
+    Ok(IndexedHead {
+        indexed_finalized_head: decode_u64(bytes)?,
+    })
+}
+
+pub fn encode_writer_lease(lease: &WriterLease) -> Bytes {
+    let mut out = Vec::with_capacity(16);
+    out.extend_from_slice(&lease.owner_id.to_be_bytes());
+    out.extend_from_slice(&lease.epoch.to_be_bytes());
+    Bytes::from(out)
+}
+
+pub fn decode_writer_lease(bytes: &[u8]) -> Result<WriterLease> {
+    if bytes.len() != 16 {
+        return Err(Error::Decode("invalid writer_lease length"));
+    }
+
+    let mut owner_id = [0u8; 8];
+    let mut epoch = [0u8; 8];
+    owner_id.copy_from_slice(&bytes[0..8]);
+    epoch.copy_from_slice(&bytes[8..16]);
+    Ok(WriterLease {
+        owner_id: u64::from_be_bytes(owner_id),
+        epoch: u64::from_be_bytes(epoch),
     })
 }
 
@@ -96,5 +128,24 @@ mod tests {
         assert_eq!(dec_meta.count, meta.count);
         assert_eq!(dec_meta.block_hash, meta.block_hash);
         assert_eq!(dec_meta.parent_hash, meta.parent_hash);
+
+        let head = IndexedHead {
+            indexed_finalized_head: 17,
+        };
+        assert_eq!(
+            decode_indexed_head(&encode_indexed_head(&head))
+                .expect("decode indexed head")
+                .indexed_finalized_head,
+            17
+        );
+
+        let lease = WriterLease {
+            owner_id: 3,
+            epoch: 12,
+        };
+        assert_eq!(
+            decode_writer_lease(&encode_writer_lease(&lease)).expect("decode writer lease"),
+            lease
+        );
     }
 }

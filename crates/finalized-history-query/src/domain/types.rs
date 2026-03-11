@@ -22,8 +22,23 @@ pub struct LogDirectoryBucket {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LogDirFragment {
+    pub block_num: u64,
+    pub first_log_id: u64,
+    pub end_log_id_exclusive: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockLogHeader {
     pub offsets: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamBitmapMeta {
+    pub block_num: u64,
+    pub count: u32,
+    pub min_local: u32,
+    pub max_local: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,6 +62,17 @@ pub struct MetaState {
     pub indexed_finalized_head: u64,
     pub next_log_id: u64,
     pub writer_epoch: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct IndexedHead {
+    pub indexed_finalized_head: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WriterLease {
+    pub owner_id: u64,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone)]

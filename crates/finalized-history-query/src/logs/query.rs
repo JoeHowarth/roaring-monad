@@ -4,26 +4,27 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
+use crate::codec::log::decode_stream_bitmap_meta;
 use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer, ShardBitmapSet};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{RangeResolver, ResolvedBlockRange};
 use crate::domain::keys::{
-    chunk_blob_key, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
+    STREAM_PAGE_LOCAL_ID_SPAN, local_range_for_shard, log_shard, stream_fragment_blob_key,
+    stream_fragment_meta_prefix, stream_id, stream_page_blob_key, stream_page_meta_key,
+    stream_page_start_local,
 };
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{
     ClauseKind, clause_values_20, clause_values_32, is_full_shard_range, is_too_broad,
-    overlapping_chunk_refs,
 };
 use crate::logs::materialize::LogMaterializer;
 use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::chunk::decode_chunk;
-use crate::streams::manifest::{ChunkRef, Manifest, decode_manifest, decode_tail};
 
 const STREAM_LOAD_CONCURRENCY: usize = 32;
 
@@ -35,18 +36,10 @@ struct IndexedClauseSpec {
 }
 
 #[derive(Debug, Clone)]
-struct PreparedShardStream {
-    stream_id: String,
-    manifest: Option<Manifest>,
-    overlapping_chunk_refs: Vec<ChunkRef>,
-    sealed_estimate: u64,
-}
-
-#[derive(Debug, Clone)]
 struct PreparedShardClause {
     kind: ClauseKind,
-    prepared_streams: Vec<PreparedShardStream>,
-    sealed_estimate: u64,
+    stream_ids: Vec<String>,
+    estimated_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -228,7 +221,7 @@ impl LogsQueryEngine {
                 let clause_bitmap = load_prepared_clause_bitmap(
                     meta_store,
                     blob_store,
-                    prepared_clause,
+                    &prepared_clause,
                     local_from.get(),
                     local_to.get(),
                 )
@@ -401,7 +394,7 @@ async fn prepare_shard_clauses<M: MetaStore>(
         prepared.push(clause);
     }
 
-    prepared.sort_by_key(|clause| (clause.sealed_estimate, clause_kind_rank(clause.kind)));
+    prepared.sort_by_key(|clause| (clause.estimated_count, clause_kind_rank(clause.kind)));
     Ok(prepared)
 }
 
@@ -412,93 +405,84 @@ async fn prepare_shard_clause<M: MetaStore>(
     local_from: LogLocalId,
     local_to: LogLocalId,
 ) -> Result<PreparedShardClause> {
-    let mut prepared_streams = Vec::with_capacity(clause_spec.values.len());
-    let mut in_flight = FuturesUnordered::new();
+    let mut stream_ids = Vec::with_capacity(clause_spec.values.len());
+    let mut estimated_count = 0u64;
 
     for value in &clause_spec.values {
         let stream = stream_id(clause_spec.stream_kind, value, shard);
-        in_flight.push(async move {
-            prepare_shard_stream(meta_store, &stream, local_from.get(), local_to.get()).await
-        });
-        if in_flight.len() >= STREAM_LOAD_CONCURRENCY
-            && let Some(result) = in_flight.next().await
-        {
-            prepared_streams.push(result?);
-        }
+        estimated_count = estimated_count.saturating_add(
+            estimate_stream_overlap(meta_store, &stream, local_from.get(), local_to.get()).await?,
+        );
+        stream_ids.push(stream);
     }
 
-    while let Some(result) = in_flight.next().await {
-        prepared_streams.push(result?);
-    }
-
-    let sealed_estimate = prepared_streams
-        .iter()
-        .map(|stream| stream.sealed_estimate)
-        .sum();
     Ok(PreparedShardClause {
         kind: clause_spec.kind,
-        prepared_streams,
-        sealed_estimate,
+        stream_ids,
+        estimated_count,
     })
 }
 
-async fn prepare_shard_stream<M: MetaStore>(
+async fn estimate_stream_overlap<M: MetaStore>(
     meta_store: &M,
     stream_id: &str,
     local_from: u32,
     local_to: u32,
-) -> Result<PreparedShardStream> {
-    let manifest = meta_store
-        .get(&manifest_key(stream_id))
-        .await?
-        .map(|record| decode_manifest(&record.value))
-        .transpose()?;
-    let overlapping_chunk_refs = manifest
-        .as_ref()
-        .map(|manifest| overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to).to_vec())
-        .unwrap_or_default();
-    let sealed_estimate = if let Some(manifest) = &manifest {
-        if is_full_shard_range(local_from, local_to) {
-            manifest.approx_count
-        } else {
-            overlapping_chunk_refs
-                .iter()
-                .map(|chunk_ref| u64::from(chunk_ref.count))
-                .sum()
-        }
-    } else {
-        0
-    };
+) -> Result<u64> {
+    let mut estimated = 0u64;
+    let mut page_start = stream_page_start_local(local_from);
+    let last_page_start = stream_page_start_local(local_to);
 
-    Ok(PreparedShardStream {
-        stream_id: stream_id.to_owned(),
-        manifest,
-        overlapping_chunk_refs,
-        sealed_estimate,
-    })
+    loop {
+        if let Some(record) = meta_store
+            .get(&stream_page_meta_key(stream_id, page_start))
+            .await?
+        {
+            let meta = decode_stream_bitmap_meta(&record.value)?;
+            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                estimated = estimated.saturating_add(u64::from(meta.count));
+            }
+        } else {
+            let page = meta_store
+                .list_prefix(
+                    &stream_fragment_meta_prefix(stream_id, page_start),
+                    None,
+                    usize::MAX,
+                )
+                .await?;
+            for key in page.keys {
+                let Some(record) = meta_store.get(&key).await? else {
+                    continue;
+                };
+                let meta = decode_stream_bitmap_meta(&record.value)?;
+                if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                    estimated = estimated.saturating_add(u64::from(meta.count));
+                }
+            }
+        }
+
+        if page_start == last_page_start {
+            break;
+        }
+        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
+    }
+
+    Ok(estimated)
 }
 
 async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
-    prepared_clause: PreparedShardClause,
+    prepared_clause: &PreparedShardClause,
     local_from: u32,
     local_to: u32,
 ) -> Result<RoaringBitmap> {
     let mut out = RoaringBitmap::new();
     let mut in_flight = FuturesUnordered::new();
 
-    for prepared_stream in prepared_clause.prepared_streams {
+    for stream_id in &prepared_clause.stream_ids {
         in_flight.push(async move {
-            let entries = load_prepared_stream_entries(
-                meta_store,
-                blob_store,
-                &prepared_stream,
-                local_from,
-                local_to,
-            )
-            .await?;
-            Ok::<RoaringBitmap, Error>(entries)
+            load_stream_entries(meta_store, blob_store, stream_id, local_from, local_to).await
         });
         if in_flight.len() >= STREAM_LOAD_CONCURRENCY
             && let Some(result) = in_flight.next().await
@@ -509,40 +493,6 @@ async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
 
     while let Some(result) = in_flight.next().await {
         out |= &result?;
-    }
-
-    Ok(out)
-}
-
-async fn load_prepared_stream_entries<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
-    prepared_stream: &PreparedShardStream,
-    local_from: u32,
-    local_to: u32,
-) -> Result<RoaringBitmap> {
-    let mut out = RoaringBitmap::new();
-
-    if prepared_stream.manifest.is_some() {
-        for chunk_ref in &prepared_stream.overlapping_chunk_refs {
-            maybe_merge_chunk(blob_store, &prepared_stream.stream_id, chunk_ref, &mut out).await?;
-        }
-    }
-
-    if let Some(record) = meta_store
-        .get(&tail_key(&prepared_stream.stream_id))
-        .await?
-    {
-        let tail = decode_tail(&record.value)?;
-        if is_full_shard_range(local_from, local_to) {
-            out |= &tail;
-        } else {
-            for value in &tail {
-                if value >= local_from && value <= local_to {
-                    out.insert(value);
-                }
-            }
-        }
     }
 
     Ok(out)
@@ -620,48 +570,97 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     local_to: u32,
 ) -> Result<RoaringBitmap> {
     let mut out = RoaringBitmap::new();
+    let mut page_start = stream_page_start_local(local_from);
+    let last_page_start = stream_page_start_local(local_to);
 
-    if let Some(record) = meta_store.get(&manifest_key(stream)).await? {
-        let manifest = decode_manifest(&record.value)?;
-        for chunk_ref in overlapping_chunk_refs(&manifest.chunk_refs, local_from, local_to) {
-            maybe_merge_chunk(blob_store, stream, chunk_ref, &mut out).await?;
-        }
-    }
-
-    if let Some(record) = meta_store.get(&tail_key(stream)).await? {
-        let tail = decode_tail(&record.value)?;
-        if is_full_shard_range(local_from, local_to) {
-            out |= &tail;
+    loop {
+        if let Some(record) = meta_store
+            .get(&stream_page_meta_key(stream, page_start))
+            .await?
+        {
+            let meta = decode_stream_bitmap_meta(&record.value)?;
+            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                maybe_merge_bitmap_blob(
+                    blob_store,
+                    &stream_page_blob_key(stream, page_start),
+                    &mut out,
+                    local_from,
+                    local_to,
+                )
+                .await?;
+            }
         } else {
-            for value in &tail {
-                if value >= local_from && value <= local_to {
-                    out.insert(value);
+            let page = meta_store
+                .list_prefix(
+                    &stream_fragment_meta_prefix(stream, page_start),
+                    None,
+                    usize::MAX,
+                )
+                .await?;
+            for key in page.keys {
+                let Some(record) = meta_store.get(&key).await? else {
+                    continue;
+                };
+                let meta = decode_stream_bitmap_meta(&record.value)?;
+                if !overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                    continue;
                 }
+                let block_num = read_u64_suffix(&key)?;
+                maybe_merge_bitmap_blob(
+                    blob_store,
+                    &stream_fragment_blob_key(stream, page_start, block_num),
+                    &mut out,
+                    local_from,
+                    local_to,
+                )
+                .await?;
             }
         }
+
+        if page_start == last_page_start {
+            break;
+        }
+        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
     }
 
     Ok(out)
 }
 
-async fn maybe_merge_chunk<B: BlobStore>(
+async fn maybe_merge_bitmap_blob<B: BlobStore>(
     blob_store: &B,
-    stream: &str,
-    chunk_ref: &ChunkRef,
+    key: &[u8],
     out: &mut RoaringBitmap,
+    local_from: u32,
+    local_to: u32,
 ) -> Result<()> {
-    let Some(bytes) = blob_store
-        .get_blob(&chunk_blob_key(stream, chunk_ref.chunk_seq))
-        .await?
-    else {
+    let Some(bytes) = blob_store.get_blob(key).await? else {
         return Ok(());
     };
-
     let chunk = decode_chunk(&bytes)?;
-    if chunk.count != chunk_ref.count {
-        return Err(Error::Decode("chunk count mismatch against manifest"));
+    if is_full_shard_range(local_from, local_to)
+        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+    {
+        *out |= &chunk.bitmap;
+        return Ok(());
     }
 
-    *out |= &chunk.bitmap;
+    for value in chunk.bitmap {
+        if value >= local_from && value <= local_to {
+            out.insert(value);
+        }
+    }
     Ok(())
+}
+
+fn overlaps(min_local: u32, max_local: u32, local_from: u32, local_to: u32) -> bool {
+    min_local <= local_to && max_local >= local_from
+}
+
+fn read_u64_suffix(key: &[u8]) -> Result<u64> {
+    if key.len() < 8 {
+        return Err(Error::Decode("short key suffix"));
+    }
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&key[key.len() - 8..]);
+    Ok(u64::from_be_bytes(bytes))
 }

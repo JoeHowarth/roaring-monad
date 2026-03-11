@@ -1,12 +1,14 @@
 use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    MAX_LOCAL_ID, local_range_for_shard, log_shard, manifest_key, stream_id, tail_key,
+    MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, local_range_for_shard, log_shard,
+    stream_fragment_meta_prefix, stream_id, stream_page_meta_key, stream_page_start_local,
 };
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::store::traits::MetaStore;
-use crate::streams::manifest::{ChunkRef, decode_manifest, decode_tail};
+
+use crate::codec::log::decode_stream_bitmap_meta;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClauseKind {
@@ -154,45 +156,56 @@ async fn estimate_stream_overlap<M: MetaStore>(
 ) -> Result<u64> {
     let (local_from, local_to) = local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
     let mut count = 0u64;
+    let mut page_start = stream_page_start_local(local_from.get());
+    let last_page_start = stream_page_start_local(local_to.get());
 
-    if let Some(record) = meta_store.get(&manifest_key(stream_id)).await? {
-        let manifest = decode_manifest(&record.value)?;
-        if is_full_shard_range(local_from.get(), local_to.get()) {
-            count = count.saturating_add(manifest.approx_count);
+    loop {
+        if let Some(record) = meta_store
+            .get(&stream_page_meta_key(stream_id, page_start))
+            .await?
+        {
+            let meta = decode_stream_bitmap_meta(&record.value)?;
+            if is_full_page_range(page_start, local_from.get(), local_to.get())
+                || ranges_overlap(
+                    meta.min_local,
+                    meta.max_local,
+                    local_from.get(),
+                    local_to.get(),
+                )
+            {
+                count = count.saturating_add(u64::from(meta.count));
+            }
         } else {
-            for chunk_ref in
-                overlapping_chunk_refs(&manifest.chunk_refs, local_from.get(), local_to.get())
-            {
-                count = count.saturating_add(chunk_ref.count as u64);
+            let page = meta_store
+                .list_prefix(
+                    &stream_fragment_meta_prefix(stream_id, page_start),
+                    None,
+                    usize::MAX,
+                )
+                .await?;
+            for key in page.keys {
+                let Some(record) = meta_store.get(&key).await? else {
+                    continue;
+                };
+                let meta = decode_stream_bitmap_meta(&record.value)?;
+                if ranges_overlap(
+                    meta.min_local,
+                    meta.max_local,
+                    local_from.get(),
+                    local_to.get(),
+                ) {
+                    count = count.saturating_add(u64::from(meta.count));
+                }
             }
         }
-    }
 
-    if let Some(record) = meta_store.get(&tail_key(stream_id)).await? {
-        let tail = decode_tail(&record.value)?;
-        for value in &tail {
-            if is_full_shard_range(local_from.get(), local_to.get())
-                || (value >= local_from.get() && value <= local_to.get())
-            {
-                count = count.saturating_add(1);
-            }
+        if page_start == last_page_start {
+            break;
         }
+        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
     }
 
     Ok(count)
-}
-
-pub(crate) fn overlapping_chunk_refs(
-    chunk_refs: &[ChunkRef],
-    local_from: u32,
-    local_to: u32,
-) -> &[ChunkRef] {
-    if is_full_shard_range(local_from, local_to) {
-        return chunk_refs;
-    }
-    let start = chunk_refs.partition_point(|chunk_ref| chunk_ref.max_local < local_from);
-    let end = chunk_refs.partition_point(|chunk_ref| chunk_ref.min_local <= local_to);
-    &chunk_refs[start..end]
 }
 
 pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
@@ -213,4 +226,19 @@ pub fn clause_values_32(clause: &Clause<[u8; 32]>) -> Vec<Vec<u8>> {
         Clause::One(value) => vec![value.to_vec()],
         Clause::Or(values) => values.iter().map(|value| value.to_vec()).collect(),
     }
+}
+
+fn ranges_overlap(min_local: u32, max_local: u32, local_from: u32, local_to: u32) -> bool {
+    min_local <= local_to && max_local >= local_from
+}
+
+fn is_full_page_range(page_start: u32, local_from: u32, local_to: u32) -> bool {
+    if !is_full_shard_range(local_from, local_to) {
+        return local_from <= page_start
+            && local_to
+                >= page_start
+                    .saturating_add(STREAM_PAGE_LOCAL_ID_SPAN)
+                    .saturating_sub(1);
+    }
+    true
 }

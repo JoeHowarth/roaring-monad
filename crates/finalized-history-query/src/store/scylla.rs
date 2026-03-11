@@ -17,10 +17,16 @@ const DEFAULT_FENCE_CHECK_INTERVAL_MS: u64 = 1000;
 const META_BUCKETS: u16 = 256;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
+    "indexed_head",
+    "writer_lease",
     "block_meta",
     "block_log_headers",
     "block_hash_to_num",
     "log_dir",
+    "log_dir_sub",
+    "log_dir_frag",
+    "stream_frag_meta",
+    "stream_page_meta",
     "manifests",
     "tails",
 ];

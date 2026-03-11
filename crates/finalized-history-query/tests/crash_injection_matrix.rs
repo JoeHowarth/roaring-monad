@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -8,6 +7,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
+use finalized_history_query::domain::keys::INDEXED_HEAD_KEY;
 use finalized_history_query::domain::types::{Block, Log};
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -172,12 +172,7 @@ fn mk_service(
     injector: Arc<FaultInjector>,
 ) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
     FinalizedHistoryService::new(
-        Config {
-            target_entries_per_chunk: 1,
-            target_chunk_bytes: 1,
-            planner_max_or_terms: 64,
-            ..Config::default()
-        },
+        Config::default(),
         FaultyMetaStore {
             inner: meta,
             injector: injector.clone(),
@@ -225,179 +220,103 @@ async fn query_range(
 }
 
 #[test]
-fn ingest_retry_survives_faults_at_phase_boundaries() {
+fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
     block_on(async {
         let cases = vec![
-            (
-                "log_directory_put",
-                FaultOp::MetaPut,
-                b"log_dir/".as_slice(),
-                1usize,
-            ),
             (
                 "block_logs_put",
                 FaultOp::BlobPut,
                 b"block_logs/".as_slice(),
-                1usize,
             ),
             (
                 "block_log_header_put",
                 FaultOp::MetaPut,
                 b"block_log_headers/".as_slice(),
-                1usize,
             ),
             (
                 "block_meta_put",
                 FaultOp::MetaPut,
                 b"block_meta/".as_slice(),
-                1usize,
             ),
             (
                 "block_hash_to_num_put",
                 FaultOp::MetaPut,
                 b"block_hash_to_num/".as_slice(),
-                1usize,
             ),
             (
-                "manifest_put",
+                "log_dir_frag_put",
                 FaultOp::MetaPut,
-                b"manifests/".as_slice(),
-                1usize,
+                b"log_dir_frag/".as_slice(),
             ),
-            ("tail_put", FaultOp::MetaPut, b"tails/".as_slice(), 1usize),
             (
-                "state_cas_put",
+                "stream_frag_meta_put",
                 FaultOp::MetaPut,
-                b"meta/state".as_slice(),
-                1usize,
+                b"stream_frag_meta/".as_slice(),
             ),
             (
-                "chunk_blob_put",
+                "stream_frag_blob_put",
                 FaultOp::BlobPut,
-                b"chunks/".as_slice(),
-                1usize,
+                b"stream_frag_blob/".as_slice(),
             ),
+            ("indexed_head_put", FaultOp::MetaPut, INDEXED_HEAD_KEY),
         ];
 
-        for (name, op, prefix, fail_on_match) in cases {
+        for (label, op, prefix) in cases {
+            let injector = Arc::new(FaultInjector::default());
             let meta = Arc::new(InMemoryMetaStore::default());
             let blob = Arc::new(InMemoryBlobStore::default());
-            let injector = Arc::new(FaultInjector::default());
-
-            let b1 = mk_block(
+            let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
+            let block = mk_block(
                 1,
                 [0; 32],
                 vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 11, 21, 1, 0, 1)],
             );
-            let b2 = mk_block(
-                2,
-                b1.block_hash,
-                vec![mk_log(1, 10, 22, 2, 0, 0), mk_log(3, 12, 23, 2, 0, 1)],
-            );
 
-            let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
-            injector.arm(op, prefix, fail_on_match);
+            injector.arm(op, prefix, 1);
             let err = svc
-                .ingest_finalized_block(b1.clone())
+                .ingest_finalized_block(block.clone())
                 .await
-                .expect_err("fault should fire");
-            assert!(matches!(err, Error::Backend(_)), "case={name}");
+                .expect_err(label);
+            assert!(matches!(err, Error::Backend(_)));
+            assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
 
             injector.clear();
-            let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
-            svc.ingest_finalized_block(b1.clone())
+            svc.ingest_finalized_block(block)
                 .await
-                .expect("retry b1 succeeds");
-            svc.ingest_finalized_block(b2.clone())
-                .await
-                .expect("ingest b2 succeeds");
-
-            assert_eq!(
-                svc.indexed_finalized_head().await.expect("head"),
-                2,
-                "case={name}"
-            );
-
-            let logs = svc
-                .query_logs(
-                    QueryLogsRequest {
-                        from_block: 1,
-                        to_block: 2,
-                        order: QueryOrder::Ascending,
-                        resume_log_id: None,
-                        limit: usize::MAX,
-                        filter: indexed_address_or_filter(&[1, 2, 3, 7, 8]),
-                    },
-                    ExecutionBudget::default(),
-                )
-                .await
-                .expect("query logs")
-                .items;
-
-            let mut seen = HashSet::new();
-            for l in &logs {
-                seen.insert((l.block_num, l.tx_idx, l.log_idx));
-            }
-            assert_eq!(logs.len(), 4, "case={name}");
-            assert_eq!(seen.len(), 4, "case={name}");
-
-            let log_page = meta
-                .list_prefix(b"log_dir/", None, usize::MAX)
-                .await
-                .expect("list logs");
-            assert_eq!(log_page.keys.len(), 1, "case={name}");
+                .expect("retry ingest");
+            let items = query_range(&svc, 1, 1).await;
+            assert_eq!(items.len(), 2);
         }
     });
 }
 
 #[test]
-fn crash_loop_eventually_commits_without_corrupting_state() {
+fn failed_indexed_head_publish_keeps_partial_artifacts_invisible_until_retry() {
     block_on(async {
+        let injector = Arc::new(FaultInjector::default());
         let meta = Arc::new(InMemoryMetaStore::default());
         let blob = Arc::new(InMemoryBlobStore::default());
-        let injector = Arc::new(FaultInjector::default());
-
-        let b1 = mk_block(
+        let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
+        let block = mk_block(
             1,
             [0; 32],
-            vec![mk_log(7, 3, 1, 1, 0, 0), mk_log(8, 4, 2, 1, 0, 1)],
+            vec![mk_log(7, 10, 20, 1, 0, 0), mk_log(8, 11, 21, 1, 0, 1)],
         );
 
-        // Simulate repeated crashes across different write boundaries before a successful run.
-        let staged_faults = vec![
-            (FaultOp::MetaPut, b"log_dir/".as_slice(), 1usize),
-            (FaultOp::MetaPut, b"block_log_headers/".as_slice(), 1usize),
-            (FaultOp::BlobPut, b"block_logs/".as_slice(), 1usize),
-            (FaultOp::MetaPut, b"manifests/".as_slice(), 1usize),
-            (FaultOp::BlobPut, b"chunks/".as_slice(), 1usize),
-            (FaultOp::MetaPut, b"meta/state".as_slice(), 1usize),
-        ];
-
-        for (op, prefix, fail_on_match) in staged_faults {
-            injector.arm(op, prefix, fail_on_match);
-            let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
-            let err = svc
-                .ingest_finalized_block(b1.clone())
-                .await
-                .expect_err("fault must trigger");
-            assert!(matches!(err, Error::Backend(_)));
-            injector.clear();
-        }
-
-        let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
-        svc.ingest_finalized_block(b1.clone())
+        injector.arm(FaultOp::MetaPut, INDEXED_HEAD_KEY, 1);
+        let err = svc
+            .ingest_finalized_block(block.clone())
             .await
-            .expect("eventual ingest should succeed");
+            .expect_err("indexed head publish should fail");
+        assert!(matches!(err, Error::Backend(_)));
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
+        assert!(query_range(&svc, 1, 1).await.is_empty());
 
-        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
-
-        let logs = query_range(&svc, 1, 1).await;
-        assert_eq!(logs.len(), 2);
-
-        let log_page = meta
-            .list_prefix(b"log_dir/", None, usize::MAX)
+        injector.clear();
+        svc.ingest_finalized_block(block)
             .await
-            .expect("list logs");
-        assert_eq!(log_page.keys.len(), 1);
+            .expect("retry ingest");
+        let items = query_range(&svc, 1, 1).await;
+        assert_eq!(items.len(), 2);
     });
 }

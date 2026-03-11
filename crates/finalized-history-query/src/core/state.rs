@@ -1,8 +1,8 @@
-use crate::codec::finalized_state::{decode_block_meta, decode_meta_state};
+use crate::codec::finalized_state::{decode_block_meta, decode_indexed_head, decode_writer_lease};
 use crate::core::refs::BlockRef;
-use crate::domain::keys::{META_STATE_KEY, block_meta_key};
-use crate::domain::types::{BlockMeta, MetaState};
-use crate::error::Result;
+use crate::domain::keys::{INDEXED_HEAD_KEY, WRITER_LEASE_KEY, block_meta_key};
+use crate::domain::types::{BlockMeta, IndexedHead, MetaState};
+use crate::error::{Error, Result};
 use crate::store::traits::MetaStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +16,15 @@ impl From<&MetaState> for FinalizedHeadState {
         Self {
             indexed_finalized_head: value.indexed_finalized_head,
             writer_epoch: value.writer_epoch,
+        }
+    }
+}
+
+impl From<&IndexedHead> for FinalizedHeadState {
+    fn from(value: &IndexedHead) -> Self {
+        Self {
+            indexed_finalized_head: value.indexed_finalized_head,
+            writer_epoch: 0,
         }
     }
 }
@@ -48,13 +57,17 @@ impl From<(u64, &BlockMeta)> for BlockIdentity {
 }
 
 pub async fn load_finalized_head_state<M: MetaStore>(meta_store: &M) -> Result<FinalizedHeadState> {
-    Ok(match meta_store.get(META_STATE_KEY).await? {
-        Some(record) => FinalizedHeadState::from(&decode_meta_state(&record.value)?),
+    let mut state = match meta_store.get(INDEXED_HEAD_KEY).await? {
+        Some(record) => FinalizedHeadState::from(&decode_indexed_head(&record.value)?),
         None => FinalizedHeadState {
             indexed_finalized_head: 0,
             writer_epoch: 0,
         },
-    })
+    };
+    if let Some(record) = meta_store.get(WRITER_LEASE_KEY).await? {
+        state.writer_epoch = decode_writer_lease(&record.value)?.epoch;
+    }
+    Ok(state)
 }
 
 pub async fn load_block_identity<M: MetaStore>(
@@ -68,12 +81,34 @@ pub async fn load_block_identity<M: MetaStore>(
     Ok(Some(BlockIdentity::from((block_num, &block_meta))))
 }
 
+pub async fn derive_next_log_id<M: MetaStore>(
+    meta_store: &M,
+    indexed_finalized_head: u64,
+) -> Result<u64> {
+    if indexed_finalized_head == 0 {
+        return Ok(0);
+    }
+
+    let Some(record) = meta_store
+        .get(&block_meta_key(indexed_finalized_head))
+        .await?
+    else {
+        return Err(Error::NotFound);
+    };
+    let block_meta = decode_block_meta(&record.value)?;
+    Ok(block_meta
+        .first_log_id
+        .saturating_add(u64::from(block_meta.count)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{load_block_identity, load_finalized_head_state};
-    use crate::codec::finalized_state::{encode_block_meta, encode_meta_state};
-    use crate::domain::keys::{META_STATE_KEY, block_meta_key};
-    use crate::domain::types::{BlockMeta, MetaState};
+    use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
+    use crate::codec::finalized_state::{
+        encode_block_meta, encode_indexed_head, encode_writer_lease,
+    };
+    use crate::domain::keys::{INDEXED_HEAD_KEY, WRITER_LEASE_KEY, block_meta_key};
+    use crate::domain::types::{BlockMeta, IndexedHead, WriterLease};
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{FenceToken, MetaStore, PutCond};
     use futures::executor::block_on;
@@ -95,17 +130,26 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             meta.put(
-                META_STATE_KEY,
-                encode_meta_state(&MetaState {
+                INDEXED_HEAD_KEY,
+                encode_indexed_head(&IndexedHead {
                     indexed_finalized_head: 7,
-                    next_log_id: 99,
-                    writer_epoch: 12,
                 }),
                 PutCond::Any,
                 FenceToken(1),
             )
             .await
-            .expect("write meta state");
+            .expect("write indexed head");
+            meta.put(
+                WRITER_LEASE_KEY,
+                encode_writer_lease(&WriterLease {
+                    owner_id: 5,
+                    epoch: 12,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write writer lease");
             meta.put(
                 &block_meta_key(7),
                 encode_block_meta(&BlockMeta {
@@ -133,6 +177,12 @@ mod tests {
             assert_eq!(identity.number, 7);
             assert_eq!(identity.hash, [3; 32]);
             assert_eq!(identity.parent_hash, [4; 32]);
+            assert_eq!(
+                derive_next_log_id(&meta, 7)
+                    .await
+                    .expect("derive next log id"),
+                92
+            );
         });
     }
 }

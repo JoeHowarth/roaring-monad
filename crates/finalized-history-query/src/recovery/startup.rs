@@ -1,6 +1,5 @@
-use crate::codec::finalized_state::decode_meta_state;
-use crate::core::state::{FinalizedHeadState, load_finalized_head_state};
-use crate::domain::keys::META_STATE_KEY;
+use crate::core::ids::LogId;
+use crate::core::state::{FinalizedHeadState, derive_next_log_id, load_finalized_head_state};
 use crate::error::Result;
 use crate::logs::types::LogSequencingState;
 use crate::store::traits::MetaStore;
@@ -14,14 +13,13 @@ pub struct RecoveryPlan {
 
 pub async fn startup_plan<S: MetaStore>(store: &S, warm_streams: usize) -> Result<RecoveryPlan> {
     let head_state = load_finalized_head_state(store).await?;
-    let state = match store.get(META_STATE_KEY).await? {
-        Some(r) => decode_meta_state(&r.value)?,
-        None => Default::default(),
-    };
+    let next_log_id = derive_next_log_id(store, head_state.indexed_finalized_head).await?;
 
     Ok(RecoveryPlan {
         head_state,
-        log_state: LogSequencingState::from(&state),
+        log_state: LogSequencingState {
+            next_log_id: LogId::new(next_log_id),
+        },
         warm_streams,
     })
 }

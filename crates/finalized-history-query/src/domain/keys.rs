@@ -1,7 +1,11 @@
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 
 pub const META_STATE_KEY: &[u8] = b"meta/state";
+pub const INDEXED_HEAD_KEY: &[u8] = b"indexed_head";
+pub const WRITER_LEASE_KEY: &[u8] = b"writer_lease";
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
+pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
+pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 pub const LOCAL_ID_BITS: u32 = 24;
 pub const LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
 pub const MAX_LOCAL_ID: u32 = LOCAL_ID_MASK as u32;
@@ -24,6 +28,10 @@ pub fn log_directory_bucket_start(global_log_id: LogId) -> u64 {
     (global_log_id.get() / LOG_DIRECTORY_BUCKET_SIZE) * LOG_DIRECTORY_BUCKET_SIZE
 }
 
+pub fn log_directory_sub_bucket_start(global_log_id: LogId) -> u64 {
+    (global_log_id.get() / LOG_DIRECTORY_SUB_BUCKET_SIZE) * LOG_DIRECTORY_SUB_BUCKET_SIZE
+}
+
 pub fn log_directory_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
     let mut k = b"log_dir/".to_vec();
     k.extend_from_slice(&u64_be(bucket_start_log_id));
@@ -32,6 +40,25 @@ pub fn log_directory_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
 
 pub fn log_directory_prefix() -> &'static [u8] {
     b"log_dir/"
+}
+
+pub fn log_directory_sub_bucket_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir_sub/".to_vec();
+    k.extend_from_slice(&u64_be(sub_bucket_start_log_id));
+    k
+}
+
+pub fn log_directory_fragment_key(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
+    let mut k = log_directory_fragment_prefix(sub_bucket_start_log_id);
+    k.extend_from_slice(&u64_be(block_num));
+    k
+}
+
+pub fn log_directory_fragment_prefix(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir_frag/".to_vec();
+    k.extend_from_slice(&u64_be(sub_bucket_start_log_id));
+    k.push(b'/');
+    k
 }
 
 pub fn block_log_header_key(block_num: u64) -> Vec<u8> {
@@ -74,6 +101,10 @@ pub fn compose_global_log_id(shard: LogShard, local: LogLocalId) -> LogId {
     compose_log_id(shard, local)
 }
 
+pub fn stream_page_start_local(local_id: u32) -> u32 {
+    (local_id / STREAM_PAGE_LOCAL_ID_SPAN) * STREAM_PAGE_LOCAL_ID_SPAN
+}
+
 pub fn local_range_for_shard(
     from: LogId,
     to_inclusive: LogId,
@@ -105,6 +136,44 @@ pub fn tail_key(stream_id: &str) -> Vec<u8> {
 pub fn chunk_blob_key(stream_id: &str, chunk_seq: u64) -> Vec<u8> {
     let mut k = format!("chunks/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(chunk_seq));
+    k
+}
+
+pub fn stream_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("stream_page_meta/{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k
+}
+
+pub fn stream_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("stream_page_blob/{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k
+}
+
+pub fn stream_fragment_meta_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
+    let mut k = stream_fragment_meta_prefix(stream_id, page_start_local);
+    k.extend_from_slice(&u64_be(block_num));
+    k
+}
+
+pub fn stream_fragment_blob_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
+    let mut k = stream_fragment_blob_prefix(stream_id, page_start_local);
+    k.extend_from_slice(&u64_be(block_num));
+    k
+}
+
+pub fn stream_fragment_meta_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("stream_frag_meta/{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k.push(b'/');
+    k
+}
+
+pub fn stream_fragment_blob_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("stream_frag_blob/{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k.push(b'/');
     k
 }
 
@@ -190,6 +259,26 @@ mod tests {
         assert_eq!(
             log_directory_bucket_start(LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17)),
             LOG_DIRECTORY_BUCKET_SIZE
+        );
+    }
+
+    #[test]
+    fn log_directory_sub_bucket_start_aligns_to_sub_bucket_size() {
+        assert_eq!(log_directory_sub_bucket_start(LogId::new(0)), 0);
+        assert_eq!(log_directory_sub_bucket_start(LogId::new(123)), 0);
+        assert_eq!(
+            log_directory_sub_bucket_start(LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17)),
+            LOG_DIRECTORY_SUB_BUCKET_SIZE
+        );
+    }
+
+    #[test]
+    fn stream_page_start_local_aligns_to_page_span() {
+        assert_eq!(stream_page_start_local(0), 0);
+        assert_eq!(stream_page_start_local(17), 0);
+        assert_eq!(
+            stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN + 7),
+            STREAM_PAGE_LOCAL_ID_SPAN
         );
     }
 }
