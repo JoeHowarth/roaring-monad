@@ -580,7 +580,7 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
         {
             let meta = decode_stream_bitmap_meta(&record.value)?;
             if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                maybe_merge_bitmap_blob(
+                let loaded_page_blob = maybe_merge_bitmap_blob(
                     blob_store,
                     &stream_page_blob_key(stream, page_start),
                     &mut out,
@@ -588,33 +588,18 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
                     local_to,
                 )
                 .await?;
+                if !loaded_page_blob {
+                    load_stream_fragment_entries_for_page(
+                        meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
+                    )
+                    .await?;
+                }
             }
         } else {
-            let page = meta_store
-                .list_prefix(
-                    &stream_fragment_meta_prefix(stream, page_start),
-                    None,
-                    usize::MAX,
-                )
-                .await?;
-            for key in page.keys {
-                let Some(record) = meta_store.get(&key).await? else {
-                    continue;
-                };
-                let meta = decode_stream_bitmap_meta(&record.value)?;
-                if !overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                    continue;
-                }
-                let block_num = read_u64_suffix(&key)?;
-                maybe_merge_bitmap_blob(
-                    blob_store,
-                    &stream_fragment_blob_key(stream, page_start, block_num),
-                    &mut out,
-                    local_from,
-                    local_to,
-                )
-                .await?;
-            }
+            load_stream_fragment_entries_for_page(
+                meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
+            )
+            .await?;
         }
 
         if page_start == last_page_start {
@@ -626,22 +611,59 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     Ok(out)
 }
 
+async fn load_stream_fragment_entries_for_page<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    stream: &str,
+    page_start: u32,
+    local_from: u32,
+    local_to: u32,
+    out: &mut RoaringBitmap,
+) -> Result<()> {
+    let page = meta_store
+        .list_prefix(
+            &stream_fragment_meta_prefix(stream, page_start),
+            None,
+            usize::MAX,
+        )
+        .await?;
+    for key in page.keys {
+        let Some(record) = meta_store.get(&key).await? else {
+            continue;
+        };
+        let meta = decode_stream_bitmap_meta(&record.value)?;
+        if !overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+            continue;
+        }
+        let block_num = read_u64_suffix(&key)?;
+        let _ = maybe_merge_bitmap_blob(
+            blob_store,
+            &stream_fragment_blob_key(stream, page_start, block_num),
+            out,
+            local_from,
+            local_to,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn maybe_merge_bitmap_blob<B: BlobStore>(
     blob_store: &B,
     key: &[u8],
     out: &mut RoaringBitmap,
     local_from: u32,
     local_to: u32,
-) -> Result<()> {
+) -> Result<bool> {
     let Some(bytes) = blob_store.get_blob(key).await? else {
-        return Ok(());
+        return Ok(false);
     };
     let chunk = decode_chunk(&bytes)?;
     if is_full_shard_range(local_from, local_to)
         || (chunk.min_local >= local_from && chunk.max_local <= local_to)
     {
         *out |= &chunk.bitmap;
-        return Ok(());
+        return Ok(true);
     }
 
     for value in chunk.bitmap {
@@ -649,7 +671,7 @@ async fn maybe_merge_bitmap_blob<B: BlobStore>(
             out.insert(value);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn overlaps(min_local: u32, max_local: u32, local_from: u32, local_to: u32) -> bool {
@@ -663,4 +685,82 @@ fn read_u64_suffix(key: &[u8]) -> Result<u64> {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&key[key.len() - 8..]);
     Ok(u64::from_be_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_stream_entries;
+    use crate::codec::log::encode_stream_bitmap_meta;
+    use crate::domain::keys::{
+        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_meta_key,
+    };
+    use crate::domain::types::StreamBitmapMeta;
+    use crate::store::blob::InMemoryBlobStore;
+    use crate::store::meta::InMemoryMetaStore;
+    use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+    use crate::streams::chunk::{ChunkBlob, encode_chunk};
+    use futures::executor::block_on;
+    use roaring::RoaringBitmap;
+
+    #[test]
+    fn load_stream_entries_falls_back_to_fragments_when_page_blob_is_missing() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let block_num = 7u64;
+
+            let mut fragment_bitmap = RoaringBitmap::new();
+            fragment_bitmap.insert(11);
+            let fragment_chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap: fragment_bitmap,
+            };
+
+            meta.put(
+                &stream_fragment_meta_key(stream, page_start, block_num),
+                encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    block_num,
+                    count: 1,
+                    min_local: 11,
+                    max_local: 11,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write stream fragment meta");
+            blob.put_blob(
+                &stream_fragment_blob_key(stream, page_start, block_num),
+                encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
+            )
+            .await
+            .expect("write stream fragment blob");
+
+            meta.put(
+                &stream_page_meta_key(stream, page_start),
+                encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    block_num: 0,
+                    count: 1,
+                    min_local: 11,
+                    max_local: 11,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write stream page meta");
+
+            let entries = load_stream_entries(&meta, &blob, stream, 0, 20)
+                .await
+                .expect("load stream entries");
+
+            assert!(entries.contains(11));
+            assert_eq!(entries.len(), 1);
+        });
+    }
 }

@@ -353,7 +353,8 @@ async fn compact_directory_bucket<M: MetaStore>(
 ) -> Result<()> {
     let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
-    let mut fragments = Vec::new();
+    let mut boundaries = BTreeMap::<u64, u64>::new();
+    let mut sentinel = None::<u64>;
 
     while sub_bucket_start < bucket_end {
         let Some(record) = meta_store
@@ -370,28 +371,41 @@ async fn compact_directory_bucket<M: MetaStore>(
             .enumerate()
             .take(sub_bucket.first_log_ids.len().saturating_sub(1))
         {
-            fragments.push((sub_bucket.start_block + index as u64, *first_log_id));
+            let block_num = sub_bucket.start_block + index as u64;
+            match boundaries.entry(block_num) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(*first_log_id);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    if *entry.get() != *first_log_id {
+                        return Err(Error::Decode(
+                            "inconsistent directory bucket boundary across sub-buckets",
+                        ));
+                    }
+                }
+            }
         }
         if let Some(last) = sub_bucket.first_log_ids.last().copied() {
-            fragments.push((u64::MAX, last));
+            sentinel = Some(match sentinel {
+                Some(current) => current.max(last),
+                None => last,
+            });
         }
         sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
-    if fragments.len() < 2 {
+    let Some(sentinel) = sentinel else {
+        return Ok(());
+    };
+    if boundaries.is_empty() {
         return Ok(());
     }
 
-    fragments.sort_by_key(|(block_num, _)| *block_num);
-    let sentinel = fragments
-        .pop()
-        .map(|(_, sentinel)| sentinel)
-        .ok_or(Error::Decode("missing directory bucket sentinel"))?;
-    let start_block = fragments[0].0;
-    let mut first_log_ids = fragments
-        .into_iter()
-        .map(|(_, first)| first)
-        .collect::<Vec<_>>();
+    let start_block = *boundaries
+        .keys()
+        .next()
+        .ok_or(Error::Decode("missing directory bucket start block"))?;
+    let mut first_log_ids = boundaries.into_values().collect::<Vec<_>>();
     first_log_ids.push(sentinel);
 
     meta_store
@@ -454,18 +468,18 @@ async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         bitmap: merged,
     };
 
+    blob_store
+        .put_blob(
+            &stream_page_blob_key(stream_id, page_start),
+            encode_chunk(&chunk)?,
+        )
+        .await?;
     meta_store
         .put(
             &stream_page_meta_key(stream_id, page_start),
             encode_stream_bitmap_meta(&meta),
             PutCond::Any,
             FenceToken(epoch),
-        )
-        .await?;
-    blob_store
-        .put_blob(
-            &stream_page_blob_key(stream_id, page_start),
-            encode_chunk(&chunk)?,
         )
         .await?;
     Ok(())
@@ -495,10 +509,10 @@ mod tests {
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, block_hash_to_num_key,
-        block_log_header_key, block_logs_blob_key, block_meta_key, log_directory_bucket_key,
-        log_directory_fragment_key, log_directory_sub_bucket_key, log_local,
-        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
+        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
+        block_hash_to_num_key, block_log_header_key, block_logs_blob_key, block_meta_key,
+        log_directory_bucket_key, log_directory_fragment_key, log_directory_sub_bucket_key,
+        log_local, stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
         stream_page_meta_key, stream_page_start_local,
     };
     use crate::logs::ingest::{
@@ -749,11 +763,11 @@ mod tests {
     }
 
     #[test]
-    fn directory_bucket_compaction_writes_1m_summary_when_boundary_seals() {
+    fn directory_bucket_compaction_writes_canonical_1m_summary_when_boundary_seals() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 2;
-            let count = 4u32;
+            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
+            let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
             persist_log_directory_fragments(&meta, 700, first_log_id, count, 3)
                 .await
@@ -762,11 +776,17 @@ mod tests {
                 .await
                 .expect("compact directory");
 
-            assert!(
-                meta.get(&log_directory_bucket_key(0))
-                    .await
-                    .expect("directory bucket")
-                    .is_some()
+            let bucket = meta
+                .get(&log_directory_bucket_key(0))
+                .await
+                .expect("directory bucket")
+                .expect("directory bucket present");
+            let bucket =
+                decode_log_directory_bucket(&bucket.value).expect("decode directory bucket");
+            assert_eq!(bucket.start_block, 700);
+            assert_eq!(
+                bucket.first_log_ids,
+                vec![first_log_id, first_log_id + count as u64]
             );
         });
     }
