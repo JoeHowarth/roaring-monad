@@ -1,7 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use rand::random;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::domain::types::{PublicationState, SessionId};
 use crate::error::{Error, Result};
@@ -56,12 +54,7 @@ impl PublicationLease {
 }
 
 pub fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+    crate::time::current_time_ms()
 }
 
 pub fn new_session_id(owner_id: u64) -> SessionId {

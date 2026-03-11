@@ -12,6 +12,7 @@ pub enum IngestMode {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub now_ms: fn() -> u64,
     pub publication_lease_duration_ms: u64,
     pub publication_lease_renew_skew_ms: u64,
     pub target_entries_per_chunk: u32,
@@ -33,6 +34,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            now_ms: crate::time::current_time_ms,
             publication_lease_duration_ms: 30_000,
             publication_lease_renew_skew_ms: 5_000,
             target_entries_per_chunk: 1950,

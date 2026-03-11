@@ -1,3 +1,7 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
@@ -20,8 +24,10 @@ use finalized_history_query::ingest::publication::{
 use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{FenceStore, PublicationStore};
-use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use finalized_history_query::store::traits::{
+    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+};
 use finalized_history_query::{Clause, Error, LogFilter};
 use futures::executor::block_on;
 
@@ -111,6 +117,167 @@ where
         ExecutionBudget::default(),
     )
     .await
+}
+
+static CONTROLLED_NOW_MS: AtomicU64 = AtomicU64::new(0);
+fn controlled_now_ms() -> u64 {
+    CONTROLLED_NOW_MS.load(Ordering::Relaxed)
+}
+
+#[derive(Clone)]
+struct FailDeleteOnceMetaStore {
+    inner: Arc<InMemoryMetaStore>,
+    failed: Arc<AtomicBool>,
+}
+
+impl MetaStore for FailDeleteOnceMetaStore {
+    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<PutResult> {
+        self.inner.put(key, value, cond, fence).await
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: DelCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<()> {
+        if key == block_meta_key(1).as_slice() && !self.failed.swap(true, Ordering::Relaxed) {
+            return Err(Error::Backend("injected startup retry failure".to_string()));
+        }
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_history_query::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
+impl PublicationStore for FailDeleteOnceMetaStore {
+    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
+        self.inner.load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.compare_and_set(expected, next).await
+    }
+}
+
+impl FenceStore for FailDeleteOnceMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
+        self.inner.advance_fence(min_epoch).await
+    }
+}
+
+#[derive(Clone)]
+struct ExpireBeforePublishMetaStore {
+    inner: Arc<InMemoryMetaStore>,
+    advanced: Arc<AtomicBool>,
+}
+
+impl MetaStore for ExpireBeforePublishMetaStore {
+    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<PutResult> {
+        let result = self.inner.put(key, value, cond, fence).await?;
+        if key != PUBLICATION_STATE_KEY && !self.advanced.swap(true, Ordering::Relaxed) {
+            let publication_state = self
+                .inner
+                .load()
+                .await?
+                .expect("publication state should exist before artifact writes");
+            CONTROLLED_NOW_MS.store(
+                publication_state.lease_expires_at_ms.saturating_add(1),
+                Ordering::Relaxed,
+            );
+        }
+        Ok(result)
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: DelCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_history_query::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
+impl PublicationStore for ExpireBeforePublishMetaStore {
+    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
+        self.inner.load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        if next.indexed_finalized_head > expected.indexed_finalized_head
+            && expected.lease_expires_at_ms < CONTROLLED_NOW_MS.load(Ordering::Relaxed)
+        {
+            return Ok(CasOutcome::Failed {
+                current: Some(expected.clone()),
+            });
+        }
+        self.inner.compare_and_set(expected, next).await
+    }
+}
+
+impl FenceStore for ExpireBeforePublishMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
+        self.inner.advance_fence(min_epoch).await
+    }
 }
 
 #[test]
@@ -701,5 +868,79 @@ fn startup_plan_should_not_take_publication_ownership() {
             decode_publication_state(&publication_state.value).expect("decode publication state");
         assert_eq!(publication_state.owner_id, 7);
         assert_eq!(publication_state.epoch, 3);
+    });
+}
+
+#[test]
+fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
+    block_on(async {
+        let inner = Arc::new(InMemoryMetaStore::default());
+        inner
+            .put(
+                &block_meta_key(1),
+                encode_block_meta(&BlockMeta {
+                    block_hash: [1; 32],
+                    parent_hash: [0; 32],
+                    first_log_id: 0,
+                    count: 0,
+                }),
+                PutCond::Any,
+                FenceToken(0),
+            )
+            .await
+            .expect("seed unpublished block meta");
+
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            FailDeleteOnceMetaStore {
+                inner,
+                failed: Arc::new(AtomicBool::new(false)),
+            },
+            InMemoryBlobStore::default(),
+            7,
+        );
+
+        let err = svc
+            .startup()
+            .await
+            .expect_err("first startup should fail after ownership is acquired");
+        assert!(matches!(err, Error::Backend(_)));
+
+        svc.startup()
+            .await
+            .expect("retry startup should reuse the same session");
+    });
+}
+
+#[test]
+fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
+    block_on(async {
+        CONTROLLED_NOW_MS.store(1_000, Ordering::Relaxed);
+
+        let config = Config {
+            now_ms: controlled_now_ms,
+            publication_lease_duration_ms: 50,
+            publication_lease_renew_skew_ms: 0,
+            ..Config::default()
+        };
+        let meta = ExpireBeforePublishMetaStore {
+            inner: Arc::new(InMemoryMetaStore::default()),
+            advanced: Arc::new(AtomicBool::new(false)),
+        };
+        let blob = InMemoryBlobStore::default();
+        let engine = IngestEngine::new(config, meta, blob);
+
+        let lease =
+            bootstrap_publication_state(&engine.meta_store, 1, [1u8; 16], controlled_now_ms(), 50)
+                .await
+                .expect("bootstrap");
+
+        engine
+            .ingest_finalized_block(
+                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+                lease,
+            )
+            .await
+            .expect("ingest should renew before final publish");
     });
 }

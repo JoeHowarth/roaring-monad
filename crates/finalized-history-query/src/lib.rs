@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod recovery;
 pub mod store;
 pub mod streams;
+pub(crate) mod time;
 
 pub use api::{
     ExecutionBudget, FinalizedHistoryService, FinalizedHistoryWriter, FinalizedLogQueries,

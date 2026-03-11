@@ -6,7 +6,7 @@ use crate::ingest::open_pages::{
     OpenStreamPage, collect_newly_sealed_open_stream_pages, delete_open_stream_page,
     mark_open_stream_page_if_absent,
 };
-use crate::ingest::publication::{PublicationLease, current_time_ms, renew_publication_if_needed};
+use crate::ingest::publication::{PublicationLease, renew_publication_if_needed};
 use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
@@ -50,7 +50,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
         let lease = renew_publication_if_needed(
             &self.meta_store,
             lease,
-            current_time_ms(),
+            (self.config.now_ms)(),
             self.config.publication_lease_renew_skew_ms,
             self.config.publication_lease_duration_ms,
         )
@@ -137,6 +137,15 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
             .await?;
             delete_open_stream_page(&self.meta_store, &page, fence).await?;
         }
+
+        let lease = renew_publication_if_needed(
+            &self.meta_store,
+            lease,
+            (self.config.now_ms)(),
+            self.config.publication_lease_renew_skew_ms,
+            self.config.publication_lease_duration_ms,
+        )
+        .await?;
 
         let expected_state = lease.as_state();
         let next_lease = PublicationLease {

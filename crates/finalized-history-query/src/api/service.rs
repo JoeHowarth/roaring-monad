@@ -6,10 +6,11 @@ use crate::api::write::FinalizedHistoryWriter;
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
 use crate::core::state::load_finalized_head_state;
+use crate::domain::types::SessionId;
 use crate::error::{Error, Result};
 use crate::gc::worker::{GcStats, GcWorker};
 use crate::ingest::engine::{IngestEngine, MaintenanceStats};
-use crate::ingest::publication::PublicationLease;
+use crate::ingest::publication::{PublicationLease, new_session_id};
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
 use crate::recovery::startup::{RecoveryPlan, startup_with_writer};
@@ -20,6 +21,7 @@ pub struct FinalizedHistoryService<M: MetaStore + PublicationStore + FenceStore,
     pub ingest: IngestEngine<M, B>,
     query: LogsQueryEngine,
     writer_id: u64,
+    session_id: SessionId,
     config: Config,
     state: Arc<RuntimeState>,
     startup_state: Arc<futures::lock::Mutex<Option<PublicationLease>>>,
@@ -33,6 +35,7 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
             ingest,
             query,
             writer_id,
+            session_id: new_session_id(writer_id),
             config,
             state: Arc::new(RuntimeState::default()),
             startup_state: Arc::new(futures::lock::Mutex::new(None)),
@@ -68,6 +71,7 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
             &self.ingest.blob_store,
             0,
             self.writer_id,
+            self.session_id,
         )
         .await;
         match &result {
