@@ -509,6 +509,49 @@ Why this is the right level:
 
 If the implementation needs richer error classification, add typed failure reasons above this trait rather than widening the storage primitive itself.
 
+### Blob/object immutability capability
+
+The protocol also requires an explicit blob-side primitive for immutable object creation.
+
+Conceptual shape:
+
+```rust
+enum CreateOutcome {
+    Created,
+    AlreadyExists,
+}
+
+#[allow(async_fn_in_trait)]
+trait BlobStore: Send + Sync {
+    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
+
+    async fn put_blob_if_absent(
+        &self,
+        key: &[u8],
+        value: Bytes,
+    ) -> Result<CreateOutcome>;
+
+    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
+
+    async fn delete_blob(&self, key: &[u8]) -> Result<()>;
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page>;
+}
+```
+
+Required usage:
+
+- Class A authoritative blobs use `put_blob_if_absent`
+- Class B shared summary blobs use `put_blob_if_absent`
+- `put_blob` remains available only for workflows whose keys are explicitly mutable by design
+
+This capability is required because object-store immutability is part of the safety model, not merely an implementation detail.
+
 ## Write Frequency Characterization
 
 This section characterizes the current write surface using the expected operating point and the
@@ -813,13 +856,32 @@ For the expected backends:
 
 - Scylla:
   - `publication_state` and metadata CAS operations must use LWT
-  - readers must use normal Scylla reads against already-committed metadata rows
+  - readers must use read/query paths with consistency strong enough to observe already-committed metadata rows
+  - correctness-sensitive `list_prefix` operations must use read/query behavior that provides complete prefix enumeration for committed rows in scope
 - DynamoDB:
   - `publication_state` and metadata CAS operations must use conditional single-item writes
   - readers must use read modes that guarantee visibility of the committed item state they depend on
+  - correctness-sensitive `list_prefix` operations must be implemented as strongly consistent base-table queries, not GSIs
 - object/blob store:
   - immutable object creation must support conditional create (`if absent`)
   - the deployment must provide read-after-write visibility for newly created objects before the corresponding head advance is considered safe to publish
+  - any correctness-sensitive object enumeration must also provide list-after-write visibility for the relevant prefixes
+
+Correctness-sensitive enumeration includes:
+
+- cleanup-first recovery over unpublished suffix artifacts
+- shared-summary construction from sealed source fragments
+
+Read-after-write alone is not sufficient for those workflows. They require complete prefix enumeration of the relevant source set.
+
+Required backend notes:
+
+- DynamoDB:
+  - strong consistency is acceptable only on the base table or LSIs
+  - correctness-sensitive prefix enumeration must not depend on GSIs
+- S3-compatible object stores:
+  - AWS S3 satisfies the required read-after-write and list-after-write object semantics
+  - any alternate S3-compatible backend must prove equivalent semantics or be treated as unsupported for correctness-sensitive workflows
 
 Required publication ordering:
 
