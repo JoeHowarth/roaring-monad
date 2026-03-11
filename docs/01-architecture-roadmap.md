@@ -137,11 +137,16 @@ The executor preserves primary IDs through page assembly so `has_more`, `next_re
 It is responsible for:
 
 - finalized sequence and parent validation
-- publication ownership acquisition
-- cleanup-first recovery of unpublished suffix artifacts
 - coordinating log artifact writes
 - coordinating immutable directory and stream frontier publication
 - advancing `publication_state.indexed_finalized_head` last
+
+`FinalizedHistoryService::startup()` owns publication lifecycle:
+
+- publication ownership acquisition
+- cleanup-first recovery of unpublished suffix artifacts
+- sealed open-page marker repair
+- deriving the startup `next_log_id` view
 
 The logs family owns:
 

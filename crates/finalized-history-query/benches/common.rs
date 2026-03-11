@@ -6,7 +6,9 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::codec::finalized_state::{encode_block_meta, encode_meta_state};
+use finalized_history_query::codec::finalized_state::{
+    encode_block_meta, encode_publication_state,
+};
 use finalized_history_query::codec::log::validate_log;
 use finalized_history_query::codec::log::{
     encode_block_log_header, encode_log, encode_log_directory_bucket,
@@ -18,12 +20,12 @@ use finalized_history_query::core::ids::{
 };
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
-    MAX_LOCAL_ID, META_STATE_KEY, block_log_header_key, block_logs_blob_key, block_meta_key,
+    MAX_LOCAL_ID, PUBLICATION_STATE_KEY, block_log_header_key, block_logs_blob_key, block_meta_key,
     chunk_blob_key, log_directory_bucket_key, log_directory_bucket_start, manifest_key, stream_id,
     tail_key,
 };
 use finalized_history_query::domain::types::{
-    Block, BlockMeta, Log, LogDirectoryBucket, MetaState,
+    Block, BlockMeta, Log, LogDirectoryBucket, PublicationState,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -464,19 +466,19 @@ pub fn seed_materialized_blocks(
     });
 }
 
-pub fn seed_meta_state(
+pub fn seed_publication_state(
     meta_store: &InMemoryMetaStore,
     indexed_finalized_head: u64,
-    next_log_id: u64,
+    _next_log_id: u64,
 ) {
     block_on(async {
         put_meta_record(
             meta_store,
-            META_STATE_KEY,
-            encode_meta_state(&MetaState {
+            PUBLICATION_STATE_KEY,
+            encode_publication_state(&PublicationState {
+                owner_id: DEFAULT_WRITER_EPOCH,
+                epoch: DEFAULT_WRITER_EPOCH,
                 indexed_finalized_head,
-                next_log_id,
-                writer_epoch: DEFAULT_WRITER_EPOCH,
             }),
         )
         .await;

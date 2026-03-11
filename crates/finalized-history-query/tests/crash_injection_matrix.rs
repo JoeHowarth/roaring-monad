@@ -6,10 +6,15 @@ use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
+use finalized_history_query::codec::finalized_state::encode_block_meta;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::PUBLICATION_STATE_KEY;
-use finalized_history_query::domain::types::{Block, Log, PublicationState};
+use finalized_history_query::domain::keys::{
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_KEY, block_meta_key,
+    log_directory_sub_bucket_key, stream_id, stream_page_meta_key, stream_page_start_local,
+};
+use finalized_history_query::domain::types::{Block, BlockMeta, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
+use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
@@ -205,6 +210,15 @@ fn mk_service(
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
 ) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
+    mk_service_with_writer(meta, blob, injector, 1)
+}
+
+fn mk_service_with_writer(
+    meta: Arc<InMemoryMetaStore>,
+    blob: Arc<InMemoryBlobStore>,
+    injector: Arc<FaultInjector>,
+    writer_id: u64,
+) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
     FinalizedHistoryService::new(
         Config::default(),
         FaultyMetaStore {
@@ -215,7 +229,7 @@ fn mk_service(
             inner: blob,
             injector,
         },
-        1,
+        writer_id,
     )
 }
 
@@ -341,7 +355,7 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
             vec![mk_log(7, 10, 20, 1, 0, 0), mk_log(8, 11, 21, 1, 0, 1)],
         );
 
-        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 2);
+        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
@@ -356,5 +370,109 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
             .expect("retry ingest");
         let items = query_range(&svc, 1, 1).await;
         assert_eq!(items.len(), 2);
+    });
+}
+
+#[test]
+fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
+    block_on(async {
+        let injector = Arc::new(FaultInjector::default());
+        let meta = Arc::new(InMemoryMetaStore::default());
+        let blob = Arc::new(InMemoryBlobStore::default());
+        let seed_first_log_id = 2_560_000u64 - 2;
+
+        assert!(matches!(
+            meta.create_if_absent(&PublicationState {
+                owner_id: 1,
+                epoch: 1,
+                indexed_finalized_head: 1,
+            })
+            .await
+            .expect("seed publication state"),
+            CasOutcome::Applied(_)
+        ));
+        meta.put(
+            &block_meta_key(1),
+            encode_block_meta(&BlockMeta {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_log_id: seed_first_log_id,
+                count: 0,
+            }),
+            PutCond::Any,
+            FenceToken(1),
+        )
+        .await
+        .expect("seed block 1 meta");
+
+        let crashing_writer =
+            mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 1);
+        crashing_writer.startup().await.expect("writer startup");
+        let first_attempt = mk_block(
+            2,
+            [1; 32],
+            vec![
+                mk_log(7, 10, 20, 2, 0, 0),
+                mk_log(7, 10, 21, 2, 0, 1),
+                mk_log(7, 10, 22, 2, 0, 2),
+            ],
+        );
+
+        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 1);
+        let err = crashing_writer
+            .ingest_finalized_block(first_attempt)
+            .await
+            .expect_err("publish CAS should fail after summary creation");
+        assert!(matches!(err, Error::Backend(_)));
+
+        assert!(
+            meta.get(&log_directory_sub_bucket_key(
+                2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE
+            ))
+            .await
+            .expect("dir sub bucket")
+            .is_some()
+        );
+        let sid = stream_id(
+            "addr",
+            &[7; 20],
+            finalized_history_query::core::ids::LogShard::new(0).unwrap(),
+        );
+        let page_start = stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
+        assert!(
+            meta.get(&stream_page_meta_key(&sid, page_start))
+                .await
+                .expect("stream page meta")
+                .is_some()
+        );
+
+        injector.clear();
+        let takeover_writer =
+            mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 2);
+        takeover_writer.startup().await.expect("startup cleanup");
+
+        let retry_block = mk_block(
+            2,
+            [1; 32],
+            vec![
+                mk_log(7, 10, 20, 2, 0, 0),
+                mk_log(7, 10, 21, 2, 0, 1),
+                mk_log(7, 10, 22, 2, 0, 2),
+                mk_log(7, 10, 23, 2, 0, 3),
+            ],
+        );
+        takeover_writer
+            .ingest_finalized_block(retry_block)
+            .await
+            .expect("retry after cleanup");
+
+        let plan = startup_plan(
+            &takeover_writer.ingest.meta_store,
+            &takeover_writer.ingest.blob_store,
+            0,
+        )
+        .await
+        .expect("post retry startup plan");
+        assert_eq!(plan.head_state.indexed_finalized_head, 2);
     });
 }

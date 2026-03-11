@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
 
@@ -55,21 +57,33 @@ impl FsMetaStore {
         }
         Ok(())
     }
+
+    fn publication_state_lock(&self) -> Result<Arc<Mutex<()>>> {
+        static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+        let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = locks
+            .lock()
+            .map_err(|_| Error::Backend("poisoned publication lock map".to_string()))?;
+        Ok(guard
+            .entry(self.publication_state_path())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone())
+    }
 }
 
 impl PublicationStore for FsMetaStore {
     async fn load(&self) -> Result<Option<PublicationState>> {
-        let path = self.publication_state_path();
-        if !path.exists() {
-            return Ok(None);
-        }
-        Ok(Some(decode_publication_state(&read_file_bytes(&path)?)?))
+        load_publication_state_from_path(&self.publication_state_path())
     }
 
     async fn create_if_absent(
         &self,
         initial: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>> {
+        let lock = self.publication_state_lock()?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| Error::Backend("poisoned publication state lock".to_string()))?;
         let path = self.publication_state_path();
         let version_path = self.publication_state_version_path();
         if let Some(parent) = path.parent() {
@@ -78,11 +92,11 @@ impl PublicationStore for FsMetaStore {
         }
         match write_file_bytes_create_new(&path, &encode_publication_state(initial)) {
             Ok(()) => {
-                write_file_bytes(&version_path, &1u64.to_be_bytes())?;
+                write_file_bytes_atomic(&version_path, &1u64.to_be_bytes())?;
                 Ok(CasOutcome::Applied(initial.clone()))
             }
             Err(Error::Backend(message)) if message.contains("exists") => Ok(CasOutcome::Failed {
-                current: self.load().await?,
+                current: load_publication_state_from_path(&path)?,
             }),
             Err(error) => Err(error),
         }
@@ -93,6 +107,10 @@ impl PublicationStore for FsMetaStore {
         expected: &PublicationState,
         next: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>> {
+        let lock = self.publication_state_lock()?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| Error::Backend("poisoned publication state lock".to_string()))?;
         let path = self.publication_state_path();
         if !path.exists() {
             return Ok(CasOutcome::Failed { current: None });
@@ -104,7 +122,7 @@ impl PublicationStore for FsMetaStore {
             });
         }
 
-        write_file_bytes(&path, &encode_publication_state(next))?;
+        write_file_bytes_atomic(&path, &encode_publication_state(next))?;
         let version_path = self.publication_state_version_path();
         let next_version = if version_path.exists() {
             let mut bytes = [0u8; 8];
@@ -113,9 +131,16 @@ impl PublicationStore for FsMetaStore {
         } else {
             1
         };
-        write_file_bytes(&version_path, &next_version.to_be_bytes())?;
+        write_file_bytes_atomic(&version_path, &next_version.to_be_bytes())?;
         Ok(CasOutcome::Applied(next.clone()))
     }
+}
+
+fn load_publication_state_from_path(path: &Path) -> Result<Option<PublicationState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(decode_publication_state(&read_file_bytes(path)?)?))
 }
 
 impl MetaStore for FsMetaStore {
@@ -379,6 +404,25 @@ fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn write_file_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(Error::Backend("path missing parent".to_string()));
+    };
+    fs::create_dir_all(parent).map_err(|e| Error::Backend(format!("fs atomic parent: {e}")))?;
+    let temp_name = format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| Error::Backend(format!("fs atomic time: {e}")))?
+            .as_nanos()
+    );
+    let temp_path = parent.join(temp_name);
+    write_file_bytes_create_new(&temp_path, bytes)?;
+    fs::rename(&temp_path, path).map_err(|e| Error::Backend(format!("fs atomic rename: {e}")))?;
+    Ok(())
+}
+
 fn write_file_bytes_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -503,4 +547,98 @@ fn collect_keys_from_group_dir(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::executor::block_on;
+
+    fn unique_temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "finalized-history-query-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn create_if_absent_allows_only_one_creator() {
+        let root = unique_temp_root("fs-create");
+        let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
+        let state = PublicationState {
+            owner_id: 1,
+            epoch: 1,
+            indexed_finalized_head: 0,
+        };
+
+        let handles = (0..2)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                let state = state.clone();
+                std::thread::spawn(move || block_on(store.create_if_absent(&state)))
+            })
+            .collect::<Vec<_>>();
+
+        let mut applied = 0usize;
+        let mut failed = 0usize;
+        for handle in handles {
+            match handle.join().expect("join").expect("cas result") {
+                CasOutcome::Applied(_) => applied += 1,
+                CasOutcome::Failed { .. } => failed += 1,
+            }
+        }
+
+        assert_eq!(applied, 1);
+        assert_eq!(failed, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compare_and_set_is_serialized() {
+        let root = unique_temp_root("fs-cas");
+        let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
+        let initial = PublicationState {
+            owner_id: 1,
+            epoch: 1,
+            indexed_finalized_head: 0,
+        };
+        block_on(store.create_if_absent(&initial)).expect("seed publication state");
+
+        let next_a = PublicationState {
+            owner_id: 1,
+            epoch: 1,
+            indexed_finalized_head: 1,
+        };
+        let next_b = PublicationState {
+            owner_id: 2,
+            epoch: 2,
+            indexed_finalized_head: 0,
+        };
+
+        let store_a = Arc::clone(&store);
+        let store_b = store;
+        let initial_a = initial.clone();
+        let initial_b = initial;
+        let handles = vec![
+            std::thread::spawn(move || block_on(store_a.compare_and_set(&initial_a, &next_a))),
+            std::thread::spawn(move || block_on(store_b.compare_and_set(&initial_b, &next_b))),
+        ];
+
+        let mut applied = 0usize;
+        let mut failed = 0usize;
+        for handle in handles {
+            match handle.join().expect("join").expect("cas result") {
+                CasOutcome::Applied(_) => applied += 1,
+                CasOutcome::Failed { .. } => failed += 1,
+            }
+        }
+
+        assert_eq!(applied, 1);
+        assert_eq!(failed, 1);
+        let _ = fs::remove_dir_all(root);
+    }
 }

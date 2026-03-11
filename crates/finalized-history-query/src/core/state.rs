@@ -1,7 +1,7 @@
 use crate::codec::finalized_state::decode_block_meta;
 use crate::core::refs::BlockRef;
 use crate::domain::keys::block_meta_key;
-use crate::domain::types::{BlockMeta, MetaState, PublicationState};
+use crate::domain::types::{BlockMeta, PublicationState};
 use crate::error::{Error, Result};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::MetaStore;
@@ -9,23 +9,14 @@ use crate::store::traits::MetaStore;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizedHeadState {
     pub indexed_finalized_head: u64,
-    pub writer_epoch: u64,
-}
-
-impl From<&MetaState> for FinalizedHeadState {
-    fn from(value: &MetaState) -> Self {
-        Self {
-            indexed_finalized_head: value.indexed_finalized_head,
-            writer_epoch: value.writer_epoch,
-        }
-    }
+    pub publication_epoch: u64,
 }
 
 impl From<&PublicationState> for FinalizedHeadState {
     fn from(value: &PublicationState) -> Self {
         Self {
             indexed_finalized_head: value.indexed_finalized_head,
-            writer_epoch: value.epoch,
+            publication_epoch: value.epoch,
         }
     }
 }
@@ -64,7 +55,7 @@ pub async fn load_finalized_head_state<P: PublicationStore>(
         Some(state) => FinalizedHeadState::from(&state),
         None => FinalizedHeadState {
             indexed_finalized_head: 0,
-            writer_epoch: 0,
+            publication_epoch: 0,
         },
     })
 }
@@ -119,7 +110,7 @@ mod tests {
                 .await
                 .expect("load finalized head state");
             assert_eq!(state.indexed_finalized_head, 0);
-            assert_eq!(state.writer_epoch, 0);
+            assert_eq!(state.publication_epoch, 0);
         });
     }
 
@@ -160,7 +151,7 @@ mod tests {
                 .expect("block identity present");
 
             assert_eq!(state.indexed_finalized_head, 7);
-            assert_eq!(state.writer_epoch, 12);
+            assert_eq!(state.publication_epoch, 12);
             assert_eq!(identity.number, 7);
             assert_eq!(identity.hash, [3; 32]);
             assert_eq!(identity.parent_hash, [4; 32]);

@@ -1,6 +1,5 @@
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 
-pub const META_STATE_KEY: &[u8] = b"meta/state";
 pub const PUBLICATION_STATE_KEY: &[u8] = b"publication_state";
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;

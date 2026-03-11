@@ -55,7 +55,7 @@ class QueryPage[T]:
 
 class FinalizedHeadState:
     indexed_finalized_head: int
-    writer_epoch: int
+    publication_epoch: int
 
 
 class BlockIdentity:
@@ -110,10 +110,16 @@ log views:
 
 ```python
 class FinalizedHistoryService:
+    async def startup(self) -> RecoveryPlan:
+        ...
+
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]:
         ...
 
     async def ingest_finalized_block(self, block: Block) -> IngestOutcome:
+        ...
+
+    async def ingest_finalized_blocks(self, blocks: list[Block]) -> IngestOutcome:
         ...
 ```
 
@@ -233,33 +239,41 @@ Queries without at least one indexed address/topic clause are rejected at the bo
 ## Ingest Flow
 
 ```python
-async def ingest_finalized_block(block, writer_id):
+async def startup(writer_id):
     lease = acquire_publication(writer_id)
     cleanup_unpublished_suffix(lease.indexed_finalized_head)
+    repair_open_stream_page_markers(derive_next_log_id_from_block_meta(lease.indexed_finalized_head))
+    return lease
 
-    validate_block_sequence_and_parent(block, lease.indexed_finalized_head)
+async def ingest_finalized_blocks(blocks, lease):
+    validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
 
     first_log_id = derive_next_log_id_from_block_meta(lease.indexed_finalized_head)
-    next_log_id = first_log_id + len(block.logs)
+    next_log_id = first_log_id
+    opened_during = []
 
-    await logs.persist_log_artifacts(block.logs, first_log_id)
-    await logs.persist_log_block_metadata(block, first_log_id)
-    await logs.persist_log_directory_fragments(block, first_log_id)
-    touched_pages = await logs.persist_stream_fragments(block, first_log_id)
-    await mark_open_stream_pages(touched_pages, next_log_id)
+    for block in blocks:
+        await logs.persist_log_artifacts(block.logs, next_log_id)
+        await logs.persist_log_block_metadata(block, next_log_id)
+        await logs.persist_log_directory_fragments(block, next_log_id)
+        opened_during.extend(await logs.persist_stream_fragments(block, next_log_id))
+        next_log_id += len(block.logs)
 
-    await logs.compact_sealed_directory_boundaries(first_log_id, next_log_id)
-    await repair_and_seal_stream_pages(next_log_id)
+    await mark_open_stream_pages_that_remain_open(opened_during, next_log_id)
+
+    await logs.compact_newly_sealed_directory_boundaries(first_log_id, next_log_id)
+    await seal_newly_sealed_stream_pages(first_log_id, next_log_id, opened_during)
 
     await compare_and_set_publication_state(
         expected=lease,
-        next_head=block.block_num,
+        next_head=blocks[-1].block_num,
     )
 ```
 
 Important boundary:
 
-- `ingest/engine.rs` acquires publication ownership, runs cleanup-first recovery, validates finalized sequencing, and orchestrates work
+- `api/service.rs` startup acquires publication ownership, runs cleanup-first recovery, and caches the lease for ingest
+- `ingest/engine.rs` validates finalized sequencing and orchestrates publication for `H -> T`
 - `logs/ingest.rs` owns immutable directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last and is the only reader-visible watermark
 

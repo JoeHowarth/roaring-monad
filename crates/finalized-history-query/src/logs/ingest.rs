@@ -200,28 +200,83 @@ pub async fn compact_sealed_directory<M: MetaStore>(
     next_log_id: u64,
     epoch: u64,
 ) -> Result<()> {
-    if count == 0 {
+    let from_next_log_id = first_log_id;
+    if count == 0 || next_log_id <= from_next_log_id {
         return Ok(());
     }
 
-    let mut sub_bucket_start = log_directory_sub_bucket_start(LogId::new(first_log_id));
-    let last_sub_bucket_start =
-        log_directory_sub_bucket_start(LogId::new(next_log_id.saturating_sub(1)));
-    while sub_bucket_start <= last_sub_bucket_start {
-        let sub_bucket_end = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
-        if sub_bucket_end <= next_log_id {
-            compact_directory_sub_bucket(meta_store, sub_bucket_start, epoch).await?;
-        }
-        sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+    compact_newly_sealed_directory(meta_store, from_next_log_id, next_log_id, epoch).await
+}
+
+pub async fn compact_newly_sealed_directory<M: MetaStore>(
+    meta_store: &M,
+    from_next_log_id: u64,
+    next_log_id: u64,
+    epoch: u64,
+) -> Result<()> {
+    if next_log_id <= from_next_log_id {
+        return Ok(());
     }
 
-    let bucket_start = log_directory_bucket_start(LogId::new(first_log_id));
-    let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
-    if next_log_id >= bucket_end {
+    for sub_bucket_start in newly_sealed_directory_sub_bucket_starts(from_next_log_id, next_log_id)
+    {
+        compact_directory_sub_bucket(meta_store, sub_bucket_start, epoch).await?;
+    }
+
+    for bucket_start in newly_sealed_directory_bucket_starts(from_next_log_id, next_log_id) {
         compact_directory_bucket(meta_store, bucket_start, epoch).await?;
     }
 
     Ok(())
+}
+
+pub fn newly_sealed_directory_sub_bucket_starts(
+    from_next_log_id: u64,
+    to_next_log_id: u64,
+) -> Vec<u64> {
+    sealed_directory_ranges(
+        from_next_log_id,
+        to_next_log_id,
+        LOG_DIRECTORY_SUB_BUCKET_SIZE,
+        log_directory_sub_bucket_start,
+    )
+}
+
+pub fn newly_sealed_directory_bucket_starts(
+    from_next_log_id: u64,
+    to_next_log_id: u64,
+) -> Vec<u64> {
+    sealed_directory_ranges(
+        from_next_log_id,
+        to_next_log_id,
+        crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE,
+        log_directory_bucket_start,
+    )
+}
+
+fn sealed_directory_ranges(
+    from_next_log_id: u64,
+    to_next_log_id: u64,
+    span: u64,
+    align: impl Fn(LogId) -> u64,
+) -> Vec<u64> {
+    if to_next_log_id <= from_next_log_id {
+        return Vec::new();
+    }
+
+    let mut current = align(LogId::new(from_next_log_id));
+    let mut out = Vec::new();
+    loop {
+        let end = current.saturating_add(span);
+        if end > to_next_log_id {
+            break;
+        }
+        if end > from_next_log_id {
+            out.push(current);
+        }
+        current = current.saturating_add(span);
+    }
+    out
 }
 
 pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<String, Vec<u32>> {

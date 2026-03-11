@@ -266,7 +266,7 @@ fn readers_use_only_publication_state() {
             .await
             .expect("load finalized head state");
         assert_eq!(state.indexed_finalized_head, 3);
-        assert_eq!(state.writer_epoch, 4);
+        assert_eq!(state.publication_epoch, 4);
     });
 }
 
@@ -455,5 +455,51 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
                 .expect("directory fragment")
                 .is_some()
         );
+    });
+}
+
+#[test]
+fn service_startup_bootstraps_publication_ownership() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        let plan = svc.startup().await.expect("startup");
+        assert_eq!(plan.head_state.indexed_finalized_head, 0);
+        assert_eq!(plan.head_state.publication_epoch, 1);
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
+    });
+}
+
+#[test]
+fn service_can_publish_a_contiguous_batch() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        svc.startup().await.expect("startup");
+
+        let blocks = vec![
+            mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+            mk_block(2, [1; 32], vec![mk_log(1, 10, 21, 2, 0, 0)]),
+        ];
+        let (outcome, head_state) = (
+            svc.ingest_finalized_blocks(blocks)
+                .await
+                .expect("batched ingest"),
+            load_finalized_head_state(&svc.ingest.meta_store)
+                .await
+                .expect("head state"),
+        );
+
+        assert_eq!(outcome.indexed_finalized_head, 2);
+        assert_eq!(head_state.indexed_finalized_head, 2);
     });
 }

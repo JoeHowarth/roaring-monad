@@ -58,24 +58,6 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct MetaState {
-    pub indexed_finalized_head: u64,
-    pub next_log_id: u64,
-    pub writer_epoch: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct IndexedHead {
-    pub indexed_finalized_head: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct WriterLease {
-    pub owner_id: u64,
-    pub epoch: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PublicationState {
     pub owner_id: u64,
     pub epoch: u64,

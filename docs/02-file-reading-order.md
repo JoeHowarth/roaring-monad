@@ -92,7 +92,7 @@ Look for:
 
 Look for:
 
-- `IndexedHead`
+- `PublicationState`
 - `BlockMeta`
 - directory fragments and directory summaries
 - block log headers
@@ -103,9 +103,9 @@ Look for:
 ## Pass 5: Ingest orchestration
 
 28. `crates/finalized-history-query/src/ingest/engine.rs`
-    Read this for the ingest orchestrator: publication ownership, cleanup-first recovery, authoritative artifact persistence, eager compaction, and publication-state CAS.
+    Read this for the ingest orchestrator: finalized-sequence validation, authoritative artifact persistence, bounded eager compaction, and publication-state CAS.
 29. `crates/finalized-history-query/src/recovery/startup.rs`
-    Read this for the current startup view: load `publication_state`, clean any unpublished suffix, repair sealed open-page markers, derive `next_log_id`, and report warmed streams.
+    Read this for the current startup view: acquire publication ownership, load `publication_state`, clean any unpublished suffix, repair sealed open-page markers, derive `next_log_id`, and report warmed streams.
 
 Look for:
 
