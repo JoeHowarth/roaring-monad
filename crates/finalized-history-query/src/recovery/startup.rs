@@ -1,8 +1,11 @@
+use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::state::{FinalizedHeadState, derive_next_log_id, load_finalized_head_state};
 use crate::error::Result;
 use crate::ingest::open_pages::repair_open_stream_page_markers;
-use crate::ingest::publication::{PublicationLease, acquire_publication};
+use crate::ingest::publication::{
+    PublicationLease, acquire_publication_with_session, current_time_ms, new_session_id,
+};
 use crate::ingest::recovery::cleanup_unpublished_suffix;
 use crate::logs::types::LogSequencingState;
 use crate::store::publication::{FenceStore, PublicationStore};
@@ -16,12 +19,20 @@ pub struct RecoveryPlan {
 }
 
 pub async fn startup_with_writer<M: MetaStore + PublicationStore + FenceStore, B: BlobStore>(
+    config: &Config,
     meta_store: &M,
     blob_store: &B,
     warm_streams: usize,
     writer_id: u64,
 ) -> Result<(RecoveryPlan, PublicationLease)> {
-    let lease = acquire_publication(meta_store, writer_id).await?;
+    let lease = acquire_publication_with_session(
+        meta_store,
+        writer_id,
+        new_session_id(writer_id),
+        current_time_ms(),
+        config.publication_lease_duration_ms,
+    )
+    .await?;
     let fence = lease.fence_token();
     let _cleaned =
         cleanup_unpublished_suffix(meta_store, blob_store, lease.indexed_finalized_head, fence)

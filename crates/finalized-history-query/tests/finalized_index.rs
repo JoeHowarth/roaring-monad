@@ -513,6 +513,36 @@ fn service_startup_bootstraps_publication_ownership() {
 }
 
 #[test]
+fn service_startup_uses_configured_lease_duration() {
+    block_on(async {
+        let config = Config {
+            publication_lease_duration_ms: 1_000,
+            ..Config::default()
+        };
+        let before = finalized_history_query::ingest::publication::current_time_ms();
+        let svc = FinalizedHistoryService::new(
+            config,
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        svc.startup().await.expect("startup");
+        let after = finalized_history_query::ingest::publication::current_time_ms();
+        let publication_state = svc
+            .ingest
+            .meta_store
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+
+        assert!(publication_state.lease_expires_at_ms >= before + 1_000);
+        assert!(publication_state.lease_expires_at_ms <= after + 1_000);
+    });
+}
+
+#[test]
 fn service_can_publish_a_contiguous_batch() {
     block_on(async {
         let svc = FinalizedHistoryService::new(

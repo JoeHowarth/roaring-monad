@@ -2683,6 +2683,7 @@ dependencies = [
  "criterion",
  "futures",
  "libc",
+ "rand 0.9.2",
  "roaring",
  "scylla",
  "serde",

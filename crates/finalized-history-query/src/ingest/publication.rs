@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rand::random;
+
 use crate::domain::types::{PublicationState, SessionId};
 use crate::error::{Error, Result};
 use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
@@ -63,11 +65,12 @@ pub fn current_time_ms() -> u64 {
 }
 
 pub fn new_session_id(owner_id: u64) -> SessionId {
-    let mut session_id = [0u8; 16];
-    let now_ms = current_time_ms();
+    let mut session_id = random::<SessionId>();
     let nonce = NEXT_SESSION_NONCE.fetch_add(1, Ordering::Relaxed);
-    session_id[..8].copy_from_slice(&now_ms.to_be_bytes());
-    session_id[8..].copy_from_slice(&(owner_id ^ nonce.rotate_left(17)).to_be_bytes());
+    let owner_bits = owner_id ^ nonce.rotate_left(17);
+    for (slot, byte) in session_id[8..].iter_mut().zip(owner_bits.to_be_bytes()) {
+        *slot ^= byte;
+    }
     session_id
 }
 

@@ -63,6 +63,7 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
         }
 
         let result = startup_with_writer(
+            &self.config,
             &self.ingest.meta_store,
             &self.ingest.blob_store,
             0,
