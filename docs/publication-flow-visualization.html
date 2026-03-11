@@ -1,0 +1,1392 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Publication Flow Visualization</title>
+    <style>
+      :root {
+        --bg: #f6efe6;
+        --bg-deep: #efe1cf;
+        --panel: rgba(255, 250, 243, 0.9);
+        --ink: #1e1c1a;
+        --muted: #665d52;
+        --line: rgba(63, 47, 29, 0.16);
+        --primary: #0f766e;
+        --primary-soft: rgba(15, 118, 110, 0.16);
+        --accent: #b45309;
+        --accent-soft: rgba(180, 83, 9, 0.14);
+        --danger: #b91c1c;
+        --danger-soft: rgba(185, 28, 28, 0.14);
+        --reader: #4c1d95;
+        --reader-soft: rgba(76, 29, 149, 0.14);
+        --shadow: 0 18px 40px rgba(77, 56, 33, 0.12);
+        --radius: 22px;
+        --radius-sm: 14px;
+        --ease: 280ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.1), transparent 32%),
+          radial-gradient(circle at top right, rgba(180, 83, 9, 0.12), transparent 35%),
+          linear-gradient(180deg, var(--bg), var(--bg-deep));
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1420px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 40px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.25fr 0.85fr;
+        gap: 20px;
+        align-items: stretch;
+      }
+
+      .card,
+      .panel {
+        background: var(--panel);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.75);
+        box-shadow: var(--shadow);
+        border-radius: var(--radius);
+      }
+
+      .hero-copy {
+        padding: 28px;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: clamp(2rem, 5vw, 4.2rem);
+        line-height: 0.94;
+        letter-spacing: -0.05em;
+      }
+
+      .hero-copy p,
+      .summary p {
+        margin: 0;
+        line-height: 1.55;
+        color: var(--muted);
+        font-size: 1.02rem;
+      }
+
+      .role-strip {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+      }
+
+      .role-pill {
+        padding: 12px 14px;
+        min-width: 180px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.7);
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+      }
+
+      .role-pill strong {
+        display: block;
+        font-size: 0.9rem;
+        margin-bottom: 4px;
+      }
+
+      .summary {
+        padding: 24px;
+        display: grid;
+        gap: 16px;
+        align-content: space-between;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .stat {
+        padding: 14px;
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid var(--line);
+      }
+
+      .stat-label {
+        display: block;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+        margin-bottom: 6px;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+      }
+
+      .stat-value {
+        font-size: 1.05rem;
+      }
+
+      .controls {
+        margin-top: 20px;
+        padding: 18px;
+      }
+
+      .scenario-list {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        font: inherit;
+        cursor: pointer;
+        border: none;
+        transition: transform var(--ease), background var(--ease), color var(--ease), box-shadow var(--ease);
+      }
+
+      .scenario-button,
+      .transport button {
+        padding: 12px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid var(--line);
+        color: var(--ink);
+        box-shadow: inset 0 0 0 1px transparent;
+      }
+
+      .scenario-button.active {
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.94), rgba(14, 116, 144, 0.94));
+        color: white;
+        box-shadow: 0 12px 24px rgba(15, 118, 110, 0.2);
+      }
+
+      .scenario-button:hover,
+      .transport button:hover {
+        transform: translateY(-1px);
+      }
+
+      .transport {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: auto auto auto 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .transport .play {
+        background: linear-gradient(135deg, rgba(180, 83, 9, 0.96), rgba(217, 119, 6, 0.96));
+        color: white;
+      }
+
+      .transport input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .step-label {
+        justify-self: end;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        gap: 20px;
+        margin-top: 20px;
+        grid-template-columns: 1.15fr 0.85fr;
+      }
+
+      .panel {
+        padding: 22px;
+      }
+
+      .panel h2 {
+        margin: 0 0 16px;
+        font-size: 1.45rem;
+      }
+
+      .cluster-layout {
+        display: grid;
+        grid-template-columns: 1.2fr 0.85fr;
+        gap: 16px;
+      }
+
+      .node-stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .node {
+        position: relative;
+        overflow: hidden;
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        transition: transform var(--ease), border-color var(--ease), background var(--ease), opacity var(--ease);
+      }
+
+      .node::after {
+        content: "";
+        position: absolute;
+        inset: auto -20% -42px -20%;
+        height: 70px;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+        transform: translateX(-110%);
+        opacity: 0;
+      }
+
+      .node.active::after {
+        opacity: 1;
+        animation: sweep 1.35s linear infinite;
+      }
+
+      @keyframes sweep {
+        to {
+          transform: translateX(110%);
+        }
+      }
+
+      .node.primary {
+        border-color: rgba(15, 118, 110, 0.34);
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(255, 255, 255, 0.86));
+      }
+
+      .node.standby {
+        border-color: rgba(180, 83, 9, 0.3);
+        background: linear-gradient(135deg, rgba(180, 83, 9, 0.09), rgba(255, 255, 255, 0.84));
+      }
+
+      .node.reader {
+        border-color: rgba(76, 29, 149, 0.24);
+        background: linear-gradient(135deg, rgba(76, 29, 149, 0.08), rgba(255, 255, 255, 0.84));
+      }
+
+      .node.crashed {
+        border-color: rgba(185, 28, 28, 0.24);
+        background: linear-gradient(135deg, rgba(185, 28, 28, 0.12), rgba(255, 255, 255, 0.84));
+        opacity: 0.7;
+      }
+
+      .node-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: start;
+        margin-bottom: 10px;
+      }
+
+      .node-name {
+        font-size: 1.1rem;
+        margin: 0;
+      }
+
+      .node-meta {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 0.94rem;
+      }
+
+      .badge {
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+      }
+
+      .badge.primary {
+        background: var(--primary-soft);
+        color: var(--primary);
+      }
+
+      .badge.standby {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .badge.reader {
+        background: var(--reader-soft);
+        color: var(--reader);
+      }
+
+      .badge.crashed {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .node-note {
+        color: var(--ink);
+        font-size: 0.96rem;
+      }
+
+      .pub-state {
+        display: grid;
+        gap: 12px;
+      }
+
+      .pub-card {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(33, 33, 33, 0.96), rgba(50, 43, 35, 0.96));
+        color: #f8f2eb;
+      }
+
+      .pub-card dt {
+        color: rgba(248, 242, 235, 0.66);
+        font-size: 0.74rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+      }
+
+      .pub-card dd {
+        margin: 4px 0 12px;
+        font-size: 1.05rem;
+      }
+
+      .lease-bar {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.16);
+        overflow: hidden;
+      }
+
+      .lease-fill {
+        height: 100%;
+        width: 0;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #34d399, #f59e0b, #dc2626);
+        transition: width var(--ease);
+      }
+
+      .lease-caption {
+        margin-top: 8px;
+        color: rgba(248, 242, 235, 0.72);
+        font-size: 0.92rem;
+      }
+
+      .flow {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .stage {
+        position: relative;
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        min-height: 142px;
+        transition: transform var(--ease), background var(--ease), border-color var(--ease), opacity var(--ease);
+      }
+
+      .stage::before {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -13px;
+        width: 26px;
+        height: 2px;
+        background: rgba(63, 47, 29, 0.18);
+      }
+
+      .stage:last-child::before {
+        display: none;
+      }
+
+      .stage.active {
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(255, 255, 255, 0.88));
+        border-color: rgba(15, 118, 110, 0.32);
+        transform: translateY(-4px);
+      }
+
+      .stage.done {
+        border-color: rgba(180, 83, 9, 0.3);
+      }
+
+      .stage.blocked {
+        background: linear-gradient(135deg, rgba(185, 28, 28, 0.12), rgba(255, 255, 255, 0.88));
+        border-color: rgba(185, 28, 28, 0.28);
+      }
+
+      .stage-name {
+        margin: 0 0 10px;
+        font-size: 0.98rem;
+      }
+
+      .stage p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+        font-size: 0.94rem;
+      }
+
+      .storage-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 1.15fr 0.85fr;
+      }
+
+      .rack {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .rack h3,
+      .event-log h3,
+      .callout h3 {
+        margin: 0 0 12px;
+        font-size: 1rem;
+      }
+
+      .token-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .token {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 11px;
+        border-radius: 999px;
+        font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+        font-size: 0.84rem;
+        background: rgba(63, 47, 29, 0.08);
+        border: 1px solid rgba(63, 47, 29, 0.12);
+        transition: transform var(--ease), background var(--ease), opacity var(--ease);
+      }
+
+      .token.active {
+        background: var(--accent-soft);
+        transform: translateY(-2px);
+      }
+
+      .token.pending {
+        background: rgba(63, 47, 29, 0.05);
+        opacity: 0.7;
+      }
+
+      .token.visible {
+        background: var(--primary-soft);
+        color: var(--primary);
+      }
+
+      .token.stale {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .event-log {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(249, 243, 235, 0.84));
+      }
+
+      .events {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .events li {
+        position: relative;
+        padding-left: 18px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .events li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px rgba(180, 83, 9, 0.12);
+      }
+
+      .callout-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .callout {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .callout p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .footer-note {
+        margin-top: 20px;
+        padding: 16px 18px;
+        color: var(--muted);
+        font-size: 0.96rem;
+      }
+
+      @media (max-width: 1120px) {
+        .hero,
+        .grid,
+        .cluster-layout,
+        .storage-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .flow,
+        .callout-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .stage::before {
+          top: auto;
+          bottom: -13px;
+          left: 50%;
+          right: auto;
+          width: 2px;
+          height: 26px;
+          transform: translateX(-50%);
+        }
+      }
+
+      @media (max-width: 780px) {
+        .shell {
+          width: min(100vw - 18px, 1420px);
+          padding-top: 18px;
+        }
+
+        .hero-copy,
+        .summary,
+        .controls,
+        .panel {
+          padding: 18px;
+        }
+
+        .transport {
+          grid-template-columns: repeat(4, auto);
+        }
+
+        .transport input[type="range"] {
+          grid-column: 1 / -1;
+        }
+
+        .step-label {
+          justify-self: start;
+        }
+
+        .summary-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <article class="card hero-copy">
+          <p class="eyebrow">Finalized History Query</p>
+          <h1>Publication Flow, Leases, Failover, and Crash Recovery</h1>
+          <p>
+            This is a visual model of the current publication-state design: one authoritative
+            publication record, one active writer, hot standby RW nodes, immutable artifact writes,
+            and reader visibility only after publication CAS advances the finalized head.
+          </p>
+          <div class="role-strip">
+            <div class="role-pill">
+              <strong>Reader Only</strong>
+              never contends for ownership, only reads published state
+            </div>
+            <div class="role-pill">
+              <strong>Reader + Writer</strong>
+              can act as standby, renew the lease, or take over after expiry
+            </div>
+            <div class="role-pill">
+              <strong>Healthy Primary Rule</strong>
+              fresh leases block opportunistic takeover by new RW nodes
+            </div>
+          </div>
+        </article>
+        <aside class="card summary">
+          <p>
+            The controls below switch between the main operational paths: steady publication,
+            standby startup, lease-expiry takeover, and crash recovery before republish.
+          </p>
+          <div class="summary-grid">
+            <div class="stat">
+              <span class="stat-label">Authority</span>
+              <span class="stat-value">`publication_state`</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Lease Gate</span>
+              <span class="stat-value">fresh lease blocks takeover</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Writer Safety</span>
+              <span class="stat-value">epoch fences stale writers</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Reader Visibility</span>
+              <span class="stat-value">only after CAS head advance</span>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="card controls">
+        <div class="scenario-list" id="scenarioList"></div>
+        <div class="transport">
+          <button id="prevStep" type="button">Prev</button>
+          <button id="playPause" class="play" type="button">Play</button>
+          <button id="nextStep" type="button">Next</button>
+          <input id="stepSlider" type="range" min="0" max="0" value="0" />
+          <div class="step-label" id="stepLabel">Step 1 / 1</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <section class="panel">
+          <h2 id="scenarioTitle">Scenario</h2>
+          <div class="cluster-layout">
+            <div class="node-stack" id="nodeStack"></div>
+            <div class="pub-state">
+              <div class="pub-card">
+                <dl>
+                  <dt>Owner</dt>
+                  <dd id="pubOwner">-</dd>
+                  <dt>Session</dt>
+                  <dd id="pubSession">-</dd>
+                  <dt>Epoch</dt>
+                  <dd id="pubEpoch">-</dd>
+                  <dt>Published Head</dt>
+                  <dd id="pubHead">-</dd>
+                </dl>
+                <div class="lease-bar"><div class="lease-fill" id="leaseFill"></div></div>
+                <div class="lease-caption" id="leaseCaption">-</div>
+              </div>
+              <div class="callout">
+                <h3>Current Step</h3>
+                <p id="scenarioCaption"></p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Publication Pipeline</h2>
+          <div class="flow" id="flow"></div>
+        </section>
+      </section>
+
+      <section class="grid">
+        <section class="panel">
+          <h2>Artifacts and Visibility</h2>
+          <div class="storage-grid">
+            <div class="rack">
+              <h3>Immutable Artifacts</h3>
+              <div class="token-row" id="artifactTokens"></div>
+            </div>
+            <div class="rack">
+              <h3>Open Page Markers</h3>
+              <div class="token-row" id="markerTokens"></div>
+            </div>
+            <div class="rack">
+              <h3>Sealed Summaries</h3>
+              <div class="token-row" id="summaryTokens"></div>
+            </div>
+            <div class="rack">
+              <h3>Reader-Visible Head</h3>
+              <div class="token-row" id="visibleTokens"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="event-log">
+            <h3>Event Feed</h3>
+            <ol class="events" id="eventFeed"></ol>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel">
+        <h2>Key Invariants</h2>
+        <div class="callout-grid" id="calloutGrid"></div>
+      </section>
+
+      <div class="card footer-note">
+        Open this file directly in a browser or serve `docs/` locally. It is a self-contained static
+        visualization with no build step.
+      </div>
+    </div>
+
+    <script>
+      const scenarios = [
+        {
+          id: "steady",
+          label: "Steady Publish",
+          title: "Existing Primary Publishes One More Finalized Block",
+          steps: [
+            {
+              caption: "Writer A already owns publication. Readers see finalized head 120.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 120, leasePercent: 78, leaseLabel: "fresh lease: primary is healthy" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "primary", note: "active primary; about to ingest block 121", badge: "Primary" },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "hot standby; reads published state only", badge: "Standby" },
+                { name: "Node C", role: "reader only", status: "reader", note: "query node; clipped to published head", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["active", "renew active lease before writing"],
+                write: ["pending", "authoritative block-scoped artifacts not written yet"],
+                seal: ["pending", "sealed summaries wait until range is fully materializable"],
+                publish: ["pending", "publication_state head still points at 120"],
+                query: ["pending", "readers still resolve windows against 120"]
+              },
+              artifacts: ["block_meta/121", "block_logs/121", "block_hash_to_num/<hash121>", "stream_frag/*"],
+              artifactsActive: [],
+              markers: ["open_stream_page/shard7/page0/topicA"],
+              markersActive: [],
+              summaries: ["log_dir_sub/...", "stream_page_meta/..."],
+              summariesActive: [],
+              visible: ["published head 120"],
+              visibleKinds: ["visible"],
+              events: [
+                "Primary writer holds the current lease and epoch.",
+                "No new writer should be able to take ownership while this lease stays fresh.",
+                "The next block starts from the currently published head."
+              ],
+              callouts: [
+                ["Single authority", "`publication_state` is both ownership proof and reader visibility watermark."],
+                ["Healthy-primary rule", "A fresh lease means standby RW nodes must stay passive."],
+                ["No speculative reads", "Readers ignore artifacts above head 120 until publish CAS succeeds."]
+              ]
+            },
+            {
+              caption: "Writer A renews the lease, writes immutable Class A artifacts, and marks any opened stream pages.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 120, leasePercent: 92, leaseLabel: "lease renewed before ingest" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "primary", note: "writing block artifacts under epoch 12", badge: "Primary", active: true },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "watching fresh lease; no takeover", badge: "Standby" },
+                { name: "Node C", role: "reader only", status: "reader", note: "queries still capped at head 120", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["done", "lease is refreshed before writes"],
+                write: ["active", "Class A artifacts are immutable even before publication"],
+                seal: ["pending", "sealed pages and sub-buckets are derived from complete source fragments"],
+                publish: ["pending", "head cannot move yet"],
+                query: ["pending", "new bytes are still invisible to readers"]
+              },
+              artifacts: ["block_meta/121", "block_logs/121", "block_hash_to_num/<hash121>", "log_dir_frag/...", "stream_frag/*"],
+              artifactsActive: ["block_meta/121", "block_logs/121", "log_dir_frag/...", "stream_frag/*"],
+              markers: ["open_stream_page/shard7/page0/topicA", "open_stream_page/shard7/page0/addressX"],
+              markersActive: ["open_stream_page/shard7/page0/addressX"],
+              summaries: ["log_dir_sub/...", "stream_page_meta/..."],
+              summariesActive: [],
+              visible: ["published head 120"],
+              visibleKinds: ["visible"],
+              events: [
+                "Artifact writes happen before visibility and are safe to leave above the published head.",
+                "Open-page markers record which stream pages might need sealing.",
+                "Reader-visible state has not changed yet."
+              ],
+              callouts: [
+                ["Immutable frontier", "Class A artifacts are authoritative inputs for later sealing and recovery."],
+                ["Durable marker inventory", "Open-page markers are discovery aids, not publication authority."],
+                ["Fence clock", "Epoch 12 is the write fence; stale epochs must be rejected."]
+              ]
+            },
+            {
+              caption: "Sealed summaries are created from complete source state, then publication CAS moves the head from 120 to 121.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 121, leasePercent: 87, leaseLabel: "same owner, same epoch, newer published head" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "primary", note: "publish CAS succeeded; block 121 is now visible", badge: "Primary", active: true },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "still blocked by fresh lease", badge: "Standby" },
+                { name: "Node C", role: "reader only", status: "reader", note: "queries can now include block 121", badge: "Reader", active: true }
+              ],
+              stages: {
+                acquire: ["done", "lease remained valid through the batch"],
+                write: ["done", "all authoritative artifacts exist"],
+                seal: ["done", "sealed summaries are now immutable query-critical artifacts"],
+                publish: ["active", "CAS proves ownership and advances visible head"],
+                query: ["active", "readers can see the new range immediately after CAS"]
+              },
+              artifacts: ["block_meta/121", "block_logs/121", "block_hash_to_num/<hash121>", "log_dir_frag/...", "stream_frag/*"],
+              artifactsActive: [],
+              markers: ["open_stream_page/shard7/page0/topicA"],
+              markersActive: [],
+              summaries: ["log_dir_sub/sealed@121", "stream_page_meta/sealed@121", "stream_page_blob/sealed@121"],
+              summariesActive: ["log_dir_sub/sealed@121", "stream_page_meta/sealed@121"],
+              visible: ["published head 121", "query window can now resolve block 121"],
+              visibleKinds: ["visible", "visible"],
+              events: [
+                "Publication CAS is the single visibility transition.",
+                "Readers move from head 120 to 121 atomically.",
+                "Any summaries created for this range are now part of committed published history."
+              ],
+              callouts: [
+                ["Readers follow head", "Visibility changes only when `indexed_finalized_head` advances."],
+                ["No dual authority", "There is no separate indexed-head row or advisory writer lease."],
+                ["Standby remains passive", "A healthy primary keeps ownership while its lease stays fresh."]
+              ]
+            }
+          ]
+        },
+        {
+          id: "standby",
+          label: "Standby Startup",
+          title: "A New RW Node Starts While Another Primary Is Healthy",
+          steps: [
+            {
+              caption: "Node B boots in reader+writer mode and inspects the current publication lease.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 121, leasePercent: 83, leaseLabel: "fresh lease held by another session" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "primary", note: "healthy primary is still renewing", badge: "Primary" },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "startup path is observational first", badge: "Standby", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "query-only traffic continues normally", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["active", "B reads publication_state and sees a fresh foreign lease"],
+                write: ["pending", "no artifact writes allowed"],
+                seal: ["pending", "no summary work allowed"],
+                publish: ["pending", "no takeover CAS should be attempted"],
+                query: ["active", "B can still warm read-side state as a standby"]
+              },
+              artifacts: ["block_meta/121", "block_logs/121"],
+              artifactsActive: [],
+              markers: ["open_stream_page/shard7/page0/topicA"],
+              markersActive: [],
+              summaries: ["log_dir_sub/sealed@121", "stream_page_meta/sealed@121"],
+              summariesActive: [],
+              visible: ["published head 121", "B follows as a reader"],
+              visibleKinds: ["visible", "visible"],
+              events: [
+                "Standby startup should not mutate ownership just by planning.",
+                "A fresh lease owned by another session blocks takeover.",
+                "The RW node can catch up and wait without disrupting the primary."
+              ],
+              callouts: [
+                ["No opportunistic steal", "A new RW node must not take over just because it starts."],
+                ["Read-only planning", "`startup_plan` should remain observational, not ownership-taking."],
+                ["Hot standby model", "RW nodes can be ready without being primary."]
+              ]
+            },
+            {
+              caption: "Node B stays in standby mode. It can query, observe head movement, and remain ready for expiry-based takeover.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 122, leasePercent: 74, leaseLabel: "primary keeps renewing; standby keeps watching" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "primary", note: "primary renewed and published block 122", badge: "Primary", active: true },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "no ownership CAS; follows head to stay warm", badge: "Standby" },
+                { name: "Node C", role: "reader only", status: "reader", note: "sees published head move to 122", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["done", "B deliberately refrained from takeover under a fresh lease"],
+                write: ["pending", "standby does not emit artifacts"],
+                seal: ["pending", "standby does not create summaries"],
+                publish: ["pending", "primary alone advances head"],
+                query: ["active", "all non-primary nodes continue to read published state"]
+              },
+              artifacts: ["block_meta/122", "block_logs/122"],
+              artifactsActive: [],
+              markers: ["open_stream_page/shard7/page1/topicA"],
+              markersActive: [],
+              summaries: ["log_dir_sub/sealed@122"],
+              summariesActive: [],
+              visible: ["published head 122", "standby B is caught up"],
+              visibleKinds: ["visible", "visible"],
+              events: [
+                "Healthy-primary preservation is an explicit operational goal.",
+                "Standby readiness is separate from publication ownership.",
+                "Only the active primary should produce new authoritative artifacts."
+              ],
+              callouts: [
+                ["Role clarity", "Reader-only nodes never contend; standby RW nodes contend only after expiry."],
+                ["Lease gate", "Freshness is the rule that prevents churn during restarts and rolling deploys."],
+                ["Operational safety", "Starting another RW node should be a safe action."]
+              ]
+            }
+          ]
+        },
+        {
+          id: "takeover",
+          label: "Lease Expiry Takeover",
+          title: "The Primary Stops Renewing, Then a Standby Takes Over",
+          steps: [
+            {
+              caption: "Node A stops heartbeating. The lease ages out while head stays at 122.",
+              publication: { owner: "writer-a", session: "A1", epoch: 12, head: 122, leasePercent: 18, leaseLabel: "lease nearly expired; standby still waiting" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "process stalled; no renewals are arriving", badge: "Crashed" },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "still passive until expiry boundary is crossed", badge: "Standby", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "queries remain pinned to published head 122", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["active", "B is polling for lease freshness, not stealing early"],
+                write: ["pending", "no write rights yet"],
+                seal: ["pending", "no sealing yet"],
+                publish: ["pending", "head remains at 122"],
+                query: ["active", "readers keep serving published data"]
+              },
+              artifacts: ["block_meta/122", "block_logs/122"],
+              artifactsActive: [],
+              markers: ["open_stream_page/shard7/page1/topicA"],
+              markersActive: [],
+              summaries: ["log_dir_sub/sealed@122"],
+              summariesActive: [],
+              visible: ["published head 122"],
+              visibleKinds: ["visible"],
+              events: [
+                "Expiry is the takeover gate.",
+                "Standby must stay passive right up to the expiry boundary.",
+                "Reader visibility is unaffected by lease aging."
+              ],
+              callouts: [
+                ["Lease-backed primary", "Health is encoded as lease freshness, not just ownership label."],
+                ["No surprise churn", "Standby takeover is delayed until the lease is truly stale."],
+                ["Queries stay stable", "Readers do not care which RW node is primary; they care about published head."]
+              ]
+            },
+            {
+              caption: "After expiry, Node B CASes publication_state to a new session and a higher epoch, then advances the fence.",
+              publication: { owner: "writer-b", session: "B1", epoch: 13, head: 122, leasePercent: 96, leaseLabel: "takeover succeeded: epoch bumped and lease renewed" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "old epoch 12 is now stale", badge: "Crashed" },
+                { name: "Node B", role: "reader + writer", status: "primary", note: "new primary under session B1 / epoch 13", badge: "Primary", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "still sees head 122 until B publishes more", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["active", "ownership CAS changes owner, session, epoch, and lease"],
+                write: ["pending", "B may now write under epoch 13"],
+                seal: ["pending", "sealing follows normal publish flow"],
+                publish: ["pending", "visible head has not advanced yet"],
+                query: ["pending", "queries remain on head 122 until publish succeeds"]
+              },
+              artifacts: ["stale writes from epoch 12"],
+              artifactsActive: [],
+              markers: ["fence >= 13"],
+              markersActive: ["fence >= 13"],
+              summaries: ["future summaries will be stamped from epoch 13 writes"],
+              summariesActive: [],
+              visible: ["published head 122"],
+              visibleKinds: ["visible"],
+              events: [
+                "Takeover is create-or-CAS on the single publication record.",
+                "Epoch 13 becomes the new fence clock for mutable operations.",
+                "Old epoch 12 writers should be rejected before they can publish stale work."
+              ],
+              callouts: [
+                ["Session identity", "Restarted or different processes are distinguished by session ID, not just node ID."],
+                ["Epoch bump", "Every real takeover increments epoch and invalidates stale writers."],
+                ["Fence follow-through", "Artifact-layer stale-writer suppression should advance with takeover."]
+              ]
+            },
+            {
+              caption: "Node A wakes up and tries to write with epoch 12, but the fence rejects it. Node B safely publishes the next block.",
+              publication: { owner: "writer-b", session: "B1", epoch: 13, head: 123, leasePercent: 88, leaseLabel: "new primary is healthy; stale epoch is fenced" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "stale writes are blocked by fence and final CAS mismatch", badge: "Crashed", active: true },
+                { name: "Node B", role: "reader + writer", status: "primary", note: "publishes block 123 under epoch 13", badge: "Primary", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "moves forward only after B publishes", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["done", "B owns the lease and epoch 13"],
+                write: ["active", "B writes; stale epoch 12 attempts are rejected"],
+                seal: ["done", "new sealed summaries are created from B's authoritative fragments"],
+                publish: ["active", "CAS advances head to 123"],
+                query: ["active", "readers follow B's published head"]
+              },
+              artifacts: ["block_meta/123", "block_logs/123", "stale epoch 12 write rejected"],
+              artifactsActive: ["block_meta/123", "block_logs/123"],
+              markers: ["fence >= 13", "open_stream_page/shard7/page1/addressX"],
+              markersActive: ["fence >= 13"],
+              summaries: ["log_dir_sub/sealed@123", "stream_page_meta/sealed@123"],
+              summariesActive: ["log_dir_sub/sealed@123"],
+              visible: ["published head 123", "stale writer blocked"],
+              visibleKinds: ["visible", "stale"],
+              events: [
+                "The lease system decides when takeover is legal.",
+                "The epoch fence decides whether old writers can still mutate storage.",
+                "Readers only observe the new primary once its publication CAS succeeds."
+              ],
+              callouts: [
+                ["Two defenses", "Lease expiry governs takeover; epoch fencing suppresses stale artifact writes."],
+                ["Safe failover", "A standby can become primary without exposing split-brain history."],
+                ["Reader isolation", "Reader-visible state changes only on the new publication CAS."]
+              ]
+            }
+          ]
+        },
+        {
+          id: "crash",
+          label: "Crash Recovery",
+          title: "Crash After Artifacts, Before Publish CAS",
+          steps: [
+            {
+              caption: "Writer A writes block 124 artifacts and some sealed summaries, but crashes before publication CAS.",
+              publication: { owner: "writer-a", session: "A1", epoch: 13, head: 123, leasePercent: 0, leaseLabel: "crashed before publish; head is still 123" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "unpublished suffix exists above the visible head", badge: "Crashed", active: true },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "will recover only after legal takeover", badge: "Standby" },
+                { name: "Node C", role: "reader only", status: "reader", note: "still clipped to published head 123", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["pending", "A is gone; lease will need takeover first"],
+                write: ["blocked", "speculative artifacts exist but are not committed"],
+                seal: ["blocked", "some pre-publish summaries may exist and must be validated or cleaned"],
+                publish: ["pending", "head never moved to 124"],
+                query: ["active", "readers continue to ignore unpublished suffix"]
+              },
+              artifacts: ["block_meta/124", "block_logs/124", "log_dir_frag/124", "stream_frag/124"],
+              artifactsActive: ["block_meta/124", "block_logs/124"],
+              markers: ["open_stream_page/shard9/page0/addressY"],
+              markersActive: ["open_stream_page/shard9/page0/addressY"],
+              summaries: ["log_dir_sub/speculative@124", "stream_page_meta/speculative@124"],
+              summariesActive: ["log_dir_sub/speculative@124", "stream_page_meta/speculative@124"],
+              visible: ["published head 123", "block 124 not visible"],
+              visibleKinds: ["visible", "stale"],
+              events: [
+                "Crash timing matters: artifacts can exist above the published head.",
+                "Readers must not treat those objects as committed history.",
+                "Recovery must clean the unpublished suffix before reusing the frontier."
+              ],
+              callouts: [
+                ["Cleanup-first", "Recovery should delete or validate speculative summaries before reuse."],
+                ["Anchor rule", "`block_meta/<block_num>` is the recovery anchor for unpublished blocks."],
+                ["Invisible until CAS", "No matter how many artifacts exist, head 123 is still authoritative."]
+              ]
+            },
+            {
+              caption: "Node B takes ownership after expiry, scans the unpublished suffix above head 123, and cleans stale artifacts and summaries.",
+              publication: { owner: "writer-b", session: "B2", epoch: 14, head: 123, leasePercent: 93, leaseLabel: "new owner acquired; recovery running under epoch 14" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "old owner is irrelevant after takeover", badge: "Crashed" },
+                { name: "Node B", role: "reader + writer", status: "primary", note: "recovery deletes unpublished Class A and Class B state", badge: "Primary", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "still sees head 123 throughout cleanup", badge: "Reader" }
+              ],
+              stages: {
+                acquire: ["done", "ownership CAS established session B2 / epoch 14"],
+                write: ["active", "cleanup runs before any new ingest is trusted"],
+                seal: ["active", "stale pre-publish summaries are deleted or validated"],
+                publish: ["pending", "recovery does not move head on its own"],
+                query: ["active", "reader-visible state remains stable during cleanup"]
+              },
+              artifacts: ["delete stream_page_blob/124", "delete stream_page_meta/124", "delete log_dir_sub/124", "delete block_meta/124 last"],
+              artifactsActive: ["delete block_meta/124 last"],
+              markers: ["delete stale open_stream_page/shard9/page0/addressY"],
+              markersActive: ["delete stale open_stream_page/shard9/page0/addressY"],
+              summaries: ["recompute from canonical fragments or remove speculative summaries"],
+              summariesActive: ["recompute from canonical fragments or remove speculative summaries"],
+              visible: ["published head 123"],
+              visibleKinds: ["visible"],
+              events: [
+                "Recovery walks from head + 1 upward using block metadata anchors.",
+                "Sealed summaries created before publish are part of recovery scope, not permanent truth.",
+                "Cleanup completes before new publication work begins."
+              ],
+              callouts: [
+                ["Strict ordering", "Delete speculative stream-page and directory summaries before removing anchors."],
+                ["Bounded discovery", "Open-page markers tell recovery which pages may need sealing repair."],
+                ["No partial commit", "Recovery restores a clean frontier at the published head."]
+              ]
+            },
+            {
+              caption: "After cleanup, Node B replays block 124, recreates the correct summaries, and publishes it cleanly.",
+              publication: { owner: "writer-b", session: "B2", epoch: 14, head: 124, leasePercent: 81, leaseLabel: "recovery complete; republish succeeded" },
+              nodes: [
+                { name: "Node A", role: "reader + writer", status: "crashed", note: "old speculative work was discarded", badge: "Crashed" },
+                { name: "Node B", role: "reader + writer", status: "primary", note: "re-ingested and published block 124 under epoch 14", badge: "Primary", active: true },
+                { name: "Node C", role: "reader only", status: "reader", note: "head finally advances from 123 to 124", badge: "Reader", active: true }
+              ],
+              stages: {
+                acquire: ["done", "B remains the healthy primary"],
+                write: ["done", "authoritative artifacts were rewritten via immutable create-or-validate rules"],
+                seal: ["done", "correct summaries now match authoritative source state"],
+                publish: ["active", "CAS advances head to 124"],
+                query: ["active", "readers can now include block 124"]
+              },
+              artifacts: ["block_meta/124", "block_logs/124", "stream_frag/124"],
+              artifactsActive: ["block_meta/124", "block_logs/124"],
+              markers: ["open_stream_page repaired"],
+              markersActive: [],
+              summaries: ["log_dir_sub/sealed@124", "stream_page_meta/sealed@124", "stream_page_blob/sealed@124"],
+              summariesActive: ["log_dir_sub/sealed@124", "stream_page_meta/sealed@124"],
+              visible: ["published head 124", "readers now see block 124"],
+              visibleKinds: ["visible", "visible"],
+              events: [
+                "Recovery returns the system to a clean pre-publication boundary.",
+                "Republish uses the normal artifact -> summary -> CAS sequence.",
+                "Reader visibility changes only once the new publish CAS succeeds."
+              ],
+              callouts: [
+                ["Replay-friendly model", "Immutable artifacts above the head are safe because they can be cleaned and recreated."],
+                ["Summary discipline", "Shared-key summaries must be exact, byte-stable, and derived from complete source state."],
+                ["Operational outcome", "Crash recovery preserves correctness without exposing unpublished history."]
+              ]
+            }
+          ]
+        }
+      ];
+
+      const stageOrder = [
+        ["acquire", "Acquire / Renew Lease"],
+        ["write", "Write Class A Artifacts"],
+        ["seal", "Seal Summaries"],
+        ["publish", "Publish CAS"],
+        ["query", "Readers See Head"]
+      ];
+
+      const scenarioList = document.getElementById("scenarioList");
+      const nodeStack = document.getElementById("nodeStack");
+      const flow = document.getElementById("flow");
+      const artifactTokens = document.getElementById("artifactTokens");
+      const markerTokens = document.getElementById("markerTokens");
+      const summaryTokens = document.getElementById("summaryTokens");
+      const visibleTokens = document.getElementById("visibleTokens");
+      const eventFeed = document.getElementById("eventFeed");
+      const calloutGrid = document.getElementById("calloutGrid");
+
+      const scenarioTitle = document.getElementById("scenarioTitle");
+      const scenarioCaption = document.getElementById("scenarioCaption");
+      const pubOwner = document.getElementById("pubOwner");
+      const pubSession = document.getElementById("pubSession");
+      const pubEpoch = document.getElementById("pubEpoch");
+      const pubHead = document.getElementById("pubHead");
+      const leaseFill = document.getElementById("leaseFill");
+      const leaseCaption = document.getElementById("leaseCaption");
+      const stepSlider = document.getElementById("stepSlider");
+      const stepLabel = document.getElementById("stepLabel");
+      const playPause = document.getElementById("playPause");
+      const prevStep = document.getElementById("prevStep");
+      const nextStep = document.getElementById("nextStep");
+
+      let scenarioIndex = 0;
+      let stepIndex = 0;
+      let timer = null;
+
+      function tokenClass(item, activeSet, kind) {
+        if (kind) {
+          return `token ${kind}`;
+        }
+        return activeSet.has(item) ? "token active" : "token pending";
+      }
+
+      function renderTokens(target, items, activeItems, kinds) {
+        const activeSet = new Set(activeItems || []);
+        target.innerHTML = "";
+        items.forEach((item, index) => {
+          const div = document.createElement("div");
+          div.className = tokenClass(item, activeSet, kinds && kinds[index]);
+          div.textContent = item;
+          target.appendChild(div);
+        });
+      }
+
+      function renderNodes(nodes) {
+        nodeStack.innerHTML = "";
+        nodes.forEach((node) => {
+          const article = document.createElement("article");
+          article.className = `node ${node.status}${node.active ? " active" : ""}`;
+          article.innerHTML = `
+            <div class="node-head">
+              <div>
+                <h3 class="node-name">${node.name}</h3>
+                <p class="node-meta">${node.role}</p>
+              </div>
+              <span class="badge ${node.status}">${node.badge}</span>
+            </div>
+            <div class="node-note">${node.note}</div>
+          `;
+          nodeStack.appendChild(article);
+        });
+      }
+
+      function renderStages(stages) {
+        flow.innerHTML = "";
+        stageOrder.forEach(([key, label]) => {
+          const [status, body] = stages[key];
+          const article = document.createElement("article");
+          article.className = `stage ${status}`;
+          article.innerHTML = `
+            <h3 class="stage-name">${label}</h3>
+            <p>${body}</p>
+          `;
+          flow.appendChild(article);
+        });
+      }
+
+      function renderEvents(events) {
+        eventFeed.innerHTML = "";
+        events.forEach((eventText) => {
+          const item = document.createElement("li");
+          item.textContent = eventText;
+          eventFeed.appendChild(item);
+        });
+      }
+
+      function renderCallouts(callouts) {
+        calloutGrid.innerHTML = "";
+        callouts.forEach(([title, body]) => {
+          const card = document.createElement("div");
+          card.className = "callout";
+          card.innerHTML = `<h3>${title}</h3><p>${body}</p>`;
+          calloutGrid.appendChild(card);
+        });
+      }
+
+      function currentScenario() {
+        return scenarios[scenarioIndex];
+      }
+
+      function currentStep() {
+        return currentScenario().steps[stepIndex];
+      }
+
+      function renderScenarioButtons() {
+        scenarioList.innerHTML = "";
+        scenarios.forEach((scenario, index) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `scenario-button${index === scenarioIndex ? " active" : ""}`;
+          button.textContent = scenario.label;
+          button.addEventListener("click", () => {
+            scenarioIndex = index;
+            stepIndex = 0;
+            stopPlayback();
+            render();
+          });
+          scenarioList.appendChild(button);
+        });
+      }
+
+      function render() {
+        const scenario = currentScenario();
+        const step = currentStep();
+
+        renderScenarioButtons();
+        renderNodes(step.nodes);
+        renderStages(step.stages);
+        renderTokens(artifactTokens, step.artifacts, step.artifactsActive);
+        renderTokens(markerTokens, step.markers, step.markersActive);
+        renderTokens(summaryTokens, step.summaries, step.summariesActive);
+        renderTokens(visibleTokens, step.visible, [], step.visibleKinds);
+        renderEvents(step.events);
+        renderCallouts(step.callouts);
+
+        scenarioTitle.textContent = scenario.title;
+        scenarioCaption.textContent = step.caption;
+        pubOwner.textContent = step.publication.owner;
+        pubSession.textContent = step.publication.session;
+        pubEpoch.textContent = step.publication.epoch;
+        pubHead.textContent = step.publication.head;
+        leaseFill.style.width = `${step.publication.leasePercent}%`;
+        leaseCaption.textContent = step.publication.leaseLabel;
+
+        stepSlider.max = String(scenario.steps.length - 1);
+        stepSlider.value = String(stepIndex);
+        stepLabel.textContent = `Step ${stepIndex + 1} / ${scenario.steps.length}`;
+      }
+
+      function next() {
+        const scenario = currentScenario();
+        if (stepIndex < scenario.steps.length - 1) {
+          stepIndex += 1;
+        } else {
+          scenarioIndex = (scenarioIndex + 1) % scenarios.length;
+          stepIndex = 0;
+        }
+        render();
+      }
+
+      function previous() {
+        if (stepIndex > 0) {
+          stepIndex -= 1;
+        } else {
+          scenarioIndex = (scenarioIndex - 1 + scenarios.length) % scenarios.length;
+          stepIndex = scenarios[scenarioIndex].steps.length - 1;
+        }
+        render();
+      }
+
+      function stopPlayback() {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+          playPause.textContent = "Play";
+        }
+      }
+
+      function startPlayback() {
+        stopPlayback();
+        timer = window.setInterval(next, 3200);
+        playPause.textContent = "Pause";
+      }
+
+      playPause.addEventListener("click", () => {
+        if (timer === null) {
+          startPlayback();
+        } else {
+          stopPlayback();
+        }
+      });
+
+      prevStep.addEventListener("click", () => {
+        stopPlayback();
+        previous();
+      });
+
+      nextStep.addEventListener("click", () => {
+        stopPlayback();
+        next();
+      });
+
+      stepSlider.addEventListener("input", (event) => {
+        stopPlayback();
+        stepIndex = Number(event.target.value);
+        render();
+      });
+
+      render();
+    </script>
+  </body>
+</html>

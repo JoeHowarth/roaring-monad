@@ -7,6 +7,7 @@ Historical design docs, migration plans, and superseded onboarding material live
 The current log-payload storage design lives in:
 
 - `docs/04-block-keyed-log-storage.md`
+- `docs/publication-flow-visualization.html`
 
 ## Scope
 
