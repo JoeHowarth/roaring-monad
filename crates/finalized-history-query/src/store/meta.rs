@@ -123,10 +123,14 @@ impl MetaStore for InMemoryMetaStore {
 
         let mut keys = Vec::new();
         let mut next_cursor = None;
+        let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
         for k in guard.keys() {
-            if k < &start {
+            if has_cursor && k <= &start {
+                continue;
+            }
+            if !has_cursor && k < &start {
                 continue;
             }
             if !k.starts_with(prefix) {

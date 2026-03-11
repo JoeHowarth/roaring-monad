@@ -1,6 +1,7 @@
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::traits::FenceToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicationLease {
@@ -27,6 +28,10 @@ impl PublicationLease {
             indexed_finalized_head: self.indexed_finalized_head,
         }
     }
+
+    pub fn fence_token(self) -> FenceToken {
+        FenceToken(self.epoch)
+    }
 }
 
 pub async fn bootstrap_publication_state<P: PublicationStore>(
@@ -40,9 +45,7 @@ pub async fn bootstrap_publication_state<P: PublicationStore>(
     };
     match publication_store.create_if_absent(&initial).await? {
         CasOutcome::Applied(state) => Ok(state.into()),
-        CasOutcome::Failed {
-            current: Some(state),
-        } => Ok(state.into()),
+        CasOutcome::Failed { current: Some(_) } => Err(Error::PublicationConflict),
         CasOutcome::Failed { current: None } => Err(Error::PublicationConflict),
     }
 }
@@ -53,14 +56,25 @@ pub async fn acquire_publication<P: PublicationStore>(
 ) -> Result<PublicationLease> {
     let mut current = match publication_store.load().await? {
         Some(state) => state,
-        None => return bootstrap_publication_state(publication_store, owner_id).await,
+        None => {
+            let initial = PublicationState {
+                owner_id,
+                epoch: 1,
+                indexed_finalized_head: 0,
+            };
+            match publication_store.create_if_absent(&initial).await? {
+                CasOutcome::Applied(state) => return Ok(state.into()),
+                CasOutcome::Failed {
+                    current: Some(state),
+                } => state,
+                CasOutcome::Failed { current: None } => {
+                    return Err(Error::PublicationConflict);
+                }
+            }
+        }
     };
 
     loop {
-        if current.owner_id == owner_id {
-            return Ok(current.into());
-        }
-
         let next = PublicationState {
             owner_id,
             epoch: current.epoch.saturating_add(1),
@@ -73,7 +87,7 @@ pub async fn acquire_publication<P: PublicationStore>(
                 current: Some(state),
             } => current = state,
             CasOutcome::Failed { current: None } => {
-                return bootstrap_publication_state(publication_store, owner_id).await;
+                return Err(Error::PublicationConflict);
             }
         }
     }
@@ -156,6 +170,22 @@ mod tests {
                 .expect("acquire publication");
 
             assert_eq!(lease.owner_id, 7);
+        });
+    }
+
+    #[test]
+    fn reacquiring_with_same_owner_bumps_epoch() {
+        block_on(async {
+            let store = crate::store::meta::InMemoryMetaStore::default();
+
+            let first = acquire_publication(&store, 7)
+                .await
+                .expect("first acquire publication");
+            let second = acquire_publication(&store, 7)
+                .await
+                .expect("second acquire publication");
+
+            assert!(second.epoch > first.epoch);
         });
     }
 }

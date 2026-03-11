@@ -33,6 +33,7 @@ pub struct PutResult {
 #[derive(Debug, Clone)]
 pub struct Page {
     pub keys: Vec<Vec<u8>>,
+    // Opaque continuation token that resumes strictly after the returned page.
     pub next_cursor: Option<Vec<u8>>,
 }
 

@@ -494,6 +494,7 @@ impl MetaStore for ScyllaMetaStore {
         };
 
         let mut keys = Vec::new();
+        let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
         for grp in groups {
@@ -516,7 +517,10 @@ impl MetaStore for ScyllaMetaStore {
                 {
                     for row in iter {
                         let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
-                        if k < start || !k.starts_with(prefix) {
+                        if (has_cursor && k <= start)
+                            || (!has_cursor && k < start)
+                            || !k.starts_with(prefix)
+                        {
                             continue;
                         }
                         keys.push(k);

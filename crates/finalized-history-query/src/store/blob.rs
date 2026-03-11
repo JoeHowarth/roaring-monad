@@ -61,13 +61,17 @@ impl BlobStore for InMemoryBlobStore {
             .read()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
+        let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
         let mut keys = Vec::new();
         let mut all_keys: Vec<Vec<u8>> = guard.keys().cloned().collect();
         all_keys.sort();
         let mut next_cursor = None;
         for k in all_keys {
-            if k < start {
+            if has_cursor && k <= start {
+                continue;
+            }
+            if !has_cursor && k < start {
                 continue;
             }
             if !k.starts_with(prefix) {

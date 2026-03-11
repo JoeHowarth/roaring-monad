@@ -51,7 +51,7 @@ pub async fn delete_unpublished_block<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     anchor: &BlockMetaAnchor,
-    writer_id: u64,
+    fence: FenceToken,
 ) -> Result<()> {
     for key in
         list_blob_keys_with_block_suffix(blob_store, b"stream_frag_blob/", anchor.block_num).await?
@@ -61,38 +61,26 @@ pub async fn delete_unpublished_block<M: MetaStore, B: BlobStore>(
     for key in
         list_keys_with_block_suffix(meta_store, b"stream_frag_meta/", anchor.block_num).await?
     {
-        meta_store
-            .delete(&key, DelCond::Any, FenceToken(writer_id))
-            .await?;
+        meta_store.delete(&key, DelCond::Any, fence).await?;
     }
     blob_store
         .delete_blob(&block_logs_blob_key(anchor.block_num))
         .await?;
     meta_store
-        .delete(
-            &block_log_header_key(anchor.block_num),
-            DelCond::Any,
-            FenceToken(writer_id),
-        )
+        .delete(&block_log_header_key(anchor.block_num), DelCond::Any, fence)
         .await?;
     for key in list_keys_with_block_suffix(meta_store, b"log_dir_frag/", anchor.block_num).await? {
-        meta_store
-            .delete(&key, DelCond::Any, FenceToken(writer_id))
-            .await?;
+        meta_store.delete(&key, DelCond::Any, fence).await?;
     }
     meta_store
         .delete(
             &block_hash_to_num_key(&anchor.meta.block_hash),
             DelCond::Any,
-            FenceToken(writer_id),
+            fence,
         )
         .await?;
     meta_store
-        .delete(
-            &block_meta_key(anchor.block_num),
-            DelCond::Any,
-            FenceToken(writer_id),
-        )
+        .delete(&block_meta_key(anchor.block_num), DelCond::Any, fence)
         .await?;
     Ok(())
 }
@@ -141,7 +129,7 @@ pub async fn delete_unpublished_summaries<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     summaries: &UnpublishedSummaryCleanup,
-    writer_id: u64,
+    fence: FenceToken,
 ) -> Result<()> {
     for page in &summaries.stream_pages {
         blob_store
@@ -154,7 +142,7 @@ pub async fn delete_unpublished_summaries<M: MetaStore, B: BlobStore>(
             .delete(
                 &stream_page_meta_key(&page.stream_id, page.page_start_local),
                 DelCond::Any,
-                FenceToken(writer_id),
+                fence,
             )
             .await?;
     }
@@ -164,7 +152,7 @@ pub async fn delete_unpublished_summaries<M: MetaStore, B: BlobStore>(
             .delete(
                 &log_directory_bucket_key(*bucket_start),
                 DelCond::Any,
-                FenceToken(writer_id),
+                fence,
             )
             .await?;
     }
@@ -174,7 +162,7 @@ pub async fn delete_unpublished_summaries<M: MetaStore, B: BlobStore>(
             .delete(
                 &log_directory_sub_bucket_key(*sub_bucket_start),
                 DelCond::Any,
-                FenceToken(writer_id),
+                fence,
             )
             .await?;
     }
@@ -186,14 +174,14 @@ pub async fn cleanup_unpublished_suffix<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     published_head: u64,
-    writer_id: u64,
+    fence: FenceToken,
 ) -> Result<Vec<BlockMetaAnchor>> {
     let anchors = discover_unpublished_suffix(meta_store, published_head).await?;
     let summaries =
         discover_unpublished_summaries_to_clean(meta_store, published_head, &anchors).await?;
-    delete_unpublished_summaries(meta_store, blob_store, &summaries, writer_id).await?;
+    delete_unpublished_summaries(meta_store, blob_store, &summaries, fence).await?;
     for anchor in anchors.iter().rev() {
-        delete_unpublished_block(meta_store, blob_store, anchor, writer_id).await?;
+        delete_unpublished_block(meta_store, blob_store, anchor, fence).await?;
     }
     Ok(anchors)
 }

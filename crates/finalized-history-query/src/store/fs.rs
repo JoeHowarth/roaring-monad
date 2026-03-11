@@ -255,11 +255,15 @@ impl MetaStore for FsMetaStore {
         }
         all.sort();
 
+        let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
         let mut keys = Vec::new();
         let mut next_cursor = None;
         for k in all {
-            if k < start {
+            if has_cursor && k <= start {
+                continue;
+            }
+            if !has_cursor && k < start {
                 continue;
             }
             keys.push(k);
@@ -362,11 +366,15 @@ impl BlobStore for FsBlobStore {
         }
         all.sort();
 
+        let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
         let mut keys = Vec::new();
         let mut next_cursor = None;
         for k in all {
-            if k < start {
+            if has_cursor && k <= start {
+                continue;
+            }
+            if !has_cursor && k < start {
                 continue;
             }
             keys.push(k);

@@ -53,6 +53,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
             derive_next_log_id(&self.meta_store, lease.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenStreamPage>::new();
+        let fence = lease.fence_token();
 
         for block in blocks {
             persist_log_artifacts(
@@ -62,17 +63,16 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 block.block_num,
                 &block.logs,
                 next_log_id,
-                lease.owner_id,
+                lease.epoch,
             )
             .await?;
-            persist_log_block_metadata(&self.meta_store, block, next_log_id, lease.owner_id)
-                .await?;
+            persist_log_block_metadata(&self.meta_store, block, next_log_id, lease.epoch).await?;
             persist_log_directory_fragments(
                 &self.meta_store,
                 block.block_num,
                 next_log_id,
                 block.logs.len() as u32,
-                lease.owner_id,
+                lease.epoch,
             )
             .await?;
             let touched_pages = persist_stream_fragments(
@@ -80,7 +80,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 &self.blob_store,
                 block,
                 next_log_id,
-                lease.owner_id,
+                lease.epoch,
             )
             .await?;
             opened_during.extend(touched_pages.into_iter().filter_map(
@@ -99,14 +99,14 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id))
         {
-            mark_open_stream_page_if_absent(&self.meta_store, page, lease.owner_id).await?;
+            mark_open_stream_page_if_absent(&self.meta_store, page, fence).await?;
         }
 
         compact_newly_sealed_directory(
             &self.meta_store,
             from_next_log_id,
             next_log_id,
-            lease.owner_id,
+            lease.epoch,
         )
         .await?;
 
@@ -123,10 +123,10 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 &self.blob_store,
                 &page.stream_id,
                 page.page_start_local,
-                lease.owner_id,
+                lease.epoch,
             )
             .await?;
-            delete_open_stream_page(&self.meta_store, &page, lease.owner_id).await?;
+            delete_open_stream_page(&self.meta_store, &page, fence).await?;
         }
 
         let expected_state = lease.as_state();

@@ -30,15 +30,12 @@ pub async fn startup_with_writer<M: MetaStore + PublicationStore, B: BlobStore>(
     writer_id: u64,
 ) -> Result<(RecoveryPlan, PublicationLease)> {
     let lease = acquire_publication(meta_store, writer_id).await?;
-    let _cleaned = cleanup_unpublished_suffix(
-        meta_store,
-        blob_store,
-        lease.indexed_finalized_head,
-        writer_id,
-    )
-    .await?;
+    let fence = lease.fence_token();
+    let _cleaned =
+        cleanup_unpublished_suffix(meta_store, blob_store, lease.indexed_finalized_head, fence)
+            .await?;
     let next_log_id = derive_next_log_id(meta_store, lease.indexed_finalized_head).await?;
-    repair_open_stream_page_markers(meta_store, blob_store, next_log_id, writer_id).await?;
+    repair_open_stream_page_markers(meta_store, blob_store, next_log_id, fence).await?;
     let head_state = FinalizedHeadState {
         indexed_finalized_head: lease.indexed_finalized_head,
         publication_epoch: lease.epoch,
