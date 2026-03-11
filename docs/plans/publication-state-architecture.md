@@ -168,8 +168,9 @@ Artifacts in this class for blocks above `publication_state.indexed_finalized_he
 
 For takeover and retry:
 
-- a writer may rewrite or reuse only after validating against authoritative finalized input
 - a writer must never rely on unpublished artifacts from a prior owner as implicitly trusted state
+- a writer must not overwrite existing Class A artifacts in place after they have been created
+- takeover and retry must follow one of the explicit recovery procedures defined below
 
 #### Class B: shared summary artifacts
 
@@ -213,7 +214,8 @@ from blob writes.
 
 For metadata keys:
 
-- block-scoped authoritative metadata may use ordinary fenced writes or create-if-absent where appropriate
+- block-scoped authoritative metadata must be immutable once created
+- block-scoped authoritative metadata may be written by create-if-absent directly, or by a protocol that guarantees absence before an unconditional write
 - shared summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
 
 For blob/object keys:
@@ -225,6 +227,11 @@ The architecture must not assume that stale blob overwrites are harmless. A stal
 overwrite an already-visible blob can corrupt published state even if publication ownership is
 correctly protected. Object-store conditional create is therefore part of the required safety model,
 not an optional optimization.
+
+The same immutability requirement applies to authoritative metadata. A stale writer that can mutate
+already-visible authoritative metadata after takeover can corrupt published state even if the blob
+layer is protected. The architecture therefore must not rely on low-level fencing lag plus mutable
+authoritative metadata as a safe steady-state model.
 
 ## Ownership Token
 
@@ -315,20 +322,68 @@ The correctness rule stays unchanged:
 
 - only blocks at or below the published head are visible
 
+Additional required invariant:
+
+- batch publish is legal only for a fully validated contiguous suffix
+
+Concretely, before advancing the head from `H` to `T`, the writer must have established all of the following:
+
+- every block in `[H + 1, T]` is present from authoritative finalized input
+- the blocks in `[H + 1, T]` form a contiguous parent/sequence-valid chain
+- every required Class A artifact for every block in `[H + 1, T]` exists
+- no block in `[H + 1, T]` is relying on unvalidated unpublished artifacts inherited from another writer
+
+Advancing the head to `T` without proving those conditions is invalid.
+
 ### Retry after partial failure
 
 If a writer crashes after writing artifacts but before publish:
 
 - those artifacts remain above the visible head
 - readers must ignore them
-- the same writer or a takeover writer may deterministically rewrite them during replay
+- the same writer may reuse or complete them only under the explicit recovery rules below
 
 If a writer crashes after publish succeeds but before receiving acknowledgment:
 
 - retry must first reload `PublicationState`
 - if the head already advanced to the intended value or beyond under the same owner/epoch, treat the publish as already committed
+- if ownership changed, do not treat the old publish attempt as implicitly successful without reconciling against the current published state
 
 This makes publish idempotent with respect to ambiguous client-visible completion.
+
+### Unpublished suffix recovery
+
+Recovery above the published head must be explicit. The base implementation should use cleanup-first
+recovery because it is the simplest protocol to reason about under immutable Class A artifacts.
+
+#### Cleanup-first recovery
+
+Given current published head `H`:
+
+1. enumerate any Class A artifacts for blocks above `H`
+2. delete those unpublished artifacts
+3. replay ingest from authoritative finalized input starting at `H + 1`
+
+Properties:
+
+- no trust is placed in unpublished artifacts from a prior owner
+- no in-place overwrite of existing immutable Class A keys is required
+- takeover semantics remain simple and testable
+
+This is the recommended initial implementation.
+
+#### Validate-and-reuse recovery
+
+This is an allowed future optimization, not the base protocol.
+
+Given current published head `H`:
+
+1. enumerate Class A artifacts for blocks above `H`
+2. for each block above `H`, verify that all required Class A artifacts exist and exactly match authoritative finalized input
+3. reuse only the verified contiguous suffix
+4. if any block is missing or mismatched, delete that block's unpublished suffix and rebuild from there forward
+
+This optimization is only valid if the implementation proves exact equality against authoritative finalized input.
 
 ### Summary creation protocol
 
@@ -348,6 +403,19 @@ Consequences:
 
 This is required because create-if-absent on a shared summary key is only safe if the first writer
 cannot win with an incomplete source set.
+
+Additional required invariant:
+
+- a shared summary may be created only from a complete sealed source range strictly below the current published head
+
+Examples:
+
+- `log_dir_sub/<sub_bucket>` only after the full sub-bucket range is below the published head
+- `log_dir/<bucket>` only after the full bucket range is below the published head
+- `stream_page_*` only after the page is sealed below the published head
+
+If the backend cannot guarantee a complete view of the source fragments needed for the sealed range,
+that backend profile must not create the summary synchronously under this protocol.
 
 ## Reader Semantics
 
@@ -385,9 +453,9 @@ Recommended rule:
 Consequences:
 
 - correctness does not depend on the fence update completing first
-- until the fence is raised, a stale writer may still attempt some metadata writes
+- until the fence is raised, a stale writer may still attempt some metadata writes against keys that are still absent
 - blob/object writes still require conditional-create protection independently of metadata fencing
-- stale writers may still waste work, but must be unable to mutate already-created immutable objects
+- stale writers may still waste work, but must be unable to mutate already-created immutable objects or metadata
 
 This separation keeps the protocol principled:
 
@@ -497,12 +565,13 @@ Frequency:
 
 Required write type:
 
-- simple writer-side fenced metadata write by default
-- create-if-absent is acceptable for block-qualified records if replay behavior stays deterministic
+- create-if-absent directly, or unconditional write only when the implementation has already guaranteed key absence
+- never mutable in place after successful creation
 
 Reason:
 
 - these keys are block-qualified and do not require shared-key arbitration in the hot path
+- cleanup-first recovery allows the implementation to preserve immutability without requiring steady-state shared-key contention resolution
 
 ### Block-scoped authoritative blobs
 
@@ -775,6 +844,7 @@ The implementation must handle all of these cases explicitly.
 Allowed outcome:
 
 - stale writer may waste work
+- stale writer may create only still-absent immutable keys
 - stale writer must not publish
 
 ### Case 2: stale writer attempts publish after takeover
@@ -790,14 +860,15 @@ Required outcome:
 
 - head does not advance
 - readers do not see the new block
-- retry can overwrite or reuse unpublished artifacts deterministically
+- cleanup-first recovery can delete the unpublished suffix and replay it
+- validate-and-reuse is allowed only if exact equality is proven against authoritative finalized input
 
 ### Case 4: writer crashes after publish success but before ack
 
 Required outcome:
 
 - reload reveals advanced head
-- retry treats publish as already committed, not as corruption
+- retry treats publish as already committed only after reconciling ownership token and published head state under the protocol
 
 ### Case 5: concurrent takeover attempts
 
@@ -886,11 +957,14 @@ Minimum required automated coverage:
 - takeover CAS has one winner
 - stale writer publish fails after takeover
 - stale writer ordinary writes above head remain invisible
+- stale writer cannot mutate already-created Class A metadata or blobs after takeover
 - publish advances head only after artifacts exist
 - retry after pre-publish crash succeeds
 - retry after ambiguous post-publish crash is idempotent
 - backfill batch publish advances from `H` to `T` atomically
 - backfill batching reduces publication CAS frequency relative to per-block publish at peak ingest
+- cleanup-first takeover deletes unpublished suffixes and rebuilds them safely
+- shared summary creation only occurs from complete sealed ranges below the published head
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
 
