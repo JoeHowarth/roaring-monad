@@ -219,6 +219,8 @@ Required properties:
 - durable across crash and takeover
 - sufficient to determine which summaries become newly sealed for a proposed `H -> T` publish
 - sufficient to materialize those newly sealed summaries without scanning historical fragment space
+- every record is owned by a specific `(owner_id, epoch)` publication token
+- every mutation is fenced by that token plus record-local CAS/version semantics so stale writers cannot clobber active open state
 
 This state exists because sealed summaries are mandatory, while historical prefix scans across all
 fragments and artifacts are not an acceptable correctness dependency on the hot path.
@@ -242,7 +244,7 @@ For metadata keys:
 - block-scoped authoritative metadata must be immutable once created
 - block-scoped authoritative metadata may be written by create-if-absent directly, or by a protocol that guarantees absence before an unconditional write
 - sealed query-summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
-- open summary state may be mutable but must remain writer-owned and non-reader-visible
+- open summary state may be mutable but must remain writer-owned, non-reader-visible, and CAS/fence protected against stale-writer mutation
 
 For blob/object keys:
 
@@ -435,6 +437,12 @@ A publish from `H` to `T` must materialize the exact newly sealed summary set:
 
 - `NewlySealed(H -> T) = { summary S | sealed_at(S, F_H) = false and sealed_at(S, F_T) = true }`
 
+The computation of that set is itself correctness-critical. Therefore:
+
+- the writer must load open summary state owned by its current `(owner_id, epoch)` token before computing `NewlySealed(H -> T)`
+- any attempt to mutate open summary state under a stale token must fail before publication-critical state is changed
+- takeover must reclaim or rebuild open summary state under the new token before continuing publish work
+
 #### Directory summaries
 
 For a sub-bucket of size `SUB` covering `[sb, sb + SUB)`:
@@ -494,6 +502,24 @@ Consequences:
 
 Historical summary repair for already-published ranges below `H` is a separate migration or repair
 workflow. It is not part of ordinary unpublished-suffix recovery.
+
+#### Pre-publication Class B summary recovery
+
+Because Class B summaries are created before the publish CAS, a crashed writer may leave behind
+sealed summary keys for ranges that are not yet reader-visible through `publication_state`.
+
+Recovery rule for any summary `S` in `NewlySealed(H -> T)`:
+
+1. recompute the exact expected summary bytes from the sealed source state
+2. attempt `create-if-absent` for `S`
+3. if creation succeeds, continue
+4. if the key already exists, load and byte-validate the existing summary against the expected value
+5. only if the existing value is an exact match may the next writer reuse it
+6. if the existing value mismatches, treat this as a summary conflict and fail publication; do not overwrite the key in place and do not advance `publication_state`
+
+This rule is required because immutable shared summary keys use first-writer-wins semantics. A later
+writer must therefore validate pre-publication leftovers before treating them as satisfied mandatory
+artifacts.
 
 ## Reader Semantics
 
@@ -637,6 +663,13 @@ The protocol also requires durable state for currently open summary builders.
 Conceptual shape:
 
 ```rust
+struct OwnedState<T> {
+    owner_id: u64,
+    epoch: u64,
+    version: u64,
+    value: T,
+}
+
 struct OpenDirectoryState {
     current_sub_bucket: Option<OpenDirectorySubBucket>,
     current_bucket: Option<OpenDirectoryBucket>,
@@ -644,20 +677,32 @@ struct OpenDirectoryState {
 
 #[allow(async_fn_in_trait)]
 trait OpenSummaryStore: Send + Sync {
-    async fn load_open_directory_state(&self) -> Result<OpenDirectoryState>;
-    async fn store_open_directory_state(&self, state: &OpenDirectoryState) -> Result<()>;
+    async fn load_open_directory_state(&self) -> Result<Option<OwnedState<OpenDirectoryState>>>;
+    async fn compare_and_set_open_directory_state(
+        &self,
+        expected: Option<&OwnedState<OpenDirectoryState>>,
+        next: &OwnedState<OpenDirectoryState>,
+    ) -> Result<CasOutcome>;
 
-    async fn load_open_stream_pages(&self) -> Result<Vec<OpenStreamPage>>;
-    async fn store_open_stream_page(&self, page: &OpenStreamPage) -> Result<()>;
-    async fn delete_open_stream_page(&self, page_id: &OpenStreamPageId) -> Result<()>;
+    async fn load_open_stream_pages(&self) -> Result<Vec<OwnedState<OpenStreamPage>>>;
+    async fn compare_and_set_open_stream_page(
+        &self,
+        expected: Option<&OwnedState<OpenStreamPage>>,
+        next: &OwnedState<OpenStreamPage>,
+    ) -> Result<CasOutcome>;
+    async fn delete_open_stream_page(
+        &self,
+        expected: &OwnedState<OpenStreamPage>,
+    ) -> Result<CasOutcome>;
 }
 ```
 
 Required usage:
 
 - load the open summary inventory before computing `NewlySealed(H -> T)`
-- update it while processing unpublished suffix blocks
-- delete entries only after their sealed Class B summary artifacts have been created
+- every update or delete must prove ownership of the current `(owner_id, epoch)` token plus the expected record version
+- after takeover, either reclaim the open state under the new token by CAS or rebuild it from published state and unpublished replay before continuing
+- delete entries only after their sealed Class B summary artifacts have been created and validated
 
 The protocol does not require generic historical listing for sealing correctness. It does require a
 bounded durable inventory of currently open summary state.
@@ -966,9 +1011,11 @@ For the expected backends:
 
 - Scylla:
   - `publication_state` and metadata CAS operations must use LWT
+  - open summary state mutations must use conditional updates strong enough to reject stale owner/epoch tokens
   - readers must use read/query paths with consistency strong enough to observe already-committed metadata rows
 - DynamoDB:
   - `publication_state` and metadata CAS operations must use conditional single-item writes
+  - open summary state mutations must use conditional item updates strong enough to reject stale owner/epoch tokens
   - readers must use read modes that guarantee visibility of the committed item state they depend on
 - object/blob store:
   - immutable object creation must support conditional create (`if absent`)
@@ -1067,6 +1114,14 @@ Required outcome:
 - already-created immutable objects remain protected from overwrite
 - correctness remains intact
 
+### Case 9: pre-publication summary key already exists on retry or takeover
+
+Required outcome:
+
+- the next writer recomputes the expected summary from sealed source state
+- exact-match existing summaries may be reused
+- mismatched existing summaries must block publication and surface a summary conflict
+
 ## Interaction With `StrictCas`
 
 This plan makes the current `StrictCas` versus `SingleWriterFast` split unnecessary as a correctness model.
@@ -1103,7 +1158,7 @@ Because this project does not require production backward compatibility yet, pre
 2. implement Scylla `PublicationStore` using one-row LWT
 3. implement DynamoDB `PublicationStore` using one-item conditional update
 4. implement `put_blob_if_absent` for all blob backends
-5. implement durable open-summary-state persistence and reload for all backends used by publication
+5. implement durable open-summary-state persistence, CAS mutation, and reload for all backends used by publication
 
 ### Phase 3: switch ingest and shared-state reads
 
@@ -1112,9 +1167,10 @@ Because this project does not require production backward compatibility yet, pre
 3. write `block_meta/<block_num>` early enough to act as the unpublished-suffix recovery anchor
 4. implement cleanup-first unpublished-suffix recovery by walking contiguous unpublished `block_meta` rows from `H + 1`
 5. implement synchronous summary finalization from open summary state and unpublished replay, without historical artifact scans
-6. add required backfill-oriented publication batching on top of the same publication protocol
-7. switch finalized-head reads to `publication_state.indexed_finalized_head`
-8. stop treating `writer_lease` as correctness-critical
+6. implement validate-or-reuse handling for pre-publication Class B summaries that already exist before the publish CAS
+7. add required backfill-oriented publication batching on top of the same publication protocol
+8. switch finalized-head reads to `publication_state.indexed_finalized_head`
+9. stop treating `writer_lease` as correctness-critical
 
 ### Phase 4: clean up legacy control-plane state
 
@@ -1133,6 +1189,7 @@ Minimum required automated coverage:
 - stale writer publish fails after takeover
 - stale writer ordinary writes above head remain invisible
 - stale writer cannot mutate already-created Class A metadata or blobs after takeover
+- stale writer cannot mutate open summary state after takeover
 - unpublished `block_meta` rows above head remain contiguous from `H + 1`
 - publish advances head only after artifacts exist
 - publish advances head only after all newly sealed required summaries exist
@@ -1143,6 +1200,8 @@ Minimum required automated coverage:
 - cleanup-first takeover walks `block_meta` from `H + 1`, deletes dependent unpublished artifacts, and rebuilds them safely
 - summary finalization computes exactly the newly sealed set for `H -> T`
 - shared summary finalization never requires a historical scan over fragment space
+- pre-publication Class B summaries are reused only after exact validation and never overwritten in place
+- mismatched pre-publication Class B summaries surface a conflict and block head advancement
 - takeover reloads durable open summary state and finalizes mandatory summaries without query-visible gaps
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
