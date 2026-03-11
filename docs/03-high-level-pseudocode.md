@@ -77,7 +77,13 @@ class LogBlockWindow:
 
 ```python
 meta_store:
-    "publication_state" -> PublicationState
+    "publication_state" -> PublicationState {
+        owner_id,
+        session_id,
+        epoch,
+        indexed_finalized_head,
+        lease_expires_at_ms,
+    }
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
     "log_dir_frag/<sub_bucket_start>/<block_num>" -> LogDirFragment

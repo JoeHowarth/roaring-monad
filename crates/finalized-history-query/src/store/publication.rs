@@ -22,3 +22,8 @@ pub trait PublicationStore: Send + Sync {
         next: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>>;
 }
+
+#[allow(async_fn_in_trait)]
+pub trait FenceStore: Send + Sync {
+    async fn advance_fence(&self, min_epoch: u64) -> Result<()>;
+}

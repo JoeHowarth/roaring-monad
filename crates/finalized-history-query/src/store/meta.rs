@@ -8,7 +8,7 @@ use crate::codec::finalized_state::{decode_publication_state, encode_publication
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Default)]
@@ -210,6 +210,17 @@ impl PublicationStore for InMemoryMetaStore {
             },
         );
         Ok(CasOutcome::Applied(next.clone()))
+    }
+}
+
+impl FenceStore for InMemoryMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
+        let _ = self
+            .min_epoch
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.max(min_epoch))
+            });
+        Ok(())
     }
 }
 

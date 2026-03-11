@@ -92,7 +92,7 @@ Important log-specific view types:
 
 Shared metadata:
 
-- `publication_state -> PublicationState { owner_id, epoch, indexed_finalized_head }`
+- `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_expires_at_ms }`
 - `block_meta/<block_num> -> BlockMeta`
 - `block_hash_to_num/<block_hash> -> block_num`
 - `block_log_headers/<block_num> -> BlockLogHeader`
@@ -141,12 +141,18 @@ It is responsible for:
 - coordinating immutable directory and stream frontier publication
 - advancing `publication_state.indexed_finalized_head` last
 
-`FinalizedHistoryService::startup()` owns publication lifecycle:
+`FinalizedHistoryService::startup()` owns active publication lifecycle:
 
 - publication ownership acquisition
 - cleanup-first recovery of unpublished suffix artifacts
 - sealed open-page marker repair
 - deriving the startup `next_log_id` view
+
+`startup_plan(...)` is observational only:
+
+- loads `publication_state`
+- derives `next_log_id`
+- never mutates ownership
 
 The logs family owns:
 

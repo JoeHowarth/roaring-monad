@@ -121,8 +121,10 @@ mod tests {
             assert!(matches!(
                 meta.create_if_absent(&PublicationState {
                     owner_id: 5,
+                    session_id: [5u8; 16],
                     epoch: 12,
                     indexed_finalized_head: 7,
+                    lease_expires_at_ms: u64::MAX,
                 })
                 .await
                 .expect("write publication state"),

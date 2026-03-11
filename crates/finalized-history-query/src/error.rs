@@ -6,6 +6,8 @@ pub enum Error {
     CasConflict,
     #[error("publication conflict")]
     PublicationConflict,
+    #[error("active writer lease is still fresh")]
+    LeaseStillFresh,
     #[error("lease lost")]
     LeaseLost,
     #[error("immutable artifact conflict")]

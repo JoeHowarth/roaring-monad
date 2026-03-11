@@ -477,8 +477,10 @@ pub fn seed_publication_state(
             PUBLICATION_STATE_KEY,
             encode_publication_state(&PublicationState {
                 owner_id: DEFAULT_WRITER_EPOCH,
+                session_id: [0u8; 16],
                 epoch: DEFAULT_WRITER_EPOCH,
                 indexed_finalized_head,
+                lease_expires_at_ms: u64::MAX,
             }),
         )
         .await;

@@ -6,7 +6,7 @@ use crate::ingest::open_pages::{
     OpenStreamPage, collect_newly_sealed_open_stream_pages, delete_open_stream_page,
     mark_open_stream_page_if_absent,
 };
-use crate::ingest::publication::PublicationLease;
+use crate::ingest::publication::{PublicationLease, current_time_ms, renew_publication_if_needed};
 use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
@@ -46,6 +46,15 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
         let Some(last_block) = blocks.last() else {
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
+
+        let lease = renew_publication_if_needed(
+            &self.meta_store,
+            lease,
+            current_time_ms(),
+            self.config.publication_lease_renew_skew_ms,
+            self.config.publication_lease_duration_ms,
+        )
+        .await?;
 
         validate_block_sequence(&self.meta_store, blocks, lease).await?;
 
@@ -132,13 +141,17 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
         let expected_state = lease.as_state();
         let next_lease = PublicationLease {
             owner_id: lease.owner_id,
+            session_id: lease.session_id,
             epoch: lease.epoch,
             indexed_finalized_head: last_block.block_num,
+            lease_expires_at_ms: lease.lease_expires_at_ms,
         };
         let next_state = PublicationState {
             owner_id: next_lease.owner_id,
+            session_id: next_lease.session_id,
             epoch: next_lease.epoch,
             indexed_finalized_head: next_lease.indexed_finalized_head,
+            lease_expires_at_ms: next_lease.lease_expires_at_ms,
         };
         match self
             .meta_store
@@ -149,7 +162,10 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
             CasOutcome::Failed {
                 current: Some(current),
             } => {
-                if current.owner_id != lease.owner_id || current.epoch != lease.epoch {
+                if current.owner_id != lease.owner_id
+                    || current.session_id != lease.session_id
+                    || current.epoch != lease.epoch
+                {
                     return Err(Error::LeaseLost);
                 }
                 return Err(Error::PublicationConflict);

@@ -13,10 +13,10 @@ use crate::ingest::publication::PublicationLease;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
 use crate::recovery::startup::{RecoveryPlan, startup_with_writer};
-use crate::store::publication::PublicationStore;
+use crate::store::publication::{FenceStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 
-pub struct FinalizedHistoryService<M: MetaStore + PublicationStore, B: BlobStore> {
+pub struct FinalizedHistoryService<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> {
     pub ingest: IngestEngine<M, B>,
     query: LogsQueryEngine,
     writer_id: u64,
@@ -25,7 +25,7 @@ pub struct FinalizedHistoryService<M: MetaStore + PublicationStore, B: BlobStore
     startup_state: Arc<futures::lock::Mutex<Option<PublicationLease>>>,
 }
 
-impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryService<M, B> {
+impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryService<M, B> {
     pub fn new(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
         let query = LogsQueryEngine::from_config(&config);
         let ingest = IngestEngine::new(config.clone(), meta_store, blob_store);
@@ -190,7 +190,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryService<M, B
     }
 }
 
-impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryWriter
+impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryWriter
     for FinalizedHistoryService<M, B>
 {
     async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
@@ -215,7 +215,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryWriter
     }
 }
 
-impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedLogQueries
+impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedLogQueries
     for FinalizedHistoryService<M, B>
 {
     async fn query_logs(
@@ -241,7 +241,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedLogQueries
     }
 }
 
-impl<M: MetaStore + PublicationStore, B: BlobStore> FinalizedHistoryService<M, B> {
+impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryService<M, B> {
     async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
         let startup_needed = {
             let startup_state = self.startup_state.lock().await;

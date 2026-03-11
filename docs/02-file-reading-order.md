@@ -105,7 +105,7 @@ Look for:
 28. `crates/finalized-history-query/src/ingest/engine.rs`
     Read this for the ingest orchestrator: finalized-sequence validation, authoritative artifact persistence, bounded eager compaction, and publication-state CAS.
 29. `crates/finalized-history-query/src/recovery/startup.rs`
-    Read this for the current startup view: acquire publication ownership, load `publication_state`, clean any unpublished suffix, repair sealed open-page markers, derive `next_log_id`, and report warmed streams.
+    Read this for the current startup view: `startup_plan` is read-only, while writer startup acquires publication ownership, cleans any unpublished suffix, repairs sealed open-page markers, derives `next_log_id`, and reports warmed streams.
 
 Look for:
 

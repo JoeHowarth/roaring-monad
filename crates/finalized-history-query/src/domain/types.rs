@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];
+pub type SessionId = [u8; 16];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Log {
@@ -60,8 +61,10 @@ pub struct Block {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PublicationState {
     pub owner_id: u64,
+    pub session_id: SessionId,
     pub epoch: u64,
     pub indexed_finalized_head: u64,
+    pub lease_expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]

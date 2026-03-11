@@ -17,7 +17,7 @@ use finalized_history_query::error::{Error, Result};
 use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
+use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use finalized_history_query::store::traits::{
     BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
@@ -146,6 +146,12 @@ impl PublicationStore for FaultyMetaStore {
         self.injector
             .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
         self.inner.compare_and_set(expected, next).await
+    }
+}
+
+impl FenceStore for FaultyMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
+        self.inner.advance_fence(min_epoch).await
     }
 }
 
@@ -384,8 +390,10 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
         assert!(matches!(
             meta.create_if_absent(&PublicationState {
                 owner_id: 1,
+                session_id: [1u8; 16],
                 epoch: 1,
                 indexed_finalized_head: 1,
+                lease_expires_at_ms: 0,
             })
             .await
             .expect("seed publication state"),
@@ -447,6 +455,21 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
         );
 
         injector.clear();
+        let current_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state present");
+        let expired_state = PublicationState {
+            lease_expires_at_ms: 0,
+            ..current_state.clone()
+        };
+        assert!(matches!(
+            meta.compare_and_set(&current_state, &expired_state)
+                .await
+                .expect("expire publication lease"),
+            CasOutcome::Applied(_)
+        ));
         let takeover_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 2);
         takeover_writer.startup().await.expect("startup cleanup");

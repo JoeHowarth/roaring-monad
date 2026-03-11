@@ -12,6 +12,8 @@ pub enum IngestMode {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub publication_lease_duration_ms: u64,
+    pub publication_lease_renew_skew_ms: u64,
     pub target_entries_per_chunk: u32,
     pub target_chunk_bytes: usize,
     pub maintenance_seal_seconds: u64,
@@ -31,6 +33,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            publication_lease_duration_ms: 30_000,
+            publication_lease_renew_skew_ms: 5_000,
             target_entries_per_chunk: 1950,
             target_chunk_bytes: 32 * 1024,
             maintenance_seal_seconds: 600,

@@ -3,6 +3,7 @@ use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
@@ -10,7 +11,7 @@ use bytes::Bytes;
 use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use crate::store::traits::{
     BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
@@ -18,7 +19,7 @@ use crate::store::traits::{
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
     root: PathBuf,
-    min_epoch: u64,
+    min_epoch: Arc<AtomicU64>,
 }
 
 impl FsMetaStore {
@@ -26,7 +27,10 @@ impl FsMetaStore {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(root.join("meta"))
             .map_err(|e| Error::Backend(format!("create fs meta dir: {e}")))?;
-        Ok(Self { root, min_epoch })
+        Ok(Self {
+            root,
+            min_epoch: Arc::new(AtomicU64::new(min_epoch)),
+        })
     }
 
     fn key_path(&self, key: &[u8]) -> PathBuf {
@@ -52,7 +56,7 @@ impl FsMetaStore {
     }
 
     fn validate_fence(&self, fence: FenceToken) -> Result<()> {
-        if fence.0 < self.min_epoch {
+        if fence.0 < self.min_epoch.load(Ordering::Relaxed) {
             return Err(Error::LeaseLost);
         }
         Ok(())
@@ -68,6 +72,17 @@ impl FsMetaStore {
             .entry(self.publication_state_path())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone())
+    }
+}
+
+impl FenceStore for FsMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
+        let _ = self
+            .min_epoch
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.max(min_epoch))
+            });
+        Ok(())
     }
 }
 
@@ -581,8 +596,10 @@ mod tests {
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
         let state = PublicationState {
             owner_id: 1,
+            session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 0,
+            lease_expires_at_ms: u64::MAX,
         };
 
         let handles = (0..2)
@@ -613,20 +630,26 @@ mod tests {
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
         let initial = PublicationState {
             owner_id: 1,
+            session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 0,
+            lease_expires_at_ms: u64::MAX,
         };
         block_on(store.create_if_absent(&initial)).expect("seed publication state");
 
         let next_a = PublicationState {
             owner_id: 1,
+            session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 1,
+            lease_expires_at_ms: u64::MAX,
         };
         let next_b = PublicationState {
             owner_id: 2,
+            session_id: [2u8; 16],
             epoch: 2,
             indexed_finalized_head: 0,
+            lease_expires_at_ms: u64::MAX,
         };
 
         let store_a = Arc::clone(&store);

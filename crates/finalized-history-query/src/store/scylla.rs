@@ -13,7 +13,7 @@ use crate::codec::finalized_state::{decode_publication_state, encode_publication
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
 const DEFAULT_FENCE_KEY: &str = "global";
@@ -673,6 +673,13 @@ impl PublicationStore for ScyllaMetaStore {
         Ok(CasOutcome::Failed {
             current: self.load().await?,
         })
+    }
+}
+
+impl FenceStore for ScyllaMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
+        let next_min_epoch = self.cached_min_epoch.load(Ordering::Relaxed).max(min_epoch);
+        self.set_min_epoch(next_min_epoch).await
     }
 }
 
