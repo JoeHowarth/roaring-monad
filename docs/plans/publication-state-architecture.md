@@ -138,7 +138,7 @@ The first implementation should not require timed fields for correctness.
 
 ### Artifact taxonomy
 
-The existing artifact layout falls into three different classes. The protocol and storage
+The existing artifact layout falls into four different classes. The protocol and storage
 requirements are different for each class.
 
 #### Class A: block-scoped authoritative artifacts
@@ -159,6 +159,7 @@ Required properties:
 - deterministic from finalized block input
 - immutable once successfully written
 - safe to exist above the published head without becoming visible
+- discoverable by walking `block_meta/<block_num>` from `H + 1` upward during unpublished-suffix recovery
 
 Artifacts in this class for blocks above `publication_state.indexed_finalized_head` are:
 
@@ -171,10 +172,11 @@ For takeover and retry:
 - a writer must never rely on unpublished artifacts from a prior owner as implicitly trusted state
 - a writer must not overwrite existing Class A artifacts in place after they have been created
 - takeover and retry must follow one of the explicit recovery procedures defined below
+- `block_meta/<block_num>` is the recovery anchor for all other unpublished Class A keys for that block
 
-#### Class B: shared summary artifacts
+#### Class B: sealed query-summary artifacts
 
-These artifacts are acceleration structures written to shared keys that may summarize many blocks:
+These artifacts are shared-key query artifacts written when a sealed range becomes fully materializable:
 
 - `log_dir_sub/<sub_bucket>`
 - optional `log_dir/<bucket>`
@@ -183,22 +185,45 @@ These artifacts are acceleration structures written to shared keys that may summ
 
 Required properties:
 
-- derived only from already published Class A artifacts below the current head
-- not required for correctness because readers can fall back to authoritative fragments
+- required for feasible query execution under the current design
+- materialized synchronously when their sealed range becomes publication-critical
 - immutable once created
-- safe to be missing
+- written with create-if-absent semantics
+- never created from incomplete source state
 
-These artifacts are not part of the unpublished "suffix above head" model. They must not be
-treated as rewritable speculative state. Instead:
+These artifacts are not optional acceleration afterthoughts. If a proposed head advance makes a
+sealed summary range query-critical, that summary becomes part of the publication-critical artifact
+set for that advance.
 
-- they are created only after the source blocks they summarize are already published
-- they are written with create-if-absent semantics
+They are also not part of the unpublished "suffix above head" model. They must not be treated as
+rewritable speculative state. Instead:
+
+- they are derived from sealed source ranges
+- they are written exactly once
 - if creation races, the first complete writer wins and later writers must treat the key as sealed
 
-This distinction is required because shared summary keys are reader-preferred when present and do
-not fit the simple "unpublished block suffix" category.
+#### Class C: open summary state
 
-#### Class C: control-plane state
+This is mutable writer-owned state used to track not-yet-sealed summary builders and the inventory
+of summaries that may seal on a future head advance.
+
+Conceptually this includes:
+
+- current open directory sub-bucket builder
+- current open directory bucket builder
+- open stream-page inventory and per-page builder state
+
+Required properties:
+
+- not reader-visible query state
+- durable across crash and takeover
+- sufficient to determine which summaries become newly sealed for a proposed `H -> T` publish
+- sufficient to materialize those newly sealed summaries without scanning historical fragment space
+
+This state exists because sealed summaries are mandatory, while historical prefix scans across all
+fragments and artifacts are not an acceptable correctness dependency on the hot path.
+
+#### Class D: control-plane state
 
 These records define ownership and visibility:
 
@@ -216,12 +241,13 @@ For metadata keys:
 
 - block-scoped authoritative metadata must be immutable once created
 - block-scoped authoritative metadata may be written by create-if-absent directly, or by a protocol that guarantees absence before an unconditional write
-- shared summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
+- sealed query-summary metadata must use create-if-absent or equivalent CAS-on-empty semantics
+- open summary state may be mutable but must remain writer-owned and non-reader-visible
 
 For blob/object keys:
 
 - block-scoped authoritative blobs must use conditional create (`if absent`)
-- shared summary blobs must use conditional create (`if absent`)
+- sealed query-summary blobs must use conditional create (`if absent`)
 
 The architecture must not assume that stale blob overwrites are harmless. A stale writer that can
 overwrite an already-visible blob can corrupt published state even if publication ownership is
@@ -356,19 +382,29 @@ This makes publish idempotent with respect to ambiguous client-visible completio
 Recovery above the published head must be explicit. The base implementation should use cleanup-first
 recovery because it is the simplest protocol to reason about under immutable Class A artifacts.
 
+Additional required invariant:
+
+- unpublished `block_meta/<block_num>` rows above head form a contiguous suffix beginning at `H + 1`
+- writers must not create `block_meta/N+1` unless `block_meta/N` already exists for unpublished `N >= H + 1`
+- `block_meta/<block_num>` is written early enough in the per-block flow to act as the durable recovery anchor for that unpublished block
+
 #### Cleanup-first recovery
 
 Given current published head `H`:
 
-1. enumerate any Class A artifacts for blocks above `H`
-2. delete those unpublished artifacts
-3. replay ingest from authoritative finalized input starting at `H + 1`
+1. read `block_meta/<H + 1>`, `block_meta/<H + 2>`, ... by point lookup until the first missing block
+2. for each discovered unpublished block `N`, derive its dependent Class A keys from `block_meta/<N>` plus canonical finalized block input
+3. delete those unpublished artifacts
+4. delete `block_meta/<N>` last for each unpublished block
+5. replay ingest from authoritative finalized input starting at `H + 1`
 
 Properties:
 
 - no trust is placed in unpublished artifacts from a prior owner
 - no in-place overwrite of existing immutable Class A keys is required
 - takeover semantics remain simple and testable
+- cleanup does not require a global prefix scan over all historical `block_meta/*`
+- deleting `block_meta/<N>` last preserves a durable inventory of remaining cleanup work if recovery itself crashes
 
 This is the recommended initial implementation.
 
@@ -378,44 +414,86 @@ This is an allowed future optimization, not the base protocol.
 
 Given current published head `H`:
 
-1. enumerate Class A artifacts for blocks above `H`
-2. for each block above `H`, verify that all required Class A artifacts exist and exactly match authoritative finalized input
+1. walk unpublished `block_meta/<block_num>` rows upward from `H + 1` until the first missing block
+2. for each unpublished block, verify that all required Class A artifacts exactly match authoritative finalized input
 3. reuse only the verified contiguous suffix
 4. if any block is missing or mismatched, delete that block's unpublished suffix and rebuild from there forward
 
 This optimization is only valid if the implementation proves exact equality against authoritative finalized input.
 
-### Summary creation protocol
+### Summary finalization protocol
 
-Shared summary creation is intentionally outside the correctness-critical publish step.
+Sealed query summaries are publication-critical. They must be created before `publication_state`
+advances past a point where queries require them.
 
-Required sequence:
+Define:
 
-1. write and publish Class A authoritative artifacts
-2. after the head has advanced, derive any newly sealed summaries from published Class A artifacts
-3. write the shared summary keys with create-if-absent semantics
+- `F_H`: the `next_log_id` frontier implied by published head `H`
+- `F_T`: the `next_log_id` frontier implied by candidate published head `T`
+
+A publish from `H` to `T` must materialize the exact newly sealed summary set:
+
+- `NewlySealed(H -> T) = { summary S | sealed_at(S, F_H) = false and sealed_at(S, F_T) = true }`
+
+#### Directory summaries
+
+For a sub-bucket of size `SUB` covering `[sb, sb + SUB)`:
+
+- it is sealed at frontier `F` iff `sb + SUB <= F`
+
+Therefore:
+
+- `NewDirSub(H -> T) = { sb | sb + SUB <= F_T and sb + SUB > F_H }`
+
+For a full directory bucket of size `BKT` covering `[b, b + BKT)`:
+
+- it is sealed at frontier `F` iff `b + BKT <= F`
+
+Therefore:
+
+- `NewDirBucket(H -> T) = { b | b + BKT <= F_T and b + BKT > F_H }`
+
+These sets are computable directly from `F_H` and `F_T`.
+
+#### Stream-page summaries
+
+For a stream page `(stream, shard, page_start)`:
+
+- it is sealed at frontier `F` iff:
+  - `page.shard < shard(F)`, or
+  - `page.shard == shard(F)` and `page_start + PAGE_SPAN <= local(F)`
+
+Operationally:
+
+- let `OpenPages_H` be the durable inventory of open stream pages before the proposed publish
+- let `OpenedDuring(H -> T)` be the stream pages first touched while replaying or ingesting blocks `H + 1 ..= T`
+
+Then:
+
+- `NewStreamPages(H -> T) = { p in OpenPages_H union OpenedDuring(H -> T) | not sealed_at(p, F_H) and sealed_at(p, F_T) }`
+
+This is why durable open summary state is required. Without it, the writer would need to discover
+old still-open pages by scanning historical artifacts.
+
+#### Required publish ordering
+
+For a proposed publish from `H` to `T`:
+
+1. write all required Class A artifacts for blocks `H + 1 ..= T`
+2. update durable open summary state while processing those blocks
+3. compute `NewDirSub(H -> T)`, `NewDirBucket(H -> T)`, and `NewStreamPages(H -> T)`
+4. materialize every newly sealed Class B summary with create-if-absent semantics
+5. remove the newly sealed entries from open summary state
+6. only then CAS `publication_state` from `H` to `T`
 
 Consequences:
 
-- shared summaries may lag without affecting correctness
-- a failed or stale summary writer cannot poison publication of new blocks
-- readers may prefer summaries when present and fall back to authoritative fragments otherwise
+- mandatory summaries never lag behind the published query frontier
+- publication does not depend on scanning historical fragment space
+- takeover and replay can rebuild unpublished suffix effects from canonical blocks while relying on durable open summary state below `H`
 
-This is required because create-if-absent on a shared summary key is only safe if the first writer
-cannot win with an incomplete source set.
-
-Additional required invariant:
-
-- a shared summary may be created only from a complete sealed source range strictly below the current published head
-
-Examples:
-
-- `log_dir_sub/<sub_bucket>` only after the full sub-bucket range is below the published head
-- `log_dir/<bucket>` only after the full bucket range is below the published head
-- `stream_page_*` only after the page is sealed below the published head
-
-If the backend cannot guarantee a complete view of the source fragments needed for the sealed range,
-that backend profile must not create the summary synchronously under this protocol.
+Historical summary repair for already-published ranges below `H` is a separate migration or repair
+workflow. It is not part of ordinary unpublished-suffix recovery.
 
 ## Reader Semantics
 
@@ -552,72 +630,37 @@ Required usage:
 
 This capability is required because object-store immutability is part of the safety model, not merely an implementation detail.
 
-### Correctness-sensitive listing capability
+### Open-summary state capability
 
-The protocol also requires an explicit distinction between ordinary prefix listing and correctness-critical enumeration.
+The protocol also requires durable state for currently open summary builders.
 
 Conceptual shape:
 
 ```rust
-enum ListConsistency {
-    BestEffort,
-    CorrectnessCritical,
+struct OpenDirectoryState {
+    current_sub_bucket: Option<OpenDirectorySubBucket>,
+    current_bucket: Option<OpenDirectoryBucket>,
 }
 
 #[allow(async_fn_in_trait)]
-trait MetaStore: Send + Sync {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
+trait OpenSummaryStore: Send + Sync {
+    async fn load_open_directory_state(&self) -> Result<OpenDirectoryState>;
+    async fn store_open_directory_state(&self, state: &OpenDirectoryState) -> Result<()>;
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult>;
-
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()>;
-
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-        consistency: ListConsistency,
-    ) -> Result<Page>;
-}
-
-#[allow(async_fn_in_trait)]
-trait BlobStore: Send + Sync {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
-
-    async fn put_blob_if_absent(
-        &self,
-        key: &[u8],
-        value: Bytes,
-    ) -> Result<CreateOutcome>;
-
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
-
-    async fn delete_blob(&self, key: &[u8]) -> Result<()>;
-
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-        consistency: ListConsistency,
-    ) -> Result<Page>;
+    async fn load_open_stream_pages(&self) -> Result<Vec<OpenStreamPage>>;
+    async fn store_open_stream_page(&self, page: &OpenStreamPage) -> Result<()>;
+    async fn delete_open_stream_page(&self, page_id: &OpenStreamPageId) -> Result<()>;
 }
 ```
 
 Required usage:
 
-- cleanup-first recovery uses `CorrectnessCritical`
-- shared-summary construction uses `CorrectnessCritical`
-- optional background maintenance, diagnostics, and observability may use `BestEffort`
+- load the open summary inventory before computing `NewlySealed(H -> T)`
+- update it while processing unpublished suffix blocks
+- delete entries only after their sealed Class B summary artifacts have been created
 
-This requirement is necessary because the protocol now depends on complete prefix enumeration for correctness. The abstraction must make that dependency visible at the call site.
+The protocol does not require generic historical listing for sealing correctness. It does require a
+bounded durable inventory of currently open summary state.
 
 ## Write Frequency Characterization
 
@@ -924,38 +967,33 @@ For the expected backends:
 - Scylla:
   - `publication_state` and metadata CAS operations must use LWT
   - readers must use read/query paths with consistency strong enough to observe already-committed metadata rows
-  - correctness-sensitive `list_prefix` operations must use read/query behavior that provides complete prefix enumeration for committed rows in scope
 - DynamoDB:
   - `publication_state` and metadata CAS operations must use conditional single-item writes
   - readers must use read modes that guarantee visibility of the committed item state they depend on
-  - correctness-sensitive `list_prefix` operations must be implemented as strongly consistent base-table queries, not GSIs
 - object/blob store:
   - immutable object creation must support conditional create (`if absent`)
   - the deployment must provide read-after-write visibility for newly created objects before the corresponding head advance is considered safe to publish
-  - any correctness-sensitive object enumeration must also provide list-after-write visibility for the relevant prefixes
+  - any blob reads used to finalize newly sealed summaries must observe the committed immutable fragment objects they depend on
 
-Correctness-sensitive enumeration includes:
-
-- cleanup-first recovery over unpublished suffix artifacts
-- shared-summary construction from sealed source fragments
-
-Read-after-write alone is not sufficient for those workflows. They require complete prefix enumeration of the relevant source set.
+If the implementation reloads open summary state by enumeration rather than a point-addressable registry,
+that enumeration must be complete for the dedicated open-state prefixes in use.
 
 Required backend notes:
 
 - DynamoDB:
   - strong consistency is acceptable only on the base table or LSIs
-  - correctness-sensitive prefix enumeration must not depend on GSIs
+  - if open summary state is reloaded by query rather than a single registry item, that query must not depend on GSIs
 - S3-compatible object stores:
-  - AWS S3 satisfies the required read-after-write and list-after-write object semantics
-  - any alternate S3-compatible backend must prove equivalent semantics or be treated as unsupported for correctness-sensitive workflows
+  - AWS S3 satisfies the required read-after-write object semantics for immutable fragments and summaries
+  - any alternate S3-compatible backend must prove equivalent semantics or be treated as unsupported for publication-critical summary finalization
 
 Required publication ordering:
 
 1. write authoritative Class A metadata and blobs
-2. ensure those writes have the backend visibility required by the deployment profile
-3. advance `publication_state`
-4. only after that, optionally create Class B shared summaries
+2. update durable open summary state
+3. materialize every newly sealed Class B summary required for the target head
+4. ensure those writes have the backend visibility required by the deployment profile
+5. advance `publication_state`
 
 If a deployment cannot provide that visibility contract, then:
 
@@ -1052,7 +1090,7 @@ Because this project does not require production backward compatibility yet, pre
 ### Phase 1: add publication state and tests
 
 1. add `PublicationState` types and `PublicationStore` trait
-2. add `CreateOutcome`, `put_blob_if_absent`, and explicit listing-consistency types to the storage abstractions
+2. add `CreateOutcome`, `put_blob_if_absent`, and durable open-summary-state types to the storage abstractions
 3. add failing tests for:
    - lease loss before publish
    - concurrent takeover
@@ -1065,15 +1103,15 @@ Because this project does not require production backward compatibility yet, pre
 2. implement Scylla `PublicationStore` using one-row LWT
 3. implement DynamoDB `PublicationStore` using one-item conditional update
 4. implement `put_blob_if_absent` for all blob backends
-5. implement correctness-sensitive `list_prefix` behavior for all metadata and blob backends used by recovery or summary creation
+5. implement durable open-summary-state persistence and reload for all backends used by publication
 
 ### Phase 3: switch ingest and shared-state reads
 
 1. switch ingest ownership and publish flow to `PublicationStore`
 2. switch Class A and Class B blob writes to `put_blob_if_absent`
-3. switch correctness-sensitive enumeration call sites to explicit `CorrectnessCritical` listing
-4. implement cleanup-first unpublished-suffix recovery
-5. move shared-summary creation fully to the post-publication path
+3. write `block_meta/<block_num>` early enough to act as the unpublished-suffix recovery anchor
+4. implement cleanup-first unpublished-suffix recovery by walking contiguous unpublished `block_meta` rows from `H + 1`
+5. implement synchronous summary finalization from open summary state and unpublished replay, without historical artifact scans
 6. add required backfill-oriented publication batching on top of the same publication protocol
 7. switch finalized-head reads to `publication_state.indexed_finalized_head`
 8. stop treating `writer_lease` as correctness-critical
@@ -1095,13 +1133,17 @@ Minimum required automated coverage:
 - stale writer publish fails after takeover
 - stale writer ordinary writes above head remain invisible
 - stale writer cannot mutate already-created Class A metadata or blobs after takeover
+- unpublished `block_meta` rows above head remain contiguous from `H + 1`
 - publish advances head only after artifacts exist
+- publish advances head only after all newly sealed required summaries exist
 - retry after pre-publish crash succeeds
 - retry after ambiguous post-publish crash is idempotent
 - backfill batch publish advances from `H` to `T` atomically
 - backfill batching reduces publication CAS frequency relative to per-block publish at peak ingest
-- cleanup-first takeover deletes unpublished suffixes and rebuilds them safely
-- shared summary creation only occurs from complete sealed ranges below the published head
+- cleanup-first takeover walks `block_meta` from `H + 1`, deletes dependent unpublished artifacts, and rebuilds them safely
+- summary finalization computes exactly the newly sealed set for `H -> T`
+- shared summary finalization never requires a historical scan over fragment space
+- takeover reloads durable open summary state and finalizes mandatory summaries without query-visible gaps
 - readers never observe blocks above the published head
 - in-memory, Scylla, and DynamoDB backends all satisfy the same observable protocol
 
