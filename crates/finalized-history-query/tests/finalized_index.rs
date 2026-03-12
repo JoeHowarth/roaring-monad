@@ -298,6 +298,89 @@ impl FenceStore for ExpireBeforePublishMetaStore {
     }
 }
 
+#[derive(Clone)]
+struct PublishConflictOnceMetaStore {
+    inner: Arc<InMemoryMetaStore>,
+    conflicted: Arc<AtomicBool>,
+}
+
+impl MetaStore for PublishConflictOnceMetaStore {
+    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<PutResult> {
+        self.inner.put(key, value, cond, fence).await
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: DelCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_history_query::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
+impl PublicationStore for PublishConflictOnceMetaStore {
+    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
+        self.inner.load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        if next.indexed_finalized_head > expected.indexed_finalized_head
+            && !self.conflicted.swap(true, Ordering::Relaxed)
+        {
+            match self.inner.compare_and_set(expected, next).await? {
+                CasOutcome::Applied(state) => {
+                    return Ok(CasOutcome::Failed {
+                        current: Some(state),
+                    });
+                }
+                outcome => return Ok(outcome),
+            }
+        }
+        self.inner.compare_and_set(expected, next).await
+    }
+}
+
+impl FenceStore for PublishConflictOnceMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
+        self.inner.advance_fence(min_epoch).await
+    }
+
+    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
+        self.inner.current_fence().await
+    }
+}
+
 #[test]
 fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
     block_on(async {
@@ -1007,5 +1090,43 @@ fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
             )
             .await
             .expect("ingest should renew before final publish");
+    });
+}
+
+#[test]
+fn service_clears_cached_writer_after_publication_conflict() {
+    block_on(async {
+        let meta = PublishConflictOnceMetaStore {
+            inner: Arc::new(InMemoryMetaStore::default()),
+            conflicted: Arc::new(AtomicBool::new(false)),
+        };
+        let svc = FinalizedHistoryService::new(
+            Config::default(),
+            meta.clone(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let err = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect_err("first publish should surface publication conflict");
+        assert!(matches!(err, Error::PublicationConflict));
+        assert_eq!(
+            svc.indexed_finalized_head()
+                .await
+                .expect("head after conflict"),
+            1
+        );
+
+        svc.ingest_finalized_block(mk_block(2, [1; 32], vec![mk_log(1, 10, 21, 2, 0, 0)]))
+            .await
+            .expect("service should reacquire after publication conflict");
+        assert_eq!(
+            svc.indexed_finalized_head()
+                .await
+                .expect("head after retry"),
+            2
+        );
     });
 }

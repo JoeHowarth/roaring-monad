@@ -107,12 +107,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let worker = GcWorker::new(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            &self.config,
-        );
-        let stats = match worker.run_once().await {
+        let stats = match self.run_gc_once_with_writer().await {
             Ok(value) => value,
             Err(error) => {
                 if let Error::Backend(message) = &error {
@@ -222,11 +217,12 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
                 *writer = Some(next_token);
                 Ok(outcome)
             }
-            Err(Error::LeaseLost) => {
-                *writer = None;
-                Err(Error::LeaseLost)
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    *writer = None;
+                }
+                Err(error)
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -240,15 +236,31 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         }
 
         let token = (*writer).ok_or(Error::PublicationConflict)?;
-        let token = self
+        let result = self
             .ingest
             .authority
             .authorize(&token, (self.config.now_ms)())
-            .await?;
+            .await;
+        let token = match result {
+            Ok(token) => token,
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    *writer = None;
+                }
+                return Err(error);
+            }
+        };
         *writer = Some(token);
-        self.ingest
+        let result = self
+            .ingest
             .run_periodic_maintenance(self.ingest.authority.fence(&token))
-            .await
+            .await;
+        if let Err(error) = &result
+            && should_clear_writer(error)
+        {
+            *writer = None;
+        }
+        result
     }
 
     async fn prune_block_hash_index_below_with_writer(&self, min_block_num: u64) -> Result<u64>
@@ -261,11 +273,20 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         }
 
         let token = (*writer).ok_or(Error::PublicationConflict)?;
-        let token = self
+        let result = self
             .ingest
             .authority
             .authorize(&token, (self.config.now_ms)())
-            .await?;
+            .await;
+        let token = match result {
+            Ok(token) => token,
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    *writer = None;
+                }
+                return Err(error);
+            }
+        };
         *writer = Some(token);
 
         let worker = GcWorker::new(
@@ -273,9 +294,57 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             &self.ingest.blob_store,
             &self.config,
         );
-        worker
+        let result = worker
             .prune_block_hash_index_below(min_block_num, self.ingest.authority.fence(&token))
-            .await
+            .await;
+        if let Err(error) = &result
+            && should_clear_writer(error)
+        {
+            *writer = None;
+        }
+        result
+    }
+
+    async fn run_gc_once_with_writer(&self) -> Result<GcStats>
+    where
+        M: PublicationStore,
+    {
+        let mut writer = self.writer.lock().await;
+        if writer.is_none() {
+            let _ = self.startup_locked(&mut writer).await?;
+        }
+
+        let token = (*writer).ok_or(Error::PublicationConflict)?;
+        let result = self
+            .ingest
+            .authority
+            .authorize(&token, (self.config.now_ms)())
+            .await;
+        let token = match result {
+            Ok(token) => token,
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    *writer = None;
+                }
+                return Err(error);
+            }
+        };
+        *writer = Some(token);
+
+        let worker = GcWorker::new(
+            &self.ingest.meta_store,
+            &self.ingest.blob_store,
+            &self.config,
+        );
+        let result = worker
+            .run_once_with_fence(self.ingest.authority.fence(&token))
+            .await;
+        if let Err(error) = &result
+            && should_clear_writer(error)
+        {
+            *writer = None;
+        }
+        result
     }
 
     async fn recovery_plan_for_token(&self, token: WriteToken) -> Result<RecoveryPlan> {
@@ -288,6 +357,13 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             0,
         ))
     }
+}
+
+fn should_clear_writer(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::LeaseLost | Error::PublicationConflict | Error::ModeConflict(_)
+    )
 }
 
 impl<M, B> FinalizedHistoryService<LeaseAuthority<M>, M, B>

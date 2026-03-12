@@ -33,6 +33,10 @@ impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
     }
 
     pub async fn run_once(&self) -> Result<GcStats> {
+        self.run_once_with_fence(FenceToken(u64::MAX)).await
+    }
+
+    pub async fn run_once_with_fence(&self, stale_tail_fence: FenceToken) -> Result<GcStats> {
         let mut stats = GcStats::default();
 
         let mut referenced_chunks = BTreeSet::<Vec<u8>>::new();
@@ -77,7 +81,7 @@ impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
             let sid = stream_id_from_tail_key(tk);
             if !manifest_streams.contains(&sid) {
                 self.meta_store
-                    .delete(tk, DelCond::Any, FenceToken(u64::MAX))
+                    .delete(tk, DelCond::Any, stale_tail_fence)
                     .await?;
                 stats.deleted_stale_tails = stats.deleted_stale_tails.saturating_add(1);
             }
