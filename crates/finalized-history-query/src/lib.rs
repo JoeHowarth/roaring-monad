@@ -1,4 +1,5 @@
 pub mod api;
+pub mod cache;
 pub mod codec;
 pub mod config;
 pub mod core;

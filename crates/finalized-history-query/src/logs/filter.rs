@@ -40,22 +40,22 @@ impl LogFilter {
     }
 }
 
-pub fn exact_match(log: &crate::logs::types::Log, filter: &LogFilter) -> bool {
-    if !match_address(&log.address, &filter.address) {
+pub fn exact_match(log: &impl crate::codec::log_ref::LogView, filter: &LogFilter) -> bool {
+    if !match_address(log.address(), &filter.address) {
         return false;
     }
 
-    let topics = &log.topics;
-    if !match_topic(topics.first().copied(), &filter.topic0) {
+    let tc = log.topic_count();
+    if !match_topic(if tc > 0 { Some(*log.topic(0)) } else { None }, &filter.topic0) {
         return false;
     }
-    if !match_topic(topics.get(1).copied(), &filter.topic1) {
+    if !match_topic(if tc > 1 { Some(*log.topic(1)) } else { None }, &filter.topic1) {
         return false;
     }
-    if !match_topic(topics.get(2).copied(), &filter.topic2) {
+    if !match_topic(if tc > 2 { Some(*log.topic(2)) } else { None }, &filter.topic2) {
         return false;
     }
-    if !match_topic(topics.get(3).copied(), &filter.topic3) {
+    if !match_topic(if tc > 3 { Some(*log.topic(3)) } else { None }, &filter.topic3) {
         return false;
     }
     true
