@@ -21,8 +21,7 @@ use finalized_history_query::core::ids::{
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
     MAX_LOCAL_ID, PUBLICATION_STATE_KEY, block_log_header_key, block_logs_blob_key, block_meta_key,
-    chunk_blob_key, log_directory_bucket_key, log_directory_bucket_start, manifest_key, stream_id,
-    tail_key,
+    log_directory_bucket_key, log_directory_bucket_start, stream_id,
 };
 use finalized_history_query::domain::types::{
     Block, BlockMeta, Log, LogDirectoryBucket, PublicationState,
@@ -31,10 +30,6 @@ use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
-use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
-use finalized_history_query::streams::manifest::{
-    ChunkRef, Manifest, encode_manifest, encode_tail,
-};
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter, QueryPage, Result};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
@@ -306,68 +301,6 @@ pub fn shard_bitmap_set(shards: &[u64], bitmap: &RoaringBitmap) -> ShardBitmapSe
 
 pub fn low_shards(count: u64) -> Vec<u64> {
     (0..count).collect()
-}
-
-pub fn seed_stream_state(
-    meta_store: &InMemoryMetaStore,
-    blob_store: &InMemoryBlobStore,
-    stream: &str,
-    manifest_chunks: &[RoaringBitmap],
-    tail_entries: Option<&RoaringBitmap>,
-) {
-    block_on(async {
-        if !manifest_chunks.is_empty() {
-            let mut chunk_refs = Vec::with_capacity(manifest_chunks.len());
-            let mut total = 0u64;
-            for (chunk_seq, bitmap) in manifest_chunks.iter().enumerate() {
-                let min_local = bitmap.min().expect("chunk must be non-empty");
-                let max_local = bitmap.max().expect("chunk must be non-empty");
-                let count = u32::try_from(bitmap.len()).expect("chunk fits in u32");
-                blob_store
-                    .put_blob(
-                        &chunk_blob_key(stream, chunk_seq as u64),
-                        encode_chunk(&ChunkBlob {
-                            min_local,
-                            max_local,
-                            count,
-                            crc32: 0,
-                            bitmap: bitmap.clone(),
-                        })
-                        .expect("encode chunk"),
-                    )
-                    .await
-                    .expect("put chunk blob");
-                chunk_refs.push(ChunkRef {
-                    chunk_seq: chunk_seq as u64,
-                    min_local,
-                    max_local,
-                    count,
-                });
-                total = total.saturating_add(u64::from(count));
-            }
-            put_meta_record(
-                meta_store,
-                &manifest_key(stream),
-                encode_manifest(&Manifest {
-                    version: 1,
-                    last_chunk_seq: (manifest_chunks.len() - 1) as u64,
-                    chunk_refs,
-                    approx_count: total,
-                    last_seal_unix_sec: 0,
-                }),
-            )
-            .await;
-        }
-
-        if let Some(tail) = tail_entries {
-            put_meta_record(
-                meta_store,
-                &tail_key(stream),
-                encode_tail(tail).expect("encode tail"),
-            )
-            .await;
-        }
-    });
 }
 
 pub fn seed_materialized_blocks(

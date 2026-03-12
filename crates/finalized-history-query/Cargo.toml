@@ -40,10 +40,6 @@ name = "execution_bench"
 harness = false
 
 [[bench]]
-name = "query_clause_loading_bench"
-harness = false
-
-[[bench]]
 name = "materialize_bench"
 harness = false
 

@@ -123,20 +123,6 @@ pub fn local_range_for_shard(
     (local_from, local_to)
 }
 
-pub fn manifest_key(stream_id: &str) -> Vec<u8> {
-    format!("manifests/{stream_id}").into_bytes()
-}
-
-pub fn tail_key(stream_id: &str) -> Vec<u8> {
-    format!("tails/{stream_id}").into_bytes()
-}
-
-pub fn chunk_blob_key(stream_id: &str, chunk_seq: u64) -> Vec<u8> {
-    let mut k = format!("chunks/{stream_id}/").into_bytes();
-    k.extend_from_slice(&u64_be(chunk_seq));
-    k
-}
-
 pub fn stream_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
     let mut k = format!("stream_page_meta/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));

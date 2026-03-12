@@ -2,24 +2,15 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::core::ids::{LogId, LogShard};
-use finalized_history_query::domain::keys::{chunk_blob_key, stream_id, tail_key};
+use finalized_history_query::core::ids::LogId;
 use finalized_history_query::domain::types::{Block, Log};
 use finalized_history_query::gc::worker::GcWorker;
 use finalized_history_query::recovery::startup::startup_plan;
-use std::sync::Arc;
-
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{FenceStore, PublicationStore};
-use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
-};
-use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
-use finalized_history_query::streams::manifest::encode_tail;
+use finalized_history_query::store::traits::FenceToken;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
 use futures::executor::block_on;
-use roaring::RoaringBitmap;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -208,173 +199,21 @@ fn differential_query_matches_naive() {
 }
 
 #[test]
-fn recovery_and_gc_cleanup() {
+fn recovery_and_maintenance_smoke_checks() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-
-        // Create stale tail for stream with no manifest.
-        let stale_stream = stream_id("addr", &[0xabu8; 20], LogShard::new(0).unwrap());
-        let mut stale_tail = RoaringBitmap::new();
-        stale_tail.insert(7);
-        let _ = meta
-            .put(
-                &tail_key(&stale_stream),
-                encode_tail(&stale_tail).expect("tail encode"),
-                PutCond::Any,
-                FenceToken(0),
-            )
-            .await
-            .expect("put stale tail");
-
-        // Create orphan chunk not referenced by any manifest.
-        let mut bm = RoaringBitmap::new();
-        bm.insert(9);
-        let orphan = ChunkBlob {
-            min_local: 9,
-            max_local: 9,
-            count: 1,
-            crc32: 0,
-            bitmap: bm,
-        };
-        let orphan_key = chunk_blob_key("addr/deadbeef/00000000", 1);
-        blob.put_blob(&orphan_key, encode_chunk(&orphan).expect("chunk encode"))
-            .await
-            .expect("put orphan blob");
-
         let cfg = Config::default();
-        let worker = GcWorker::new(&meta, &blob, &cfg);
+        let worker = GcWorker::new(&meta, &cfg);
         let stats = worker
             .run_once_with_fence(FenceToken(0))
             .await
             .expect("gc run");
 
-        assert_eq!(stats.deleted_stale_tails, 1);
-        assert_eq!(stats.deleted_orphan_chunks, 1);
+        assert!(!stats.exceeded_guardrail);
 
         let rec = startup_plan(&meta, &blob, 0).await.expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
         assert_eq!(rec.log_state.next_log_id, LogId::new(0));
-    });
-}
-
-#[derive(Clone)]
-struct StrictGcFenceMetaStore {
-    inner: Arc<InMemoryMetaStore>,
-}
-
-impl MetaStore for StrictGcFenceMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
-        self.inner.get(key).await
-    }
-
-    async fn put(
-        &self,
-        key: &[u8],
-        value: bytes::Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<PutResult> {
-        self.inner.put(key, value, cond, fence).await
-    }
-
-    async fn delete(
-        &self,
-        key: &[u8],
-        cond: DelCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<()> {
-        if key.starts_with(b"tails/") && fence.0 != self.inner.current_fence().await? {
-            return Err(finalized_history_query::Error::Backend(format!(
-                "unexpected gc fence {}",
-                fence.0
-            )));
-        }
-        self.inner.delete(key, cond, fence).await
-    }
-
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-    ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
-    }
-}
-
-impl PublicationStore for StrictGcFenceMetaStore {
-    async fn load(
-        &self,
-    ) -> finalized_history_query::Result<
-        Option<finalized_history_query::domain::types::PublicationState>,
-    > {
-        self.inner.load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &finalized_history_query::domain::types::PublicationState,
-    ) -> finalized_history_query::Result<
-        finalized_history_query::store::publication::CasOutcome<
-            finalized_history_query::domain::types::PublicationState,
-        >,
-    > {
-        self.inner.create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &finalized_history_query::domain::types::PublicationState,
-        next: &finalized_history_query::domain::types::PublicationState,
-    ) -> finalized_history_query::Result<
-        finalized_history_query::store::publication::CasOutcome<
-            finalized_history_query::domain::types::PublicationState,
-        >,
-    > {
-        self.inner.compare_and_set(expected, next).await
-    }
-}
-
-impl FenceStore for StrictGcFenceMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
-        self.inner.current_fence().await
-    }
-}
-
-#[test]
-fn service_gc_uses_authority_fence_for_tail_deletes() {
-    block_on(async {
-        let inner = Arc::new(InMemoryMetaStore::with_min_epoch(5));
-        let meta = StrictGcFenceMetaStore {
-            inner: inner.clone(),
-        };
-        let blob = InMemoryBlobStore::default();
-        let stale_stream = stream_id("addr", &[0xabu8; 20], LogShard::new(0).unwrap());
-        let mut stale_tail = RoaringBitmap::new();
-        stale_tail.insert(7);
-        inner
-            .put(
-                &tail_key(&stale_stream),
-                encode_tail(&stale_tail).expect("tail encode"),
-                PutCond::Any,
-                FenceToken(5),
-            )
-            .await
-            .expect("put stale tail");
-
-        let svc = finalized_history_query::api::FinalizedHistoryService::new_single_writer(
-            Config::default(),
-            meta,
-            blob,
-        );
-
-        let stats = svc.run_gc_once().await.expect("gc run");
-
-        assert_eq!(stats.deleted_stale_tails, 1);
     });
 }

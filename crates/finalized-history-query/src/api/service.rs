@@ -289,11 +289,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         };
         *writer = Some(token);
 
-        let worker = GcWorker::new(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            &self.config,
-        );
+        let worker = GcWorker::new(&self.ingest.meta_store, &self.config);
         let result = worker
             .prune_block_hash_index_below(min_block_num, self.ingest.authority.fence(&token))
             .await;
@@ -331,11 +327,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         };
         *writer = Some(token);
 
-        let worker = GcWorker::new(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            &self.config,
-        );
+        let worker = GcWorker::new(&self.ingest.meta_store, &self.config);
         let result = worker
             .run_once_with_fence(self.ingest.authority.fence(&token))
             .await;

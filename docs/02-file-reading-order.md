@@ -127,7 +127,7 @@ Look for:
 34. `crates/finalized-history-query/tests/crash_injection_matrix.rs`
     Read this for crash-retry behavior around authoritative artifact publication and publication-state CAS.
 35. `crates/finalized-history-query/tests/differential_and_gc.rs`
-    Read this for the naive differential query check plus the basic recovery and legacy-GC cleanup behaviors.
+    Read this for the naive differential query check plus the basic recovery and maintenance smoke checks.
 
 Focus on:
 
