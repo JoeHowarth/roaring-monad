@@ -7,7 +7,7 @@ fencing, recovery) out of the ingest engine into a `WriteAuthority` trait with t
 implementations:
 
 - `LeaseAuthority` — the current publication-state CAS protocol with all its complexity
-- `SingleWriterAuthority` — a trivial always-ok implementation for single-writer deployments
+- `SingleWriterAuthority` — a minimal fail-closed implementation for single-writer deployments
 
 The ingest engine becomes generic over `WriteAuthority` and loses all direct knowledge
 of `PublicationState`, `PublicationLease`, sessions, epochs, lease expiry, and renewal.
@@ -73,6 +73,7 @@ The ingest engine currently depends on the lease protocol in these specific plac
 6. **`writer_id` for GC**: `run_periodic_maintenance(self.writer_id)` and
    `prune_block_hash_index_below(min_block_num, self.writer_id)` — these pass
    `writer_id` as a fence epoch, which is not the same concept as ownership identity
+   and should move behind the write-authority boundary as part of this extraction
 7. **Backend error tracking**: `startup()` wraps `startup_with_writer` with
    `on_backend_error` / `on_backend_success` bookkeeping that must be preserved
 
@@ -212,11 +213,16 @@ Implementation sketch:
 - `acquire`: reads current `publication_state` via `PublicationStore::load()`. If a
   prior `LeaseAuthority` left a fence at epoch N, this authority must use
   `epoch = max(N, 1)` and call `advance_fence(epoch)` to avoid being rejected by
-  backend fence checks. Writes a `PublicationState` with `PutCond::Any`, dummy
-  `session_id`, and `lease_expires_at_ms = u64::MAX`. The `u64::MAX` expiry means
-  a later `LeaseAuthority` startup will see `LeaseStillFresh` and refuse to take
-  over — switching from single-writer to multi-writer mode is an explicit
-  operational change that requires clearing or overriding the publication state.
+  backend fence checks. Then:
+  - if state is absent, initialize a reserved single-writer sentinel row
+  - if state already matches that sentinel row, resume
+  - otherwise, return `ModeConflict` and do not mutate anything
+  The sentinel should be an unmistakable reserved shape, for example:
+  - `owner_id = 0`
+  - `session_id = SINGLE_WRITER_SESSION_ID`
+  - `lease_expires_at_ms = u64::MAX`
+  This makes single-writer mode safe for fresh staging deployments without allowing
+  it to bulldoze an existing lease-owned deployment.
 - `authorize`: always returns the token unchanged (no renewal needed)
 - `publish`: writes head to publication_state using `PutCond::Any`. To prevent
   silent head regression on operator error (two processes), uses a conditional
@@ -271,22 +277,27 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     query: LogsQueryEngine,
     config: Config,
     state: Arc<RuntimeState>,
-    token: Arc<futures::lock::Mutex<Option<WriteToken>>>,
+    writer: Arc<tokio::sync::Mutex<Option<WriteToken>>>,
 }
 ```
 
-The service no longer knows about `session_id` or `PublicationLease`.
-Those concepts live inside `LeaseAuthority`.
+The service no longer knows about `session_id` or `PublicationLease`. Those concepts
+live inside `LeaseAuthority`.
 
-`writer_id` must be retained on the service because `prune_block_hash_index_below`
-and `run_periodic_maintenance` pass it as a fence epoch for GC operations. This is a
-pre-existing naming confusion (`writer_id` used as fence epoch). For now, keep it as a
-field; a follow-up can clean up the GC fence story separately.
+The writer mutex is intentional. It serializes:
+
+- `startup()`
+- ingest
+- write-side maintenance / GC that needs a fence token
+
+This enforces the single-caller assumption required by `LeaseAuthority` and keeps
+the cached `WriteToken` coherent with the authority's internal state.
 
 Startup becomes:
 
 ```rust
 pub async fn startup(&self) -> Result<RecoveryPlan> {
+    let mut writer = self.writer.lock().await;
     let token = self.ingest.authority.acquire(now_ms).await?;
     let fence = self.ingest.authority.fence(&token);
     // Recovery ordering is critical:
@@ -296,7 +307,7 @@ pub async fn startup(&self) -> Result<RecoveryPlan> {
     cleanup_unpublished_suffix(&meta_store, &blob_store, token.indexed_finalized_head, fence).await?;
     let next_log_id = derive_next_log_id(&meta_store, token.indexed_finalized_head).await?;
     repair_open_stream_page_markers(&meta_store, &blob_store, next_log_id, fence).await?;
-    *self.token.lock().await = Some(token);
+    *writer = Some(token);
     // ... build recovery plan from token.indexed_finalized_head ...
 }
 ```
@@ -398,7 +409,8 @@ This avoids a reader-side branch.
 ### Phase 3: Implement `SingleWriterAuthority`
 
 1. Create `ingest/authority/single_writer.rs`.
-2. Implement with fixed epoch, no CAS, `PutCond::Any` head writes.
+2. Implement with fixed epoch, reserved single-writer sentinel state, and fail-closed
+   `ModeConflict` behavior when an existing lease-owned row is present.
 3. Write tests proving single-writer ingest works end-to-end without any publication
    state ceremony.
 
@@ -420,13 +432,17 @@ This avoids a reader-side branch.
 ### Phase 5: Update `FinalizedHistoryService`
 
 1. Add `A: WriteAuthority` type parameter.
-2. Replace `startup_state: Option<PublicationLease>` with `Option<WriteToken>`.
-3. Remove `session_id` field. Keep `writer_id` for GC methods.
-4. Update `startup()` to use `authority.acquire` + recovery helpers directly,
+2. Replace `startup_state: Option<PublicationLease>` with a service-owned
+   `tokio::sync::Mutex<Option<WriteToken>>` that is held across startup, ingest,
+   and write-side maintenance operations.
+3. Remove `session_id` field.
+4. Route write-side maintenance / GC through the same writer mutex so they use
+   `authority.authorize(...)` plus `authority.fence(&token)` instead of `writer_id`.
+5. Update `startup()` to use `authority.acquire` + recovery helpers directly,
    preserving the critical ordering (cleanup → derive_next_log_id → repair markers)
    and the backend error tracking wrapper.
-5. Update `ingest_blocks_with_startup` to thread `WriteToken`.
-6. Add `new_with_lease` convenience constructor to contain callsite blast radius.
+6. Update `ingest_blocks_with_startup` to thread `WriteToken`.
+7. Add `new_with_lease` convenience constructor to contain callsite blast radius.
 
 ### Phase 6: Cleanup
 
@@ -458,7 +474,8 @@ New tests:
 #### Authority-level tests (in `authority/single_writer.rs`)
 
 - `acquire` returns head 0 on empty store
-- `acquire` returns current head on non-empty store
+- `acquire` returns current head on single-writer-owned state
+- `acquire` returns `ModeConflict` on lease-owned state
 - `acquire` after prior `LeaseAuthority` run picks up the higher fence epoch
 - `publish` advances head and rejects regression (`new_head <= current_head`)
 - `fence` returns the acquired epoch
@@ -487,6 +504,15 @@ If a previous `LeaseAuthority` run advanced the backend fence to epoch N,
 `LeaseLost`. Fix: `SingleWriterAuthority::acquire` must read the current fence
 state, set its epoch to `max(current_fence_epoch, 1)`, and call `advance_fence`.
 This is addressed in the `SingleWriterAuthority` implementation sketch above.
+
+### Risk: `SingleWriterAuthority` accidentally overwrites lease-owned state
+
+That would turn a staging-only convenience mode into a destructive operational footgun.
+
+Mitigation: `SingleWriterAuthority::acquire` must fail closed unless the
+`publication_state` row is either absent or already matches the reserved
+single-writer sentinel shape. Any lease-owned or otherwise foreign row returns
+`ModeConflict` with no mutation.
 
 ### Risk: `SingleWriterAuthority` publish is not atomic with readers
 
@@ -523,10 +549,12 @@ between calls. If two tasks call `authorize` concurrently on the same
 `LeaseAuthority`, the internal `lease_expires_at_ms` can diverge from what the
 store contains, causing spurious CAS failures in `publish`.
 
-Mitigation: `LeaseAuthority` must not be cloned. The service holds a single instance
-and calls `authorize`/`publish` sequentially from one task at a time. This matches
-the current single-ingest-at-a-time model. The trait docs should note that concurrent
-`authorize`/`publish` calls on a single authority instance are not supported.
+Mitigation: the service owns one async mutex guarding the cached `WriteToken` and
+holds that mutex across startup, ingest, and write-side maintenance, so all calls
+into one `LeaseAuthority` instance are serialized. `LeaseAuthority` must not be
+cloned. The trait docs should still note that concurrent `authorize`/`publish`
+calls on a single authority instance are not supported, but the primary
+enforcement lives in the service structure rather than in convention.
 
 ### Note: `publication_epoch` is informational only
 
