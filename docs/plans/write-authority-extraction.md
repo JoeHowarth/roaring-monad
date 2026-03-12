@@ -53,12 +53,15 @@ The ingest engine currently depends on the lease protocol in these specific plac
 
 1. **Import**: `PublicationLease`, `renew_publication_if_needed`
 2. **Type bound**: `M: MetaStore + PublicationStore`
-3. **Method signature**: `ingest_finalized_blocks(..., lease: PublicationLease)`
+3. **Method signatures**: both `ingest_finalized_block` (singular) and
+   `ingest_finalized_blocks` take `lease: PublicationLease`
 4. **Renewal bookends**: calls `renew_publication_if_needed` at lines 50-57 and 141-148
 5. **Fence derivation**: `lease.fence_token()` at line 65
 6. **Epoch threading**: `lease.epoch` passed to every artifact-write helper
 7. **Publish CAS**: direct `compare_and_set` on `PublicationState` at lines 165-185
 8. **Lease loss detection**: pattern-matches on `owner_id`/`session_id`/`epoch` at 174-179
+9. **`validate_block_sequence`**: free function at line 201 takes `PublicationLease`,
+   reads `lease.indexed_finalized_head` for expected block number and parent hash
 
 ### `api/service.rs`
 
@@ -67,10 +70,25 @@ The ingest engine currently depends on the lease protocol in these specific plac
 3. **Lease caching**: `startup_state: Arc<Mutex<Option<PublicationLease>>>`
 4. **Lease threading**: passes cached lease into `ingest.ingest_finalized_blocks`
 5. **Lease update**: updates cached lease from ingest result
+6. **`writer_id` for GC**: `run_periodic_maintenance(self.writer_id)` and
+   `prune_block_hash_index_below(min_block_num, self.writer_id)` — these pass
+   `writer_id` as a fence epoch, which is not the same concept as ownership identity
+7. **Backend error tracking**: `startup()` wraps `startup_with_writer` with
+   `on_backend_error` / `on_backend_success` bookkeeping that must be preserved
+
+### `streams/writer.rs`
+
+1. **`apply_appends`** takes `epoch: u64` and passes it to `TailManager::store` as
+   `FenceToken(epoch)` and to `store_manifest` as `FenceToken(epoch)`
+2. **`IngestMode`**: `StreamWriter` reads `config.ingest_mode` to choose between
+   `PutCond::IfVersion` (StrictCas) and `PutCond::Any` (SingleWriterFast) for
+   manifest writes — this is independent of the write authority protocol
 
 ### `recovery/startup.rs`
 
-1. `startup_with_writer`: acquires publication, runs cleanup, repairs markers
+1. `startup_with_writer`: acquires publication, runs cleanup, repairs markers.
+   Recovery ordering is critical: `cleanup_unpublished_suffix` must run before
+   `derive_next_log_id`, which must run before `repair_open_stream_page_markers`.
 2. `startup_plan`: read-only, loads head state
 
 ### `ingest/recovery.rs` and `ingest/open_pages.rs`
@@ -78,13 +96,23 @@ The ingest engine currently depends on the lease protocol in these specific plac
 These take `FenceToken` directly and do not depend on publication or lease types.
 They are already cleanly separated.
 
+### Tests, benchmarks, examples (~25 callsites)
+
+`FinalizedHistoryService::new` is called in `tests/finalized_index.rs` (13+),
+`tests/crash_injection_matrix.rs`, `tests/differential_and_gc.rs`,
+`tests/distributed_failure_chaos.rs`, `tests/distributed_stores_integration.rs`,
+`examples/perf_stress.rs` (4), `benches/common.rs` (2), and
+`crates/benchmarking/src/main.rs` (2). All must be updated for the new type parameter.
+
 ## Proposed Design
 
 ### New trait: `WriteAuthority`
 
 ```rust
-/// Opaque write-permission token returned by the authority.
-/// The engine treats this as a black box and threads it through calls.
+/// Write-permission token returned by the authority.
+///
+/// The engine reads `epoch` and `indexed_finalized_head` directly.
+/// The canonical way to get a fence value is `authority.fence(&token)`.
 #[derive(Debug, Clone, Copy)]
 pub struct WriteToken {
     pub epoch: u64,
@@ -95,12 +123,24 @@ pub struct WriteToken {
 ///
 /// The engine calls `authorize` before writing, `publish` after writing,
 /// and `fence` to get the token for artifact-write fencing.
+///
+/// # Invariants
+///
+/// - `authorize` MUST NOT change the epoch. It may only extend liveness
+///   (e.g., lease renewal). Changing the epoch mid-ingest would invalidate
+///   artifacts already written under the old fence.
+/// - `authorize` is safe to call multiple times within a single ingest.
+///   Implementations must treat redundant calls as idempotent no-ops when
+///   no renewal is needed.
+/// - `publish` may only be called with the token most recently returned
+///   by `authorize`. Passing a stale token is a caller bug.
 #[allow(async_fn_in_trait)]
 pub trait WriteAuthority: Send + Sync {
     /// Validate that this process may still write, and renew permission
     /// if needed. Called at the start of ingest and after compaction.
     ///
     /// Returns the current write token, or an error if permission was lost.
+    /// The returned token MUST have the same `epoch` as `current`.
     async fn authorize(&self, current: &WriteToken, now_ms: u64) -> Result<WriteToken>;
 
     /// Commit a head advance from `current.indexed_finalized_head` to `new_head`.
@@ -117,17 +157,9 @@ pub trait WriteAuthority: Send + Sync {
 
     /// Acquire initial write permission. Called during startup.
     /// For lease-based authorities this acquires the publication lease.
-    /// For single-writer authorities this is a no-op that reads current head.
+    /// For single-writer authorities this reads current head and
+    /// ensures the fence store is compatible with the chosen epoch.
     async fn acquire(&self, now_ms: u64) -> Result<WriteToken>;
-
-    /// Run startup recovery (cleanup unpublished suffix, repair markers)
-    /// under the authority of the given token.
-    async fn recover<M: MetaStore, B: BlobStore>(
-        &self,
-        token: &WriteToken,
-        meta_store: &M,
-        blob_store: &B,
-    ) -> Result<()>;
 }
 ```
 
@@ -169,22 +201,30 @@ of `LeaseAuthority`, not public API of the crate.
 Trivial implementation for single-writer deployments.
 
 ```rust
-pub struct SingleWriterAuthority<M> {
-    meta_store: M,  // M: MetaStore
-    epoch: u64,     // fixed at construction, typically 1
+pub struct SingleWriterAuthority<P> {
+    publication_store: P,   // P: PublicationStore + FenceStore
+    epoch: u64,             // determined at acquire time
 }
 ```
 
 Implementation sketch:
 
-- `acquire`: reads current head from store (or starts at 0), returns token with
-  fixed epoch
+- `acquire`: reads current `publication_state` via `PublicationStore::load()`. If a
+  prior `LeaseAuthority` left a fence at epoch N, this authority must use
+  `epoch = max(N, 1)` and call `advance_fence(epoch)` to avoid being rejected by
+  backend fence checks. Writes a `PublicationState` with `PutCond::Any`, dummy
+  `session_id`, and `lease_expires_at_ms = u64::MAX`.
 - `authorize`: always returns the token unchanged (no renewal needed)
-- `publish`: unconditionally writes head to store (no CAS), returns updated token.
-  The head record uses a simple key like `single_writer_head` with `PutCond::Any`.
+- `publish`: writes head to publication_state using `PutCond::Any`. To prevent
+  silent head regression on operator error (two processes), uses a conditional
+  write: read current head, reject if `new_head <= current_head`. This is not full
+  CAS — it is a local monotonicity check, not distributed mutual exclusion.
 - `fence`: returns `FenceToken(self.epoch)`
-- `recover`: runs the same `cleanup_unpublished_suffix` and
-  `repair_open_stream_page_markers` with the fixed fence token
+
+**Important constraint**: `SingleWriterAuthority` is only safe under exclusive access.
+Two concurrent processes using it will corrupt state. The type name and documentation
+must make this explicit. The monotonicity check in `publish` turns silent corruption
+into a loud error, but does not prevent all races.
 
 ### Refactored `IngestEngine`
 
@@ -232,17 +272,46 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
 }
 ```
 
-The service no longer knows about `writer_id`, `session_id`, or `PublicationLease`.
+The service no longer knows about `session_id` or `PublicationLease`.
 Those concepts live inside `LeaseAuthority`.
+
+`writer_id` must be retained on the service because `prune_block_hash_index_below`
+and `run_periodic_maintenance` pass it as a fence epoch for GC operations. This is a
+pre-existing naming confusion (`writer_id` used as fence epoch). For now, keep it as a
+field; a follow-up can clean up the GC fence story separately.
 
 Startup becomes:
 
 ```rust
 pub async fn startup(&self) -> Result<RecoveryPlan> {
     let token = self.ingest.authority.acquire(now_ms).await?;
-    self.ingest.authority.recover(&token, &self.ingest.meta_store, &self.ingest.blob_store).await?;
+    let fence = self.ingest.authority.fence(&token);
+    // Recovery ordering is critical:
+    // 1. cleanup_unpublished_suffix (removes stale block_meta)
+    // 2. derive_next_log_id (reads block_meta for published head)
+    // 3. repair_open_stream_page_markers (needs correct next_log_id)
+    cleanup_unpublished_suffix(&meta_store, &blob_store, token.indexed_finalized_head, fence).await?;
+    let next_log_id = derive_next_log_id(&meta_store, token.indexed_finalized_head).await?;
+    repair_open_stream_page_markers(&meta_store, &blob_store, next_log_id, fence).await?;
     *self.token.lock().await = Some(token);
     // ... build recovery plan from token.indexed_finalized_head ...
+}
+```
+
+The backend error tracking (`on_backend_error` / `on_backend_success`) wrapping the
+startup call must be preserved from the current implementation.
+
+To contain the generic parameter blast radius across ~25 callsites in tests,
+benchmarks, and examples, add a convenience constructor:
+
+```rust
+impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore>
+    FinalizedHistoryService<LeaseAuthority<M>, M, B>
+{
+    /// Convenience constructor matching the old API shape.
+    pub fn new_with_lease(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
+        // ...
+    }
 }
 ```
 
@@ -279,11 +348,12 @@ in the main path.
 | `WriteToken` (new) | `ingest/authority.rs` | Public, used by engine |
 | `WriteAuthority` trait (new) | `ingest/authority.rs` | Public |
 | `SingleWriterAuthority` (new) | `ingest/authority/single_writer.rs` | Public |
-| `lease/manager.rs` | deleted | Vestigial |
+| `lease/manager.rs` | deleted | Vestigial; confirmed no callers outside its own tests |
 | `store/publication.rs` | stays | Still needed by `LeaseAuthority` |
 | `domain/types.rs::PublicationState` | stays | Still needed by store impls and `LeaseAuthority` |
-| `recovery/startup.rs::startup_with_writer` | `ingest/authority/lease.rs` | Part of `LeaseAuthority::acquire` + `recover` |
+| `recovery/startup.rs::startup_with_writer` | deleted | Logic split: acquisition into `LeaseAuthority::acquire`, recovery into startup callsite using `fence` + helpers directly |
 | `recovery/startup.rs::startup_plan` | `recovery/startup.rs` | Stays as read-only helper for RO nodes |
+| `validate_block_sequence` | `ingest/engine.rs` | Stays, but signature changes from `PublicationLease` to `&WriteToken` (only reads `indexed_finalized_head`) |
 
 ## Impact On Readers
 
@@ -336,23 +406,31 @@ This avoids a reader-side branch.
 6. Replace `lease.epoch` threading with `authority.fence(&token).0` where an epoch
    value is needed for artifact writes.
 7. Remove `PublicationStore` from the `M` type bound on `IngestEngine`.
+8. Update `validate_block_sequence` to take `&WriteToken` instead of `PublicationLease`.
+9. Update both `ingest_finalized_block` (singular) and `ingest_finalized_blocks`.
+10. Add a debug assertion that `authorize` does not change the epoch:
+    `debug_assert_eq!(token.epoch, new_token.epoch)`.
 
 ### Phase 5: Update `FinalizedHistoryService`
 
 1. Add `A: WriteAuthority` type parameter.
 2. Replace `startup_state: Option<PublicationLease>` with `Option<WriteToken>`.
-3. Remove `writer_id` and `session_id` fields (owned by `LeaseAuthority`).
-4. Update `startup()` to use `authority.acquire` + `authority.recover`.
+3. Remove `session_id` field. Keep `writer_id` for GC methods.
+4. Update `startup()` to use `authority.acquire` + recovery helpers directly,
+   preserving the critical ordering (cleanup → derive_next_log_id → repair markers)
+   and the backend error tracking wrapper.
 5. Update `ingest_blocks_with_startup` to thread `WriteToken`.
+6. Add `new_with_lease` convenience constructor to contain callsite blast radius.
 
 ### Phase 6: Cleanup
 
 1. Delete `ingest/publication.rs` (contents moved to `authority/lease.rs`).
-2. Delete `lease/manager.rs` and the `lease/` module.
-3. Remove `IngestMode` from `Config` (the choice is now made at construction time
-   by choosing which `WriteAuthority` implementation to use).
+2. Delete `lease/manager.rs` and the `lease/` module (confirmed no external callers).
+3. Keep `IngestMode` in `Config` — it is used by `streams/writer.rs` for manifest
+   write conditions, which is independent of the write authority protocol.
 4. Update `recovery/startup.rs`: keep only `startup_plan` (read-only) and
    `build_recovery_plan` helper.
+5. Update all ~25 test/bench/example callsites to use `new_with_lease`.
 
 ### Phase 7: Tests
 
@@ -375,8 +453,9 @@ New tests:
 
 - `acquire` returns head 0 on empty store
 - `acquire` returns current head on non-empty store
-- `publish` advances head unconditionally
-- `fence` returns fixed epoch
+- `acquire` after prior `LeaseAuthority` run picks up the higher fence epoch
+- `publish` advances head and rejects regression (`new_head <= current_head`)
+- `fence` returns the acquired epoch
 - readers can load the head written by `SingleWriterAuthority`
 
 #### Engine-level tests
@@ -395,45 +474,49 @@ engine needs more authority-specific state in the future, that should be handled
 the authority internally (via its own mutex or internal state), not by expanding
 `WriteToken`.
 
+### Risk: `SingleWriterAuthority` blocked by prior lease epoch in fence store
+
+If a previous `LeaseAuthority` run advanced the backend fence to epoch N,
+`SingleWriterAuthority` with epoch=1 would have every fenced write rejected with
+`LeaseLost`. Fix: `SingleWriterAuthority::acquire` must read the current fence
+state, set its epoch to `max(current_fence_epoch, 1)`, and call `advance_fence`.
+This is addressed in the `SingleWriterAuthority` implementation sketch above.
+
 ### Risk: `SingleWriterAuthority` publish is not atomic with readers
 
-Because it uses `PutCond::Any` instead of CAS, two processes using
-`SingleWriterAuthority` concurrently would corrupt state. This is by design — the
-single-writer variant assumes exclusive access. The type name and documentation should
-make this clear.
+Two processes using `SingleWriterAuthority` concurrently will corrupt state.
+The monotonicity check in `publish` (reject if `new_head <= current_head`) turns
+silent head regression into a loud error, but does not prevent all races.
+This is by design. The type name and documentation must make exclusive access explicit.
 
-### Risk: `recover` method on the trait is awkward
+### Risk: `LeaseAuthority` internal state and external `WriteToken` diverge
 
-Recovery needs `MetaStore` + `BlobStore` references, which the authority may not own.
-The proposed signature passes them in. An alternative is to have recovery live outside
-the trait entirely (the engine calls `cleanup_unpublished_suffix` directly with the
-fence from `authority.fence`). This is a reasonable simplification if the trait surface
-feels too broad.
+`LeaseAuthority` stores full lease state internally (including `lease_expires_at_ms`)
+while the engine passes `WriteToken` externally. The `publish` method must reconstruct
+the full `PublicationState` from internal state for the CAS. If `authorize` updated
+`lease_expires_at_ms` internally but the engine passed a `WriteToken` derived from
+before that update, the CAS would compare against the old state.
 
-**Recommendation**: start with recovery outside the trait. Both `cleanup_unpublished_suffix`
-and `repair_open_stream_page_markers` already take `FenceToken` directly. The startup
-path can call `authority.acquire()` to get the token, then call recovery helpers directly
-with `authority.fence(&token)`. This keeps the trait surface minimal:
+Mitigation: `LeaseAuthority::publish` must always load its internal lease state fresh
+under the mutex, validate that the token's `epoch` and `head` match, and use the
+internal `lease_expires_at_ms` for the CAS. The `WriteToken` is validated, not used
+as the source of truth for CAS construction.
 
-```rust
-pub trait WriteAuthority: Send + Sync {
-    async fn acquire(&self, now_ms: u64) -> Result<WriteToken>;
-    async fn authorize(&self, current: &WriteToken, now_ms: u64) -> Result<WriteToken>;
-    async fn publish(&self, current: &WriteToken, new_head: u64) -> Result<WriteToken>;
-    fn fence(&self, token: &WriteToken) -> FenceToken;
-}
-```
+### Risk: `authorize` epoch mutation breaks in-flight artifacts
 
-Recovery stays as a direct call in startup:
+The trait contract now explicitly forbids `authorize` from changing the epoch. The
+engine adds a `debug_assert_eq!(token.epoch, new_token.epoch)` after every authorize
+call. If a future `LeaseAuthority` enhancement needs to bump epoch mid-ingest, it
+must return `LeaseLost` instead and force a retry from the top.
 
-```rust
-let token = authority.acquire(now_ms).await?;
-let fence = authority.fence(&token);
-cleanup_unpublished_suffix(meta_store, blob_store, token.indexed_finalized_head, fence).await?;
-repair_open_stream_page_markers(meta_store, blob_store, next_log_id, fence).await?;
-```
+### Decision: Recovery outside the trait
 
-This is simpler and avoids threading store references through the trait.
+Recovery is kept outside `WriteAuthority`. Both `cleanup_unpublished_suffix` and
+`repair_open_stream_page_markers` already take `FenceToken` directly. The startup
+path calls `authority.acquire()` then recovery helpers with `authority.fence(&token)`.
+
+This keeps the trait surface minimal (4 methods) and avoids threading `MetaStore` +
+`BlobStore` references through the trait.
 
 ## Relationship To Open Protocol Gaps
 
