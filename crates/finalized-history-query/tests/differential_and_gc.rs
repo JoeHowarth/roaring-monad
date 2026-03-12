@@ -244,7 +244,10 @@ fn recovery_and_gc_cleanup() {
 
         let cfg = Config::default();
         let worker = GcWorker::new(&meta, &blob, &cfg);
-        let stats = worker.run_once().await.expect("gc run");
+        let stats = worker
+            .run_once_with_fence(FenceToken(0))
+            .await
+            .expect("gc run");
 
         assert_eq!(stats.deleted_stale_tails, 1);
         assert_eq!(stats.deleted_orphan_chunks, 1);

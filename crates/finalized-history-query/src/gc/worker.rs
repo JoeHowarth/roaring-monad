@@ -32,10 +32,6 @@ impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
         }
     }
 
-    pub async fn run_once(&self) -> Result<GcStats> {
-        self.run_once_with_fence(FenceToken(u64::MAX)).await
-    }
-
     pub async fn run_once_with_fence(&self, stale_tail_fence: FenceToken) -> Result<GcStats> {
         let mut stats = GcStats::default();
 
