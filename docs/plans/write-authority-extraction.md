@@ -186,11 +186,11 @@ Implementation sketch:
   returns `WriteToken { epoch, indexed_finalized_head }`
 - `authorize`: calls `renew_publication_if_needed` if needed, validates
   owner/session/epoch match, returns updated token
-- `publish`: builds expected + next `PublicationState`, calls `compare_and_set`,
-  handles `LeaseLost` / `PublicationConflict`
+- `publish`: loads internal lease state under mutex, validates token's `epoch` and
+  `head` match, builds expected + next `PublicationState` using internal
+  `lease_expires_at_ms`, calls `compare_and_set`, handles `LeaseLost` /
+  `PublicationConflict`
 - `fence`: returns `FenceToken(token.epoch)`
-- `recover`: calls `cleanup_unpublished_suffix` and `repair_open_stream_page_markers`
-  under `FenceToken(token.epoch)`
 
 The existing functions in `ingest/publication.rs` (`acquire_publication_with_session`,
 `renew_publication_if_needed`, `bootstrap_publication_state`) become internal helpers
@@ -213,7 +213,10 @@ Implementation sketch:
   prior `LeaseAuthority` left a fence at epoch N, this authority must use
   `epoch = max(N, 1)` and call `advance_fence(epoch)` to avoid being rejected by
   backend fence checks. Writes a `PublicationState` with `PutCond::Any`, dummy
-  `session_id`, and `lease_expires_at_ms = u64::MAX`.
+  `session_id`, and `lease_expires_at_ms = u64::MAX`. The `u64::MAX` expiry means
+  a later `LeaseAuthority` startup will see `LeaseStillFresh` and refuse to take
+  over — switching from single-writer to multi-writer mode is an explicit
+  operational change that requires clearing or overriding the publication state.
 - `authorize`: always returns the token unchanged (no renewal needed)
 - `publish`: writes head to publication_state using `PutCond::Any`. To prevent
   silent head regression on operator error (two processes), uses a conditional
@@ -332,8 +335,10 @@ ingest/
 ```
 
 The `store/publication.rs` traits (`PublicationStore`, `FenceStore`) remain in `store/`
-because they describe storage capabilities. `LeaseAuthority` imports them;
-`SingleWriterAuthority` does not.
+because they describe storage capabilities. Both `LeaseAuthority` and
+`SingleWriterAuthority` depend on them — `SingleWriterAuthority` uses
+`PublicationStore` to write a reader-compatible `publication_state` record and
+`FenceStore` to advance the fence on acquire.
 
 The `lease/` module (`LeaseManager`) can be deleted — it is vestigial. The in-memory
 atomic epoch tracking was the predecessor to `PublicationLease` and is no longer used
@@ -386,8 +391,9 @@ This avoids a reader-side branch.
 3. Keep `bootstrap_publication_state` and `acquire_publication_with_session` as
    private helpers inside the module.
 4. Move lease-related tests from `ingest/publication.rs` into `authority/lease.rs`.
-5. Move the ownership-acquisition and recovery logic from `recovery/startup.rs::
-   startup_with_writer` into `LeaseAuthority::acquire` and `LeaseAuthority::recover`.
+5. Move the ownership-acquisition logic from `recovery/startup.rs::startup_with_writer`
+   into `LeaseAuthority::acquire`. Recovery stays outside the trait — the startup
+   callsite calls recovery helpers directly with `authority.fence(&token)`.
 
 ### Phase 3: Implement `SingleWriterAuthority`
 
@@ -508,6 +514,31 @@ The trait contract now explicitly forbids `authorize` from changing the epoch. T
 engine adds a `debug_assert_eq!(token.epoch, new_token.epoch)` after every authorize
 call. If a future `LeaseAuthority` enhancement needs to bump epoch mid-ingest, it
 must return `LeaseLost` instead and force a retry from the top.
+
+### Risk: `LeaseAuthority` must be single-caller
+
+`LeaseAuthority` holds internal lease state in a `Mutex<Option<PublicationLease>>`.
+The `authorize` → `publish` sequence assumes the internal state does not change
+between calls. If two tasks call `authorize` concurrently on the same
+`LeaseAuthority`, the internal `lease_expires_at_ms` can diverge from what the
+store contains, causing spurious CAS failures in `publish`.
+
+Mitigation: `LeaseAuthority` must not be cloned. The service holds a single instance
+and calls `authorize`/`publish` sequentially from one task at a time. This matches
+the current single-ingest-at-a-time model. The trait docs should note that concurrent
+`authorize`/`publish` calls on a single authority instance are not supported.
+
+### Note: `publication_epoch` is informational only
+
+`FinalizedHeadState.publication_epoch` (populated from `WriteToken.epoch`) is used
+in `RecoveryPlan` and exposed to callers. Under `SingleWriterAuthority` this value
+is the epoch inherited from the prior fence state (or 1 on a fresh store) and does
+not increase across restarts.
+
+This is acceptable because `publication_epoch` is purely informational — no reader
+logic, cache invalidation, or consistency check depends on it being monotonically
+increasing. If that changes in the future, `SingleWriterAuthority` would need to
+persist and increment an epoch counter, which defeats some of the simplicity goal.
 
 ### Decision: Recovery outside the trait
 
