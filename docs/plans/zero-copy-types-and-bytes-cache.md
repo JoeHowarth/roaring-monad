@@ -8,12 +8,10 @@ Introduce a type-unaware bytes cache that stores raw `Bytes` values, enabling
 trivial cloning (Arc refcount bump), transparent compression, and a future path
 to arena-backed allocation.
 
-This plan is a refinement of the caching strategy described in
-`docs/plans/metadata-caching-architecture.md`. That document defines the cache
-engine shape, table partitioning, miss coordination, and family facades. This
-document focuses on the representation layer beneath it: what the cache stores,
-how types are constructed from cached bytes, and how compression fits between
-storage and cache.
+This plan supersedes the caching strategy described in
+`docs/plans/metadata-caching-architecture.md`. The cache is a simple get/put
+`BytesCache` with no miss deduplication in the first pass — concurrent misses
+may redundantly fetch, but caching is still strictly better than no cache.
 
 ## Goals
 
@@ -23,12 +21,14 @@ storage and cache.
   caller-supplied weights
 - enable transparent compression between the storage backend and the cache
   without affecting zero-copy access patterns
-- preserve the existing wire format — no migration required
+- preserve the metadata wire format (block headers, directory buckets) — no
+  migration required for metadata types
+- change the block_logs blob format to per-log compressed entries with an
+  index header, enabling accurate `read_range` without full-blob decompression
 - design for a future arena-backed allocator without requiring it now
 
 ## Non-Goals
 
-- changing the on-disk/wire encoding format
 - implementing arena allocation in this phase
 - implementing mutable tip caching (covered by the metadata caching plan)
 - changing query semantics, pagination, or API response types
@@ -65,7 +65,7 @@ slice of exactly those bytes.
 ```
 Store returns Bytes (Arc-backed)
     ↓
-decompress if needed (one allocation into new Bytes)
+decompress individual log record if needed (one allocation per record)
     ↓
 cache.put(key, Bytes)  — stores the decompressed buffer
     ↓
@@ -237,9 +237,10 @@ pub trait BytesCache: Send + Sync {
 per-table capacity budgets and metrics defined in the metadata caching plan.
 
 The initial implementation is a sharded `HashMap<(TableId, Vec<u8>), Bytes>`
-with LRU eviction per table. The in-flight miss coordination described in the
-metadata caching plan applies here unchanged — the cache engine deduplicates
-concurrent fetches for the same `(table, key)` pair.
+with LRU eviction per table. No miss deduplication in the first pass —
+concurrent fetches for the same `(table, key)` pair may both hit the store,
+but the second put is idempotent. This is strictly better than no cache and
+avoids the complexity of in-flight coordination up front.
 
 #### Why bytes-only, not typed values
 
@@ -269,7 +270,13 @@ pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     blob_store: &'a B,
     cache: &'a dyn BytesCache,
     range_resolver: RangeResolver,
-    // Per-request caches removed for types served by BytesCache.
+    // Per-request caches for directory_bucket, sub_bucket, and block_header
+    // are removed — those types are now served by BytesCache as zero-copy refs.
+    //
+    // directory_fragment_cache stays as a per-request HashMap because fragments
+    // are assembled from multiple list_prefix + get calls (not a single stored
+    // value), and each LogDirFragment is only 25 bytes. Not worth BytesCache.
+    directory_fragment_cache: HashMap<u64, Vec<LogDirFragment>>,
     // block_ref_cache remains because BlockRef is a small Copy type
     // computed from multiple sources, not a direct decode of stored bytes.
     block_ref_cache: HashMap<u64, BlockRef>,
@@ -345,46 +352,41 @@ execution never allocates; external serialization allocates only when needed.
 
 ### Transparent Compression
 
-Compression sits between the storage backend and the cache. The cache always
-stores decompressed bytes so that zero-copy accessors work directly.
+Compression is per-log, not per-blob. The block_logs blob stores an array of
+individually compressed log records. This is essential because `read_range`
+must be able to extract a single log from the blob without decompressing all
+logs in the block.
 
 ```
-BlobStore.get_blob(key)
-    → compressed Bytes (from disk/network)
-    → decompress into new Bytes (one allocation per cache miss)
-    → cache.put(key, decompressed_bytes)
-
-cache.get(key)
-    → Bytes (Arc clone, zero-copy)
-    → LogRef::new(bytes) (validation only)
-    → accessor methods (direct buffer reads)
+Block logs blob layout:
+  header:  count (u32 BE)
+  index:   count * (offset: u32 BE, compressed_len: u32 BE)
+  entries: count * compressed log record (contiguous)
 ```
+
+`read_range(blob, i)` reads the index entry at position `i` to get
+`(offset, compressed_len)`, slices out the compressed bytes, decompresses
+that single log record, and returns it as `Bytes`. The cache stores the
+decompressed log bytes so subsequent hits are zero-copy.
+
+For metadata (block headers, directory buckets), compression is optional and
+applied at the whole-value level since these are always read in full.
 
 #### Where decompression lives
 
-Decompression belongs in the store layer, not the cache layer. The store
-implementations (`FsBlobStore`, `S3BlobStore`, `ScyllaBlobStore`) handle
-compression internally:
+Decompression belongs in the store layer. The store implementations handle
+compression internally — callers above the store layer never see compressed
+data.
 
 ```rust
-// Inside a blob store implementation
-async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-    let raw = self.backend_read(key).await?;
-    match raw {
-        Some(bytes) => Ok(Some(decompress(bytes)?)),
-        None => Ok(None),
-    }
-}
-
-async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-    let compressed = compress(&value)?;
-    self.backend_write(key, compressed).await
+// Inside blob store: read_range decompresses the individual log
+async fn read_range(&self, key: &[u8], index: usize) -> Result<Option<Bytes>> {
+    let blob = self.backend_read(key).await?;
+    let (offset, compressed_len) = read_index_entry(&blob, index)?;
+    let compressed = blob.slice(offset..offset + compressed_len);
+    Ok(Some(decompress(compressed)?))
 }
 ```
-
-This way the cache, zero-copy types, and all callers above the store layer
-never see compressed data. The compression format is a storage implementation
-detail.
 
 #### Codec choice
 
@@ -392,17 +394,15 @@ LZ4 (via `lz4_flex`) is the recommended codec:
 
 - 3-4 GB/s decompression throughput
 - negligible CPU cost per cache miss
-- 2-4x compression ratio on log blobs (repeated address and topic bytes)
+- 2-4x compression ratio on log records (repeated address and topic bytes)
 - no framing overhead for small buffers (use block mode, not frame mode)
 
-For block_logs blobs (the largest stored objects), the savings are material:
-a 100 KB blob compresses to ~30-50 KB on disk/network, then decompresses once
-into the cache and serves zero-copy reads from there indefinitely.
+Per-log compression means each decompression is on a small record (typically
+200-2000 bytes), not a 100 KB blob. The per-record overhead is negligible.
 
 For small metadata (block headers, directory buckets), compression is optional.
-The store can skip compression for values below a threshold (e.g., 256 bytes)
-to avoid the overhead on already-small payloads. This is a per-store-impl
-decision, not a cache concern.
+The store can skip compression for values below a threshold (e.g., 256 bytes).
+This is a per-store-impl decision, not a cache concern.
 
 ### Alignment
 
@@ -502,17 +502,19 @@ replacements.
 6. Update `QueryPage<Log>` → `QueryPage<LogRef>` at the API boundary.
 7. Update benchmarks and tests.
 
-**Phase 2: Compression**
+**Phase 2: Per-log compression**
 
-1. Add LZ4 compression/decompression to blob store implementations.
-2. Add a size threshold to skip compression for small values.
-3. Benchmark decompression overhead per cache miss vs. I/O savings.
+1. Change block_logs blob format to per-log compressed entries with index header.
+2. Update `read_range` to decompress individual log records.
+3. Add LZ4 compression/decompression to blob store implementations.
+4. Add a size threshold to skip compression for small metadata values.
+5. Benchmark decompression overhead per cache miss vs. I/O savings.
 
-**Phase 3: Cache engine integration**
+**Phase 3: Miss deduplication (if needed)**
 
-1. Integrate `BytesCache` with the full cache engine described in the metadata
-   caching plan (miss coordination, eviction, metrics, eager population).
+1. Add `get_or_fill` to `BytesCache` trait for in-flight miss coordination.
 2. Wire ingest to eagerly populate cache after successful writes.
+3. Only pursue if profiling shows redundant fetches are a real bottleneck.
 
 **Phase 4: Arena allocation (future)**
 
@@ -582,9 +584,7 @@ replacements.
 
 ## Relationship to Other Plans
 
-This plan refines the value representation layer beneath the cache engine
-described in `docs/plans/metadata-caching-architecture.md`. That plan's
-design for tables, miss coordination, eviction, eager population, and family
-facades applies unchanged. The key delta is that cached values are `Bytes`
-(not decoded domain structs), and callers construct zero-copy ref types on
-demand.
+This plan supersedes `docs/plans/metadata-caching-architecture.md`. The key
+simplification is a plain get/put `BytesCache` with no miss deduplication,
+typed facades, or eager population in the first pass. Those can be layered on
+later (Phase 3) if profiling justifies the complexity.
