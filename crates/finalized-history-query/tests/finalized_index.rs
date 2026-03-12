@@ -17,10 +17,8 @@ use finalized_history_query::domain::keys::{
     stream_page_start_local,
 };
 use finalized_history_query::domain::types::{Block, BlockMeta, Log, PublicationState};
+use finalized_history_query::ingest::authority::lease::{LeaseAuthority, current_time_ms};
 use finalized_history_query::ingest::engine::IngestEngine;
-use finalized_history_query::ingest::publication::{
-    acquire_publication_with_session, bootstrap_publication_state,
-};
 use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -28,7 +26,7 @@ use finalized_history_query::store::publication::{CasOutcome, FenceStore, Public
 use finalized_history_query::store::traits::{
     BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
-use finalized_history_query::{Clause, Error, LogFilter};
+use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -93,8 +91,8 @@ fn seeded_publication_state_with_expiry(
     }
 }
 
-async fn query_page<M, B>(
-    svc: &FinalizedHistoryService<M, B>,
+async fn query_page<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
@@ -102,6 +100,7 @@ async fn query_page<M, B>(
     resume_log_id: Option<u64>,
 ) -> finalized_history_query::Result<finalized_history_query::QueryPage<Log>>
 where
+    A: WriteAuthority,
     M: MetaStore + PublicationStore + FenceStore,
     B: BlobStore,
 {
@@ -117,6 +116,17 @@ where
         ExecutionBudget::default(),
     )
     .await
+}
+
+async fn acquire_lease_token<P: PublicationStore + FenceStore + Clone>(
+    store: P,
+    owner_id: u64,
+    now_ms: u64,
+    lease_duration_ms: u64,
+) -> finalized_history_query::Result<finalized_history_query::WriteToken> {
+    LeaseAuthority::new(store, owner_id, lease_duration_ms, 0)
+        .acquire(now_ms)
+        .await
 }
 
 static CONTROLLED_NOW_MS: AtomicU64 = AtomicU64::new(0);
@@ -191,6 +201,10 @@ impl PublicationStore for FailDeleteOnceMetaStore {
 impl FenceStore for FailDeleteOnceMetaStore {
     async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
         self.inner.advance_fence(min_epoch).await
+    }
+
+    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
+        self.inner.current_fence().await
     }
 }
 
@@ -277,6 +291,10 @@ impl PublicationStore for ExpireBeforePublishMetaStore {
 impl FenceStore for ExpireBeforePublishMetaStore {
     async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
         self.inner.advance_fence(min_epoch).await
+    }
+
+    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
+        self.inner.current_fence().await
     }
 }
 
@@ -418,17 +436,27 @@ fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let first = bootstrap_publication_state(&meta, 7, [7u8; 16], 100, 50)
+        let first = acquire_lease_token(meta.clone(), 7, 100, 50)
             .await
             .expect("bootstrap");
-        assert_eq!(first.owner_id, 7);
+        let first_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        assert_eq!(first_state.owner_id, 7);
         assert_eq!(first.epoch, 1);
         assert_eq!(first.indexed_finalized_head, 0);
 
-        let second = acquire_publication_with_session(&meta, 9, [9u8; 16], 151, 50)
+        let second = acquire_lease_token(meta.clone(), 9, 151, 50)
             .await
             .expect("takeover after expiry");
-        assert_eq!(second.owner_id, 9);
+        let second_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        assert_eq!(second_state.owner_id, 9);
         assert_eq!(second.epoch, 2);
         assert_eq!(second.indexed_finalized_head, 0);
     });
@@ -439,19 +467,24 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let first = bootstrap_publication_state(&meta, 7, [7u8; 16], 100, 50)
+        let _first = acquire_lease_token(meta.clone(), 7, 100, 50)
             .await
             .expect("bootstrap");
-        let err = acquire_publication_with_session(&meta, 9, [9u8; 16], 120, 50)
+        let first_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        let err = acquire_lease_token(meta.clone(), 9, 120, 50)
             .await
             .expect_err("fresh lease should reject standby takeover");
         assert!(matches!(err, Error::LeaseStillFresh));
 
         let publication_state = meta.load().await.expect("load publication state");
         let publication_state = publication_state.expect("publication state");
-        assert_eq!(publication_state.owner_id, first.owner_id);
-        assert_eq!(publication_state.session_id, first.session_id);
-        assert_eq!(publication_state.epoch, first.epoch);
+        assert_eq!(publication_state.owner_id, first_state.owner_id);
+        assert_eq!(publication_state.session_id, first_state.session_id);
+        assert_eq!(publication_state.epoch, first_state.epoch);
     });
 }
 
@@ -680,13 +713,39 @@ fn service_startup_bootstraps_publication_ownership() {
 }
 
 #[test]
+fn single_writer_service_ingests_and_publishes_reader_visible_head() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedHistoryService::new_single_writer(Config::default(), meta.clone(), blob);
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(3, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("single-writer ingest");
+
+        let state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        let head = load_finalized_head_state(&meta)
+            .await
+            .expect("load finalized head state");
+
+        assert_eq!(state.owner_id, 0);
+        assert_eq!(state.indexed_finalized_head, 1);
+        assert_eq!(head.indexed_finalized_head, 1);
+    });
+}
+
+#[test]
 fn service_startup_uses_configured_lease_duration() {
     block_on(async {
         let config = Config {
             publication_lease_duration_ms: 1_000,
             ..Config::default()
         };
-        let before = finalized_history_query::ingest::publication::current_time_ms();
+        let before = current_time_ms();
         let svc = FinalizedHistoryService::new(
             config,
             InMemoryMetaStore::default(),
@@ -695,7 +754,7 @@ fn service_startup_uses_configured_lease_duration() {
         );
 
         svc.startup().await.expect("startup");
-        let after = finalized_history_query::ingest::publication::current_time_ms();
+        let after = current_time_ms();
         let publication_state = svc
             .ingest
             .meta_store
@@ -803,15 +862,19 @@ fn takeover_should_fence_stale_writer_before_artifact_writes() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-        let engine = IngestEngine::new(Config::default(), meta, blob);
+        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let engine = IngestEngine::new(Config::default(), authority, meta.clone(), blob);
 
-        let stale_lease = bootstrap_publication_state(&engine.meta_store, 1, [1u8; 16], 100, 50)
+        let stale_lease = engine
+            .authority
+            .acquire(100)
             .await
             .expect("writer 1 acquires publication");
-        let _takeover_lease =
-            acquire_publication_with_session(&engine.meta_store, 2, [2u8; 16], 151, 50)
-                .await
-                .expect("writer 2 takes over publication");
+        let takeover = LeaseAuthority::new(meta.clone(), 2, 50, 0);
+        let _takeover_lease = takeover
+            .acquire(151)
+            .await
+            .expect("writer 2 takes over publication");
 
         let err = engine
             .ingest_finalized_block(
@@ -928,12 +991,14 @@ fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
             advanced: Arc::new(AtomicBool::new(false)),
         };
         let blob = InMemoryBlobStore::default();
-        let engine = IngestEngine::new(config, meta, blob);
+        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let engine = IngestEngine::new(config, authority, meta, blob);
 
-        let lease =
-            bootstrap_publication_state(&engine.meta_store, 1, [1u8; 16], controlled_now_ms(), 50)
-                .await
-                .expect("bootstrap");
+        let lease = engine
+            .authority
+            .acquire(controlled_now_ms())
+            .await
+            .expect("bootstrap");
 
         engine
             .ingest_finalized_block(

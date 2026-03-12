@@ -13,7 +13,7 @@ use finalized_history_query::config::{Config as IndexConfig, IngestMode as Index
 use finalized_history_query::domain::types::{Block as IndexBlock, Log as IndexLog};
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
-use finalized_history_query::{Clause, LogFilter};
+use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
 use log_workload_gen::config::GeneratorConfig;
 use log_workload_gen::pipeline::run_collect_and_generate;
 use log_workload_gen::types::{
@@ -624,7 +624,6 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         maintenance_seal_seconds: args.maintenance_seal_seconds,
         ingest_mode: args.ingest_mode.into(),
         assume_empty_streams: args.assume_empty_streams,
-        log_locator_write_concurrency: args.log_locator_write_concurrency.max(1),
         stream_append_concurrency: args.stream_append_concurrency.max(1),
         ..IndexConfig::default()
     };
@@ -1009,7 +1008,8 @@ fn open_fs_archive(root: &Path) -> Result<BlockDataArchive> {
 async fn connect_service(
     args: &DistributedArgs,
     config: IndexConfig,
-) -> Result<FinalizedHistoryService<ScyllaMetaStore, MinioBlobStore>> {
+) -> Result<FinalizedHistoryService<LeaseAuthority<ScyllaMetaStore>, ScyllaMetaStore, MinioBlobStore>>
+{
     let meta = ScyllaMetaStore::new(
         std::slice::from_ref(&args.scylla_node),
         &args.scylla_keyspace,

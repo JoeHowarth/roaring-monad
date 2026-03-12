@@ -103,9 +103,15 @@ Look for:
 ## Pass 5: Ingest orchestration
 
 28. `crates/finalized-history-query/src/ingest/engine.rs`
-    Read this for the ingest orchestrator: finalized-sequence validation, authoritative artifact persistence, bounded eager compaction, and publication-state CAS.
-29. `crates/finalized-history-query/src/recovery/startup.rs`
-    Read this for the current startup view: `startup_plan` is read-only, while writer startup acquires publication ownership, cleans any unpublished suffix, repairs sealed open-page markers, derives `next_log_id`, and reports warmed streams.
+    Read this for the ingest orchestrator: finalized-sequence validation, authoritative artifact persistence, bounded eager compaction, and the `WriteAuthority` handoff points.
+29. `crates/finalized-history-query/src/ingest/authority.rs`
+    Read this for the write-authority boundary: `WriteToken`, `WriteAuthority`, and the engine-facing contract.
+30. `crates/finalized-history-query/src/ingest/authority/lease.rs`
+    Read this for the lease-backed multi-writer authority: acquisition, renewal, takeover, and head publication.
+31. `crates/finalized-history-query/src/ingest/authority/single_writer.rs`
+    Read this for the fail-closed single-writer authority: sentinel publication rows, fence alignment, and monotonic head publication.
+32. `crates/finalized-history-query/src/recovery/startup.rs`
+    Read this for the current startup view: `startup_plan` is read-only, while writer startup acquires write authority, cleans any unpublished suffix, repairs sealed open-page markers, derives `next_log_id`, and reports warmed streams.
 
 Look for:
 
@@ -116,11 +122,11 @@ Look for:
 
 ## Pass 6: End-to-end behavior
 
-30. `crates/finalized-history-query/tests/finalized_index.rs`
+33. `crates/finalized-history-query/tests/finalized_index.rs`
     Read this for the main end-to-end contract: immutable-frontier publication, publication-state ownership/visibility, pagination metadata, and boundary compaction.
-31. `crates/finalized-history-query/tests/crash_injection_matrix.rs`
+34. `crates/finalized-history-query/tests/crash_injection_matrix.rs`
     Read this for crash-retry behavior around authoritative artifact publication and publication-state CAS.
-32. `crates/finalized-history-query/tests/differential_and_gc.rs`
+35. `crates/finalized-history-query/tests/differential_and_gc.rs`
     Read this for the naive differential query check plus the basic recovery and legacy-GC cleanup behaviors.
 
 Focus on:
@@ -135,6 +141,6 @@ Focus on:
 
 ## Storage note
 
-33. `docs/04-block-keyed-log-storage.md`
+36. `docs/04-block-keyed-log-storage.md`
 
 Read this after the current implementation for the storage-design rationale behind `log_id -> block_num -> byte-range` resolution and block-keyed log payloads.

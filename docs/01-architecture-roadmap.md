@@ -34,6 +34,8 @@ The crate is organized in three layers.
   - `src/api/service.rs`
 - shared finalized-history substrate
   - `src/core/*`
+  - `src/ingest/authority.rs`
+  - `src/ingest/authority/*`
   - `src/streams/*`
 - logs family adapter
   - `src/logs/*`
@@ -62,6 +64,7 @@ The shared layer owns:
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - runtime degraded / throttled state
+- write-authority policy and fencing
 - publication-state reads
 - shared finalized-state and block-identity reads
 
@@ -140,11 +143,11 @@ It is responsible for:
 - finalized sequence and parent validation
 - coordinating log artifact writes
 - coordinating immutable directory and stream frontier publication
-- advancing `publication_state.indexed_finalized_head` last
+- delegating renewal and final head publication to `WriteAuthority`
 
 `FinalizedHistoryService::startup()` owns active publication lifecycle:
 
-- publication ownership acquisition
+- write-authority acquisition
 - cleanup-first recovery of unpublished suffix artifacts
 - sealed open-page marker repair
 - deriving the startup `next_log_id` view
@@ -188,5 +191,8 @@ Read these files in order:
 5. `crates/finalized-history-query/src/core/range.rs`
 6. `crates/finalized-history-query/src/logs/query.rs`
 7. `crates/finalized-history-query/src/logs/ingest.rs`
-8. `crates/finalized-history-query/src/ingest/engine.rs`
-9. `crates/finalized-history-query/tests/finalized_index.rs`
+8. `crates/finalized-history-query/src/ingest/authority.rs`
+9. `crates/finalized-history-query/src/ingest/authority/lease.rs`
+10. `crates/finalized-history-query/src/ingest/authority/single_writer.rs`
+11. `crates/finalized-history-query/src/ingest/engine.rs`
+12. `crates/finalized-history-query/tests/finalized_index.rs`

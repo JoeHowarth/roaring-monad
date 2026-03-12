@@ -681,6 +681,10 @@ impl FenceStore for ScyllaMetaStore {
         let next_min_epoch = self.cached_min_epoch.load(Ordering::Relaxed).max(min_epoch);
         self.set_min_epoch(next_min_epoch).await
     }
+
+    async fn current_fence(&self) -> Result<u64> {
+        Ok(self.cached_min_epoch.load(Ordering::Relaxed))
+    }
 }
 
 fn extract_group(key: &[u8]) -> String {

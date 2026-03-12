@@ -1,29 +1,30 @@
 use crate::config::Config;
 use crate::core::state::{derive_next_log_id, load_block_identity};
-use crate::domain::types::{Block, IngestOutcome, PublicationState};
+use crate::domain::types::{Block, IngestOutcome};
 use crate::error::{Error, Result};
+use crate::ingest::authority::{WriteAuthority, WriteToken};
 use crate::ingest::open_pages::{
     OpenStreamPage, collect_newly_sealed_open_stream_pages, delete_open_stream_page,
     mark_open_stream_page_if_absent,
 };
-use crate::ingest::publication::{PublicationLease, renew_publication_if_needed};
 use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
 };
-use crate::store::publication::{CasOutcome, PublicationStore};
-use crate::store::traits::{BlobStore, MetaStore};
+use crate::store::traits::{BlobStore, FenceToken, MetaStore};
 
-pub struct IngestEngine<M: MetaStore + PublicationStore, B: BlobStore> {
+pub struct IngestEngine<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub config: Config,
+    pub authority: A,
     pub meta_store: M,
     pub blob_store: B,
 }
 
-impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
-    pub fn new(config: Config, meta_store: M, blob_store: B) -> Self {
+impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
+    pub fn new(config: Config, authority: A, meta_store: M, blob_store: B) -> Self {
         Self {
             config,
+            authority,
             meta_store,
             blob_store,
         }
@@ -32,37 +33,34 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
     pub async fn ingest_finalized_block(
         &self,
         block: &Block,
-        lease: PublicationLease,
-    ) -> Result<(IngestOutcome, PublicationLease)> {
-        self.ingest_finalized_blocks(core::slice::from_ref(block), lease)
+        token: WriteToken,
+    ) -> Result<(IngestOutcome, WriteToken)> {
+        self.ingest_finalized_blocks(core::slice::from_ref(block), token)
             .await
     }
 
     pub async fn ingest_finalized_blocks(
         &self,
         blocks: &[Block],
-        lease: PublicationLease,
-    ) -> Result<(IngestOutcome, PublicationLease)> {
+        token: WriteToken,
+    ) -> Result<(IngestOutcome, WriteToken)> {
         let Some(last_block) = blocks.last() else {
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
 
-        let lease = renew_publication_if_needed(
-            &self.meta_store,
-            lease,
-            (self.config.now_ms)(),
-            self.config.publication_lease_renew_skew_ms,
-            self.config.publication_lease_duration_ms,
-        )
-        .await?;
+        let now_ms = (self.config.now_ms)();
+        let prior_epoch = token.epoch;
+        let token = self.authority.authorize(&token, now_ms).await?;
+        debug_assert_eq!(prior_epoch, token.epoch);
 
-        validate_block_sequence(&self.meta_store, blocks, lease).await?;
+        validate_block_sequence(&self.meta_store, blocks, &token).await?;
 
         let from_next_log_id =
-            derive_next_log_id(&self.meta_store, lease.indexed_finalized_head).await?;
+            derive_next_log_id(&self.meta_store, token.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenStreamPage>::new();
-        let fence = lease.fence_token();
+        let fence = self.authority.fence(&token);
+        let epoch = fence.0;
 
         for block in blocks {
             persist_log_artifacts(
@@ -72,16 +70,16 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 block.block_num,
                 &block.logs,
                 next_log_id,
-                lease.epoch,
+                epoch,
             )
             .await?;
-            persist_log_block_metadata(&self.meta_store, block, next_log_id, lease.epoch).await?;
+            persist_log_block_metadata(&self.meta_store, block, next_log_id, epoch).await?;
             persist_log_directory_fragments(
                 &self.meta_store,
                 block.block_num,
                 next_log_id,
                 block.logs.len() as u32,
-                lease.epoch,
+                epoch,
             )
             .await?;
             let touched_pages = persist_stream_fragments(
@@ -89,7 +87,7 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 &self.blob_store,
                 block,
                 next_log_id,
-                lease.epoch,
+                epoch,
             )
             .await?;
             opened_during.extend(touched_pages.into_iter().filter_map(
@@ -111,13 +109,8 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
             mark_open_stream_page_if_absent(&self.meta_store, page, fence).await?;
         }
 
-        compact_newly_sealed_directory(
-            &self.meta_store,
-            from_next_log_id,
-            next_log_id,
-            lease.epoch,
-        )
-        .await?;
+        compact_newly_sealed_directory(&self.meta_store, from_next_log_id, next_log_id, epoch)
+            .await?;
 
         for page in collect_newly_sealed_open_stream_pages(
             &self.meta_store,
@@ -132,68 +125,32 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
                 &self.blob_store,
                 &page.stream_id,
                 page.page_start_local,
-                lease.epoch,
+                epoch,
             )
             .await?;
             delete_open_stream_page(&self.meta_store, &page, fence).await?;
         }
 
-        let lease = renew_publication_if_needed(
-            &self.meta_store,
-            lease,
-            (self.config.now_ms)(),
-            self.config.publication_lease_renew_skew_ms,
-            self.config.publication_lease_duration_ms,
-        )
-        .await?;
-
-        let expected_state = lease.as_state();
-        let next_lease = PublicationLease {
-            owner_id: lease.owner_id,
-            session_id: lease.session_id,
-            epoch: lease.epoch,
-            indexed_finalized_head: last_block.block_num,
-            lease_expires_at_ms: lease.lease_expires_at_ms,
-        };
-        let next_state = PublicationState {
-            owner_id: next_lease.owner_id,
-            session_id: next_lease.session_id,
-            epoch: next_lease.epoch,
-            indexed_finalized_head: next_lease.indexed_finalized_head,
-            lease_expires_at_ms: next_lease.lease_expires_at_ms,
-        };
-        match self
-            .meta_store
-            .compare_and_set(&expected_state, &next_state)
-            .await?
-        {
-            CasOutcome::Applied(_) => {}
-            CasOutcome::Failed {
-                current: Some(current),
-            } => {
-                if current.owner_id != lease.owner_id
-                    || current.session_id != lease.session_id
-                    || current.epoch != lease.epoch
-                {
-                    return Err(Error::LeaseLost);
-                }
-                return Err(Error::PublicationConflict);
-            }
-            CasOutcome::Failed { current: None } => {
-                return Err(Error::PublicationConflict);
-            }
-        }
+        let publish_token = self
+            .authority
+            .authorize(&token, (self.config.now_ms)())
+            .await?;
+        debug_assert_eq!(token.epoch, publish_token.epoch);
+        let next_token = self
+            .authority
+            .publish(&publish_token, last_block.block_num)
+            .await?;
 
         Ok((
             IngestOutcome {
                 indexed_finalized_head: last_block.block_num,
                 written_logs: blocks.iter().map(|block| block.logs.len()).sum(),
             },
-            next_lease,
+            next_token,
         ))
     }
 
-    pub async fn run_periodic_maintenance(&self, _writer_id: u64) -> Result<MaintenanceStats> {
+    pub async fn run_periodic_maintenance(&self, _fence: FenceToken) -> Result<MaintenanceStats> {
         Ok(MaintenanceStats::default())
     }
 }
@@ -201,9 +158,9 @@ impl<M: MetaStore + PublicationStore, B: BlobStore> IngestEngine<M, B> {
 async fn validate_block_sequence<M: MetaStore>(
     meta_store: &M,
     blocks: &[Block],
-    lease: PublicationLease,
+    token: &WriteToken,
 ) -> Result<()> {
-    let expected_first = lease.indexed_finalized_head.saturating_add(1);
+    let expected_first = token.indexed_finalized_head.saturating_add(1);
     if blocks[0].block_num != expected_first {
         return Err(Error::InvalidSequence {
             expected: expected_first,
@@ -211,10 +168,10 @@ async fn validate_block_sequence<M: MetaStore>(
         });
     }
 
-    let expected_parent = if lease.indexed_finalized_head == 0 {
+    let expected_parent = if token.indexed_finalized_head == 0 {
         [0u8; 32]
     } else {
-        load_block_identity(meta_store, lease.indexed_finalized_head)
+        load_block_identity(meta_store, token.indexed_finalized_head)
             .await?
             .ok_or(Error::NotFound)?
             .hash

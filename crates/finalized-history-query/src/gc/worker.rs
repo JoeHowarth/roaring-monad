@@ -96,7 +96,7 @@ impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
     pub async fn prune_block_hash_index_below(
         &self,
         min_block_num: u64,
-        fence_epoch: u64,
+        fence: FenceToken,
     ) -> Result<u64> {
         let mut removed = 0u64;
         let page = self
@@ -109,9 +109,7 @@ impl<'a, M: MetaStore, B: BlobStore> GcWorker<'a, M, B> {
             };
             let num = decode_u64(&rec.value)?;
             if num < min_block_num {
-                self.meta_store
-                    .delete(&key, DelCond::Any, FenceToken(fence_epoch))
-                    .await?;
+                self.meta_store.delete(&key, DelCond::Any, fence).await?;
                 removed = removed.saturating_add(1);
             }
         }

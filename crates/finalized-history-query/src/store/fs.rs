@@ -84,6 +84,10 @@ impl FenceStore for FsMetaStore {
             });
         Ok(())
     }
+
+    async fn current_fence(&self) -> Result<u64> {
+        Ok(self.min_epoch.load(Ordering::Relaxed))
+    }
 }
 
 impl PublicationStore for FsMetaStore {

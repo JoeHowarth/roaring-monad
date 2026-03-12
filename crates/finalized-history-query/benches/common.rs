@@ -35,14 +35,18 @@ use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
 use finalized_history_query::streams::manifest::{
     ChunkRef, Manifest, encode_manifest, encode_tail,
 };
-use finalized_history_query::{Clause, LogFilter, QueryPage, Result};
+use finalized_history_query::{Clause, LeaseAuthority, LogFilter, QueryPage, Result};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
 pub const DEFAULT_WRITER_EPOCH: u64 = 1;
 
-pub type BenchService = FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore>;
+pub type BenchService = FinalizedHistoryService<
+    LeaseAuthority<InMemoryMetaStore>,
+    InMemoryMetaStore,
+    InMemoryBlobStore,
+>;
 
 #[derive(Debug, Clone)]
 pub struct SeededLogBlock {

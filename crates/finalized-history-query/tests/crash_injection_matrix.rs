@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use finalized_history_query::Clause;
+use finalized_history_query::LeaseAuthority;
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
@@ -153,6 +154,10 @@ impl FenceStore for FaultyMetaStore {
     async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
         self.inner.advance_fence(min_epoch).await
     }
+
+    async fn current_fence(&self) -> Result<u64> {
+        self.inner.current_fence().await
+    }
 }
 
 #[derive(Clone)]
@@ -215,7 +220,7 @@ fn mk_service(
     meta: Arc<InMemoryMetaStore>,
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
-) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
+) -> FinalizedHistoryService<LeaseAuthority<FaultyMetaStore>, FaultyMetaStore, FaultyBlobStore> {
     mk_service_with_writer(meta, blob, injector, 1)
 }
 
@@ -224,7 +229,7 @@ fn mk_service_with_writer(
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
     writer_id: u64,
-) -> FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore> {
+) -> FinalizedHistoryService<LeaseAuthority<FaultyMetaStore>, FaultyMetaStore, FaultyBlobStore> {
     FinalizedHistoryService::new(
         Config::default(),
         FaultyMetaStore {
@@ -252,7 +257,11 @@ fn indexed_address_or_filter(addresses: &[u8]) -> LogFilter {
 }
 
 async fn query_range(
-    svc: &FinalizedHistoryService<FaultyMetaStore, FaultyBlobStore>,
+    svc: &FinalizedHistoryService<
+        LeaseAuthority<FaultyMetaStore>,
+        FaultyMetaStore,
+        FaultyBlobStore,
+    >,
     from_block: u64,
     to_block: u64,
 ) -> Vec<Log> {

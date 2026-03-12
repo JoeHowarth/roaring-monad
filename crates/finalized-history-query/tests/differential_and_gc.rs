@@ -12,7 +12,7 @@ use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
 use finalized_history_query::streams::chunk::{ChunkBlob, encode_chunk};
 use finalized_history_query::streams::manifest::encode_tail;
-use finalized_history_query::{Clause, LogFilter};
+use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
@@ -74,7 +74,11 @@ fn naive_query(
 }
 
 async fn query_range(
-    svc: &FinalizedHistoryService<InMemoryMetaStore, InMemoryBlobStore>,
+    svc: &FinalizedHistoryService<
+        LeaseAuthority<InMemoryMetaStore>,
+        InMemoryMetaStore,
+        InMemoryBlobStore,
+    >,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,

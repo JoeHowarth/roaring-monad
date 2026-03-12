@@ -6,6 +6,8 @@ pub enum Error {
     CasConflict,
     #[error("publication conflict")]
     PublicationConflict,
+    #[error("write mode conflict: {0}")]
+    ModeConflict(&'static str),
     #[error("active writer lease is still fresh")]
     LeaseStillFresh,
     #[error("lease lost")]

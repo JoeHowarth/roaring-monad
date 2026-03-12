@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 
@@ -11,17 +11,17 @@ use crate::error::{Error, Result};
 use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct InMemoryMetaStore {
-    inner: RwLock<BTreeMap<Vec<u8>, Record>>,
-    min_epoch: AtomicU64,
+    inner: Arc<RwLock<BTreeMap<Vec<u8>, Record>>>,
+    min_epoch: Arc<AtomicU64>,
 }
 
 impl InMemoryMetaStore {
     pub fn with_min_epoch(min_epoch: u64) -> Self {
         Self {
-            inner: RwLock::new(BTreeMap::new()),
-            min_epoch: AtomicU64::new(min_epoch),
+            inner: Arc::new(RwLock::new(BTreeMap::new())),
+            min_epoch: Arc::new(AtomicU64::new(min_epoch)),
         }
     }
 
@@ -35,6 +35,12 @@ impl InMemoryMetaStore {
             return Err(Error::LeaseLost);
         }
         Ok(())
+    }
+}
+
+impl Default for InMemoryMetaStore {
+    fn default() -> Self {
+        Self::with_min_epoch(0)
     }
 }
 
@@ -221,6 +227,10 @@ impl FenceStore for InMemoryMetaStore {
                 Some(current.max(min_epoch))
             });
         Ok(())
+    }
+
+    async fn current_fence(&self) -> Result<u64> {
+        Ok(self.min_epoch.load(Ordering::Relaxed))
     }
 }
 

@@ -26,4 +26,6 @@ pub trait PublicationStore: Send + Sync {
 #[allow(async_fn_in_trait)]
 pub trait FenceStore: Send + Sync {
     async fn advance_fence(&self, min_epoch: u64) -> Result<()>;
+
+    async fn current_fence(&self) -> Result<u64>;
 }

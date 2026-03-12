@@ -5,40 +5,39 @@ use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequ
 use crate::api::write::FinalizedHistoryWriter;
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
-use crate::core::state::load_finalized_head_state;
-use crate::domain::types::SessionId;
+use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::{Error, Result};
 use crate::gc::worker::{GcStats, GcWorker};
+use crate::ingest::authority::{LeaseAuthority, SingleWriterAuthority, WriteAuthority, WriteToken};
 use crate::ingest::engine::{IngestEngine, MaintenanceStats};
-use crate::ingest::publication::{PublicationLease, new_session_id};
+use crate::ingest::open_pages::repair_open_stream_page_markers;
+use crate::ingest::recovery::cleanup_unpublished_suffix;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
-use crate::recovery::startup::{RecoveryPlan, startup_with_writer};
+use crate::recovery::startup::{RecoveryPlan, build_recovery_plan};
 use crate::store::publication::{FenceStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 
-pub struct FinalizedHistoryService<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> {
-    pub ingest: IngestEngine<M, B>,
+pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
+    pub ingest: IngestEngine<A, M, B>,
     query: LogsQueryEngine,
-    writer_id: u64,
-    session_id: SessionId,
     config: Config,
     state: Arc<RuntimeState>,
-    startup_state: Arc<futures::lock::Mutex<Option<PublicationLease>>>,
+    writer: Arc<futures::lock::Mutex<Option<WriteToken>>>,
 }
 
-impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryService<M, B> {
-    pub fn new(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
+impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
+    FinalizedHistoryService<A, M, B>
+{
+    pub fn with_authority(config: Config, meta_store: M, blob_store: B, authority: A) -> Self {
         let query = LogsQueryEngine::from_config(&config);
-        let ingest = IngestEngine::new(config.clone(), meta_store, blob_store);
+        let ingest = IngestEngine::new(config.clone(), authority, meta_store, blob_store);
         Self {
             ingest,
             query,
-            writer_id,
-            session_id: new_session_id(writer_id),
             config,
             state: Arc::new(RuntimeState::default()),
-            startup_state: Arc::new(futures::lock::Mutex::new(None)),
+            writer: Arc::new(futures::lock::Mutex::new(None)),
         }
     }
 
@@ -59,36 +58,16 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
     }
 
     pub async fn startup(&self) -> Result<RecoveryPlan> {
-        let mut startup_state = self.startup_state.lock().await;
-        if let Some(lease) = *startup_state {
-            drop(startup_state);
-            return self.recovery_plan_for_lease(lease).await;
-        }
-
-        let result = startup_with_writer(
-            &self.config,
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            0,
-            self.writer_id,
-            self.session_id,
-        )
-        .await;
-        match &result {
-            Ok(_) => self.state.on_backend_success(),
-            Err(Error::Backend(message)) => self.state.on_backend_error(
-                message.clone(),
-                self.config.backend_error_throttle_after,
-                self.config.backend_error_degraded_after,
-            ),
-            _ => {}
-        }
-        let (plan, lease) = result?;
-        *startup_state = Some(lease);
-        Ok(plan)
+        let mut writer = self.writer.lock().await;
+        let result = self.startup_locked(&mut writer).await;
+        self.update_backend_state(&result);
+        result
     }
 
-    pub async fn indexed_finalized_head(&self) -> Result<u64> {
+    pub async fn indexed_finalized_head(&self) -> Result<u64>
+    where
+        M: PublicationStore,
+    {
         let result = load_finalized_head_state(&self.ingest.meta_store)
             .await
             .map(|state| state.indexed_finalized_head);
@@ -118,7 +97,7 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let result = self.ingest.run_periodic_maintenance(self.writer_id).await;
+        let result = self.run_maintenance_with_writer().await;
         self.update_backend_state(&result);
         result
     }
@@ -170,13 +149,8 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let worker = GcWorker::new(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            &self.config,
-        );
-        let result = worker
-            .prune_block_hash_index_below(min_block_num, self.writer_id)
+        let result = self
+            .prune_block_hash_index_below_with_writer(min_block_num)
             .await;
         self.update_backend_state(&result);
         result
@@ -193,10 +167,165 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
             _ => {}
         }
     }
+
+    async fn startup_locked(&self, writer: &mut Option<WriteToken>) -> Result<RecoveryPlan>
+    where
+        M: PublicationStore,
+    {
+        if let Some(token) = *writer {
+            return self.recovery_plan_for_token(token).await;
+        }
+
+        let token = self
+            .ingest
+            .authority
+            .acquire((self.config.now_ms)())
+            .await?;
+        let fence = self.ingest.authority.fence(&token);
+        let _cleaned = cleanup_unpublished_suffix(
+            &self.ingest.meta_store,
+            &self.ingest.blob_store,
+            token.indexed_finalized_head,
+            fence,
+        )
+        .await?;
+        let next_log_id =
+            derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
+        repair_open_stream_page_markers(
+            &self.ingest.meta_store,
+            &self.ingest.blob_store,
+            next_log_id,
+            fence,
+        )
+        .await?;
+        *writer = Some(token);
+        Ok(build_recovery_plan(
+            token.indexed_finalized_head,
+            token.epoch,
+            next_log_id,
+            0,
+        ))
+    }
+
+    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome>
+    where
+        M: PublicationStore,
+    {
+        let mut writer = self.writer.lock().await;
+        if writer.is_none() {
+            let _ = self.startup_locked(&mut writer).await?;
+        }
+
+        let token = (*writer).ok_or(Error::PublicationConflict)?;
+        match self.ingest.ingest_finalized_blocks(&blocks, token).await {
+            Ok((outcome, next_token)) => {
+                *writer = Some(next_token);
+                Ok(outcome)
+            }
+            Err(Error::LeaseLost) => {
+                *writer = None;
+                Err(Error::LeaseLost)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn run_maintenance_with_writer(&self) -> Result<MaintenanceStats>
+    where
+        M: PublicationStore,
+    {
+        let mut writer = self.writer.lock().await;
+        if writer.is_none() {
+            let _ = self.startup_locked(&mut writer).await?;
+        }
+
+        let token = (*writer).ok_or(Error::PublicationConflict)?;
+        let token = self
+            .ingest
+            .authority
+            .authorize(&token, (self.config.now_ms)())
+            .await?;
+        *writer = Some(token);
+        self.ingest
+            .run_periodic_maintenance(self.ingest.authority.fence(&token))
+            .await
+    }
+
+    async fn prune_block_hash_index_below_with_writer(&self, min_block_num: u64) -> Result<u64>
+    where
+        M: PublicationStore,
+    {
+        let mut writer = self.writer.lock().await;
+        if writer.is_none() {
+            let _ = self.startup_locked(&mut writer).await?;
+        }
+
+        let token = (*writer).ok_or(Error::PublicationConflict)?;
+        let token = self
+            .ingest
+            .authority
+            .authorize(&token, (self.config.now_ms)())
+            .await?;
+        *writer = Some(token);
+
+        let worker = GcWorker::new(
+            &self.ingest.meta_store,
+            &self.ingest.blob_store,
+            &self.config,
+        );
+        worker
+            .prune_block_hash_index_below(min_block_num, self.ingest.authority.fence(&token))
+            .await
+    }
+
+    async fn recovery_plan_for_token(&self, token: WriteToken) -> Result<RecoveryPlan> {
+        let next_log_id =
+            derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
+        Ok(build_recovery_plan(
+            token.indexed_finalized_head,
+            token.epoch,
+            next_log_id,
+            0,
+        ))
+    }
 }
 
-impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryWriter
-    for FinalizedHistoryService<M, B>
+impl<M, B> FinalizedHistoryService<LeaseAuthority<M>, M, B>
+where
+    M: MetaStore + PublicationStore + FenceStore + Clone,
+    B: BlobStore,
+{
+    pub fn new(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
+        Self::new_with_lease(config, meta_store, blob_store, writer_id)
+    }
+
+    pub fn new_with_lease(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
+        let authority = LeaseAuthority::new(
+            meta_store.clone(),
+            writer_id,
+            config.publication_lease_duration_ms,
+            config.publication_lease_renew_skew_ms,
+        );
+        Self::with_authority(config, meta_store, blob_store, authority)
+    }
+}
+
+impl<M, B> FinalizedHistoryService<SingleWriterAuthority<M>, M, B>
+where
+    M: MetaStore + PublicationStore + FenceStore + Clone,
+    B: BlobStore,
+{
+    pub fn new_single_writer(config: Config, meta_store: M, blob_store: B) -> Self {
+        let authority = SingleWriterAuthority::new(meta_store.clone());
+        Self::with_authority(config, meta_store, blob_store, authority)
+    }
+}
+
+impl<A, M, B> FinalizedHistoryWriter for FinalizedHistoryService<A, M, B>
+where
+    A: WriteAuthority,
+    M: MetaStore + PublicationStore,
+    B: BlobStore,
 {
     async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
         self.ingest_finalized_blocks(vec![block]).await
@@ -220,8 +349,11 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistor
     }
 }
 
-impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedLogQueries
-    for FinalizedHistoryService<M, B>
+impl<A, M, B> FinalizedLogQueries for FinalizedHistoryService<A, M, B>
+where
+    A: WriteAuthority,
+    M: MetaStore + PublicationStore,
+    B: BlobStore,
 {
     async fn query_logs(
         &self,
@@ -243,52 +375,5 @@ impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedLogQue
             .await;
         self.update_backend_state(&result);
         result
-    }
-}
-
-impl<M: MetaStore + PublicationStore + FenceStore, B: BlobStore> FinalizedHistoryService<M, B> {
-    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
-        let startup_needed = {
-            let startup_state = self.startup_state.lock().await;
-            startup_state.is_none()
-        };
-        if startup_needed {
-            let _ = self.startup().await?;
-        }
-
-        let lease = {
-            let startup_state = self.startup_state.lock().await;
-            (*startup_state).ok_or(Error::PublicationConflict)?
-        };
-
-        match self.ingest.ingest_finalized_blocks(&blocks, lease).await {
-            Ok((outcome, next_lease)) => {
-                *self.startup_state.lock().await = Some(next_lease);
-                Ok(outcome)
-            }
-            Err(Error::LeaseLost) => {
-                *self.startup_state.lock().await = None;
-                Err(Error::LeaseLost)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn recovery_plan_for_lease(&self, lease: PublicationLease) -> Result<RecoveryPlan> {
-        let next_log_id = crate::core::state::derive_next_log_id(
-            &self.ingest.meta_store,
-            lease.indexed_finalized_head,
-        )
-        .await?;
-        Ok(RecoveryPlan {
-            head_state: crate::core::state::FinalizedHeadState {
-                indexed_finalized_head: lease.indexed_finalized_head,
-                publication_epoch: lease.epoch,
-            },
-            log_state: crate::logs::types::LogSequencingState {
-                next_log_id: crate::core::ids::LogId::new(next_log_id),
-            },
-            warm_streams: 0,
-        })
     }
 }
