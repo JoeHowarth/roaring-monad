@@ -45,13 +45,20 @@ design.
 
 The cache is for immutable read artifacts only.
 
-Initial cache candidates:
+Immutable tables that should participate from the first rollout:
 
 - `block_log_headers/<block_num>`
 - `log_dir_sub/<sub_bucket_start>`
 - optional `log_dir/<bucket_start>`
 - `block_logs/<block_num>` or per-log slices derived from them
-- optionally sealed `stream_page_meta/*` and `stream_page_blob/*`
+- sealed `stream_page_meta/*` and `stream_page_blob/*`
+
+These all get cache plumbing from the start.
+
+Whether a given table is active at runtime is controlled only by its configured size budget:
+
+- non-zero budget: table is enabled and participates in LRU caching
+- zero budget: table is bypassed entirely
 
 Explicit non-candidates:
 
@@ -199,7 +206,10 @@ Recommended logical tables:
 - `LogDirectorySubBuckets`
 - `LogDirectoryBuckets`
 - `BlockLogBlobs`
-- future: sealed `StreamPages`
+- `StreamPages`
+
+All immutable read tables should be represented in the cache configuration and implementation from
+the start, even if some are configured with `max_bytes = 0` initially.
 
 The cache implementation remains free to choose its own internal structure.
 
@@ -285,14 +295,15 @@ The next practical step is:
 
 This is more important than miss deduplication.
 
-### Phase 3: expand coverage selectively
+### Phase 3: tune per-table budgets
 
-After profiling, consider adding cache coverage for:
+After profiling, tune the per-table budgets rather than adding cache coverage to new immutable
+tables later.
 
-- `block_logs/*`
-- sealed `stream_page_*`
+The intended rollout already includes all immutable read tables. The operational question is:
 
-Only add these where measured reuse justifies the memory pressure.
+- which tables should have non-zero budgets in a given deployment
+- how large those budgets should be relative to one another
 
 ### Phase 4: optional miss deduplication
 
