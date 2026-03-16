@@ -81,6 +81,29 @@ Why:
 
 The cache should not store deep-cloned owned values like `BlockLogHeader` or `LogDirectoryBucket`.
 
+### 4a. Fold payload dedup into the same read-path optimization track
+
+The next storage-level optimization in this same area is to remove duplicated block context from the
+persisted per-log payload bytes.
+
+That means moving from:
+
+- stored log bytes containing `block_num` and `block_hash`
+
+to:
+
+- stored payload bytes containing only per-log fields
+- materialization injecting `block_num` from the resolved block location
+- materialization injecting `block_hash` from block metadata
+
+This work belongs under the same carried-forward plan because it serves the same read-path goals:
+
+- smaller stored payloads
+- fewer bytes read per point materialization
+- cleaner separation between block-scoped context and per-log payload
+
+It should keep the public `Log` type unchanged.
+
 ### 4. Use zero-copy ref types internally, not at the public API boundary
 
 Internal query execution should use zero-copy types where they remove avoidable allocation:
@@ -254,6 +277,16 @@ In particular, per-log compression of `block_logs/*` is not part of the base cac
 separate storage optimization decision and should remain optional until measured evidence says it is
 worth the format churn.
 
+### Phase 6: remove duplicated block context from stored log payloads
+
+After the cache/materialization direction is settled, the next clean storage optimization is:
+
+- introduce a payload-only stored log encoding
+- stop persisting `block_num` and `block_hash` inside each encoded log
+- inject block context during materialization
+
+That is a local storage-format change with no intended query-semantics change.
+
 ## Non-Goals
 
 - caching mutable control-plane state
@@ -266,6 +299,8 @@ worth the format churn.
 
 - This plan supersedes
   `docs/plans/superceded/metadata-caching-architecture.md`.
+- It also absorbs the forward-looking work from
+  `docs/plans/superceded/log-payload-block-context-dedup-plan.md`.
 - It aligns with the current immutable-frontier architecture in
   `docs/plans/completed/immutable-frontier-index-architecture.md`.
 - It is compatible with the current zero-copy materialization work already landed in
