@@ -351,3 +351,46 @@ That is a local storage-format change with no intended query-semantics change.
 - It is compatible with the current zero-copy materialization work already landed in
   `crates/finalized-history-query/src/cache/` and
   `crates/finalized-history-query/src/codec/log_ref.rs`.
+
+## Implementation Status
+
+This section reflects the current state of the codebase.
+
+### Implemented
+
+- internal zero-copy read types are in use for:
+  - `LogRef`
+  - `BlockLogHeaderRef`
+  - `LogDirectoryBucketRef`
+- the public query boundary still returns `QueryPage<Log>`
+- the immutable bytes cache is bytes-only rather than storing decoded owned structs
+- cache tables have explicit per-table byte budgets
+- `max_bytes = 0` disables a table and bypasses cache lookup/insert work
+- cache eviction is LRU within each enabled table
+- the normal `FinalizedHistoryService` query path uses a service-owned bytes cache
+- immutable read-path cache coverage currently includes:
+  - `block_log_headers/<block_num>`
+  - `log_dir_sub/<sub_bucket_start>`
+  - optional `log_dir/<bucket_start>`
+  - `block_logs/<block_num>`
+  - sealed `stream_page_meta/*`
+  - sealed `stream_page_blob/*`
+- `publication_state` is not part of the normal immutable query cache
+- `open_stream_page/*` is not part of the query cache
+
+### Not Yet Implemented
+
+- cache metrics
+- miss deduplication
+- eager cache population on ingest writes
+- compression or alternate backing allocation inside the cache
+- payload-only stored log encoding
+- removal of persisted per-log `block_num` and `block_hash`
+- materialization that injects block context into payload-only log bytes
+- operational tuning guidance for real deployed cache budgets beyond the current basic benchmark notes
+
+### Notes
+
+- The bounded cache rollout and main immutable-reader wiring are implemented.
+- The document still includes forward work that has not landed yet, especially metrics and the
+  payload-only log storage follow-up.
