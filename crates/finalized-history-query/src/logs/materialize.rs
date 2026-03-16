@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::codec::log::{
-    decode_block_log_header, decode_log, decode_log_dir_fragment, decode_log_directory_bucket,
-};
+use crate::cache::{BytesCache, TableId};
+use crate::codec::log::decode_log_dir_fragment;
+use crate::codec::log_ref::{BlockLogHeaderRef, LogDirectoryBucketRef, LogRef};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::ids::LogId;
 use crate::core::range::RangeResolver;
@@ -16,7 +16,6 @@ use crate::domain::types::LogDirFragment;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::state::load_log_block_meta;
-use crate::logs::types::{BlockLogHeader, Log, LogDirectoryBucket};
 use crate::store::traits::{BlobStore, MetaStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,27 +24,28 @@ pub(crate) struct ResolvedLogLocation {
     pub local_ordinal: usize,
 }
 
-pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
+pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore, C: BytesCache> {
     meta_store: &'a M,
     blob_store: &'a B,
+    cache: &'a C,
     range_resolver: RangeResolver,
-    directory_bucket_cache: HashMap<u64, LogDirectoryBucket>,
-    directory_sub_bucket_cache: HashMap<u64, LogDirectoryBucket>,
+    // directory_fragment_cache stays as a per-request HashMap because fragments
+    // are assembled from multiple list_prefix + get calls (not a single stored
+    // value), and each LogDirFragment is only 25 bytes. Not worth BytesCache.
     directory_fragment_cache: HashMap<u64, Vec<LogDirFragment>>,
-    block_header_cache: HashMap<u64, BlockLogHeader>,
+    // block_ref_cache remains because BlockRef is a small Copy type
+    // computed from multiple sources, not a direct decode of stored bytes.
     block_ref_cache: HashMap<u64, BlockRef>,
 }
 
-impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
-    pub fn new(meta_store: &'a M, blob_store: &'a B) -> Self {
+impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C> {
+    pub fn new(meta_store: &'a M, blob_store: &'a B, cache: &'a C) -> Self {
         Self {
             meta_store,
             blob_store,
+            cache,
             range_resolver: RangeResolver,
-            directory_bucket_cache: HashMap::new(),
-            directory_sub_bucket_cache: HashMap::new(),
             directory_fragment_cache: HashMap::new(),
-            block_header_cache: HashMap::new(),
             block_ref_cache: HashMap::new(),
         }
     }
@@ -53,20 +53,21 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     pub(crate) async fn load_block_header(
         &mut self,
         block_num: u64,
-    ) -> Result<Option<BlockLogHeader>> {
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.block_header_cache.entry(block_num)
-        {
-            let Some(record) = self
-                .meta_store
-                .get(&block_log_header_key(block_num))
-                .await?
-            else {
-                return Ok(None);
-            };
-            entry.insert(decode_block_log_header(&record.value)?);
+    ) -> Result<Option<BlockLogHeaderRef>> {
+        let key = block_log_header_key(block_num);
+        if let Some(bytes) = self.cache.get(TableId::BlockLogHeaders, &key) {
+            return Ok(Some(BlockLogHeaderRef::new(bytes)?));
         }
-        Ok(self.block_header_cache.get(&block_num).cloned())
+        let Some(record) = self.meta_store.get(&key).await? else {
+            return Ok(None);
+        };
+        self.cache.put(
+            TableId::BlockLogHeaders,
+            &key,
+            record.value.clone(),
+            record.value.len(),
+        );
+        Ok(Some(BlockLogHeaderRef::new(record.value)?))
     }
 
     pub(crate) async fn resolve_log_id(
@@ -74,17 +75,21 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         id: LogId,
     ) -> Result<Option<ResolvedLogLocation>> {
         let bucket_start = log_directory_bucket_start(id);
-        if let Some(bucket) = self.load_directory_bucket(bucket_start).await?
-            && let Some(entry_index) = containing_bucket_entry(&bucket, id)
+        if let Some(bucket) = self
+            .load_directory_bucket(bucket_start, TableId::LogDirectoryBuckets)
+            .await?
+            && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
-            return resolved_location_from_bucket(&bucket, entry_index, id);
+            return resolved_location_from_bucket_ref(&bucket, entry_index, id);
         }
 
         let sub_bucket_start = log_directory_sub_bucket_start(id);
-        if let Some(bucket) = self.load_directory_sub_bucket(sub_bucket_start).await?
-            && let Some(entry_index) = containing_bucket_entry(&bucket, id)
+        if let Some(bucket) = self
+            .load_directory_sub_bucket(sub_bucket_start)
+            .await?
+            && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
-            return resolved_location_from_bucket(&bucket, entry_index, id);
+            return resolved_location_from_bucket_ref(&bucket, entry_index, id);
         }
 
         let fragments = self.load_directory_fragments(sub_bucket_start).await?;
@@ -101,44 +106,37 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     }
 
     async fn load_directory_bucket(
-        &mut self,
+        &self,
         bucket_start: u64,
-    ) -> Result<Option<LogDirectoryBucket>> {
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.directory_bucket_cache.entry(bucket_start)
-        {
-            let Some(record) = self
-                .meta_store
-                .get(&log_directory_bucket_key(bucket_start))
-                .await?
-            else {
-                return Ok(None);
-            };
-            entry.insert(decode_log_directory_bucket(&record.value)?);
+        table: TableId,
+    ) -> Result<Option<LogDirectoryBucketRef>> {
+        let key = log_directory_bucket_key(bucket_start);
+        if let Some(bytes) = self.cache.get(table, &key) {
+            return Ok(Some(LogDirectoryBucketRef::new(bytes)?));
         }
-        Ok(self.directory_bucket_cache.get(&bucket_start).cloned())
+        let Some(record) = self.meta_store.get(&key).await? else {
+            return Ok(None);
+        };
+        self.cache
+            .put(table, &key, record.value.clone(), record.value.len());
+        Ok(Some(LogDirectoryBucketRef::new(record.value)?))
     }
 
     async fn load_directory_sub_bucket(
-        &mut self,
+        &self,
         sub_bucket_start: u64,
-    ) -> Result<Option<LogDirectoryBucket>> {
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.directory_sub_bucket_cache.entry(sub_bucket_start)
-        {
-            let Some(record) = self
-                .meta_store
-                .get(&log_directory_sub_bucket_key(sub_bucket_start))
-                .await?
-            else {
-                return Ok(None);
-            };
-            entry.insert(decode_log_directory_bucket(&record.value)?);
+    ) -> Result<Option<LogDirectoryBucketRef>> {
+        let key = log_directory_sub_bucket_key(sub_bucket_start);
+        let table = TableId::LogDirectorySubBuckets;
+        if let Some(bytes) = self.cache.get(table, &key) {
+            return Ok(Some(LogDirectoryBucketRef::new(bytes)?));
         }
-        Ok(self
-            .directory_sub_bucket_cache
-            .get(&sub_bucket_start)
-            .cloned())
+        let Some(record) = self.meta_store.get(&key).await? else {
+            return Ok(None);
+        };
+        self.cache
+            .put(table, &key, record.value.clone(), record.value.len());
+        Ok(Some(LogDirectoryBucketRef::new(record.value)?))
     }
 
     async fn load_directory_fragments(
@@ -174,18 +172,16 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     }
 }
 
-fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: LogId) -> Option<usize> {
-    if bucket.first_log_ids.len() < 2 {
+fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Option<usize> {
+    if bucket.count() < 2 {
         return None;
     }
-    let upper = bucket
-        .first_log_ids
-        .partition_point(|first_log_id| *first_log_id <= id.get());
-    if upper == 0 || upper >= bucket.first_log_ids.len() {
+    let upper = bucket.partition_point(|first_log_id| first_log_id <= id.get());
+    if upper == 0 || upper >= bucket.count() {
         return None;
     }
     let entry_index = upper - 1;
-    let end = bucket.first_log_ids[upper];
+    let end = bucket.first_log_id(upper);
     if id.get() < end {
         Some(entry_index)
     } else {
@@ -193,13 +189,13 @@ fn containing_bucket_entry(bucket: &LogDirectoryBucket, id: LogId) -> Option<usi
     }
 }
 
-fn resolved_location_from_bucket(
-    bucket: &LogDirectoryBucket,
+fn resolved_location_from_bucket_ref(
+    bucket: &LogDirectoryBucketRef,
     entry_index: usize,
     id: LogId,
 ) -> Result<Option<ResolvedLogLocation>> {
-    let block_num = bucket.start_block + entry_index as u64;
-    let local_ordinal = usize::try_from(id.get() - bucket.first_log_ids[entry_index])
+    let block_num = bucket.start_block() + entry_index as u64;
+    let local_ordinal = usize::try_from(id.get() - bucket.first_log_id(entry_index))
         .map_err(|_| Error::Decode("local ordinal overflow"))?;
     Ok(Some(ResolvedLogLocation {
         block_num,
@@ -207,8 +203,10 @@ fn resolved_location_from_bucket(
     }))
 }
 
-impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, B> {
-    type Primary = Log;
+impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
+    for LogMaterializer<'_, M, B, C>
+{
+    type Primary = LogRef;
     type Filter = LogFilter;
 
     async fn load_by_id(&mut self, id: LogId) -> Result<Option<Self::Primary>> {
@@ -218,12 +216,14 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
         let Some(header) = self.load_block_header(location.block_num).await? else {
             return Ok(None);
         };
-        let Some(&start) = header.offsets.get(location.local_ordinal) else {
+        if location.local_ordinal >= header.count() {
             return Ok(None);
-        };
-        let Some(&end) = header.offsets.get(location.local_ordinal + 1) else {
+        }
+        let start = header.offset(location.local_ordinal);
+        if location.local_ordinal + 1 >= header.count() {
             return Ok(None);
-        };
+        }
+        let end = header.offset(location.local_ordinal + 1);
         let Some(bytes) = self
             .blob_store
             .read_range(
@@ -235,32 +235,32 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
         else {
             return Ok(None);
         };
-        Ok(Some(decode_log(&bytes)?))
+        Ok(Some(LogRef::new(bytes)?))
     }
 
     async fn block_ref_for(&mut self, item: &Self::Primary) -> Result<BlockRef> {
-        if let Some(block_ref) = self.block_ref_cache.get(&item.block_num).copied() {
+        let block_num = item.block_num();
+        if let Some(block_ref) = self.block_ref_cache.get(&block_num).copied() {
             return Ok(block_ref);
         }
 
         let block_ref = if let Some(block_ref) = self
             .range_resolver
-            .load_block_ref(self.meta_store, item.block_num)
+            .load_block_ref(self.meta_store, block_num)
             .await?
         {
             block_ref
         } else {
-            let Some(block_meta) = load_log_block_meta(self.meta_store, item.block_num).await?
-            else {
+            let Some(block_meta) = load_log_block_meta(self.meta_store, block_num).await? else {
                 return Err(Error::NotFound);
             };
             BlockRef {
-                number: item.block_num,
-                hash: item.block_hash,
+                number: block_num,
+                hash: *item.block_hash(),
                 parent_hash: block_meta.parent_hash,
             }
         };
-        self.block_ref_cache.insert(item.block_num, block_ref);
+        self.block_ref_cache.insert(block_num, block_ref);
         Ok(block_ref)
     }
 
@@ -272,6 +272,7 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
 #[cfg(test)]
 mod tests {
     use super::LogMaterializer;
+    use crate::cache::NoopBytesCache;
     use crate::codec::log::{encode_log_dir_fragment, encode_log_directory_bucket};
     use crate::core::ids::LogId;
     use crate::domain::keys::{
@@ -289,6 +290,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
+            let cache = NoopBytesCache;
 
             meta.put(
                 &log_directory_bucket_key(0),
@@ -302,7 +304,7 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let mut materializer = LogMaterializer::new(&meta, &blob);
+            let mut materializer = LogMaterializer::new(&meta, &blob, &cache);
             let resolved = materializer
                 .resolve_log_id(LogId::new(12))
                 .await
@@ -323,6 +325,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
+            let cache = NoopBytesCache;
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.put(
                 &log_directory_fragment_key(log_directory_sub_bucket_start(log_id), 700),
@@ -337,7 +340,7 @@ mod tests {
             .await
             .expect("write directory fragment");
 
-            let mut materializer = LogMaterializer::new(&meta, &blob);
+            let mut materializer = LogMaterializer::new(&meta, &blob, &cache);
             let resolved = materializer
                 .resolve_log_id(log_id)
                 .await
@@ -358,6 +361,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
+            let cache = NoopBytesCache;
 
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
@@ -376,7 +380,7 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let mut materializer = LogMaterializer::new(&meta, &blob);
+            let mut materializer = LogMaterializer::new(&meta, &blob, &cache);
             let resolved = materializer
                 .resolve_log_id(log_id)
                 .await

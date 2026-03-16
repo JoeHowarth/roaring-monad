@@ -4,7 +4,9 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
+use crate::cache::{BytesCache, NoopBytesCache};
 use crate::codec::log::decode_stream_bitmap_meta;
+use crate::codec::log_ref::LogRef;
 use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer, ShardBitmapSet};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
@@ -63,6 +65,18 @@ impl LogsQueryEngine {
         &self,
         meta_store: &M,
         blob_store: &B,
+        request: QueryLogsRequest,
+        budget: ExecutionBudget,
+    ) -> Result<QueryPage<Log>> {
+        self.query_logs_with_cache(meta_store, blob_store, &NoopBytesCache, request, budget)
+            .await
+    }
+
+    pub async fn query_logs_with_cache<M: MetaStore + PublicationStore, B: BlobStore, C: BytesCache>(
+        &self,
+        meta_store: &M,
+        blob_store: &B,
+        cache: &C,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
@@ -132,6 +146,7 @@ impl LogsQueryEngine {
             .execute_indexed_query(
                 meta_store,
                 blob_store,
+                cache,
                 &request.filter,
                 log_window.start,
                 log_window.end_inclusive,
@@ -159,7 +174,7 @@ impl LogsQueryEngine {
         &self,
         block_range: ResolvedBlockRange,
         effective_limit: usize,
-        mut matched: Vec<MatchedPrimary<Log>>,
+        mut matched: Vec<MatchedPrimary<LogRef>>,
     ) -> QueryPage<Log> {
         let has_more = matched.len() > effective_limit;
         if has_more {
@@ -175,9 +190,10 @@ impl LogsQueryEngine {
             .last()
             .map(|matched_log| matched_log.block_ref)
             .unwrap_or(block_range.examined_endpoint_ref);
+        // Convert LogRef → Log at the API boundary
         let items = matched
             .into_iter()
-            .map(|matched_log| matched_log.item)
+            .map(|matched_log| matched_log.item.to_owned_log())
             .collect();
 
         QueryPage {
@@ -192,18 +208,19 @@ impl LogsQueryEngine {
         }
     }
 
-    async fn execute_indexed_query<M: MetaStore, B: BlobStore>(
+    async fn execute_indexed_query<M: MetaStore, B: BlobStore, C: BytesCache>(
         &self,
         meta_store: &M,
         blob_store: &B,
+        cache: &C,
         filter: &LogFilter,
         from_log_id: LogId,
         to_log_id_inclusive: LogId,
         take: usize,
-    ) -> Result<Vec<MatchedPrimary<Log>>> {
+    ) -> Result<Vec<MatchedPrimary<LogRef>>> {
         let clause_specs = build_clause_specs(filter);
         let mut matched = Vec::new();
-        let mut materializer = LogMaterializer::new(meta_store, blob_store);
+        let mut materializer = LogMaterializer::new(meta_store, blob_store, cache);
 
         for shard_raw in from_log_id.shard().get()..=to_log_id_inclusive.shard().get() {
             let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
