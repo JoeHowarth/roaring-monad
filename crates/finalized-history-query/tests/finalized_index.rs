@@ -1228,5 +1228,12 @@ fn service_reuses_cached_block_log_blob_across_queries() {
         assert_eq!(first.items, second.items);
         assert_eq!(get_blob_calls.load(Ordering::Relaxed), 1);
         assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
+
+        let metrics = svc.cache_metrics();
+        assert_eq!(metrics.block_log_blobs.misses, 1);
+        assert_eq!(metrics.block_log_blobs.hits, 1);
+        assert_eq!(metrics.block_log_blobs.inserts, 1);
+        assert_eq!(metrics.block_log_blobs.evictions, 0);
+        assert!(metrics.block_log_blobs.bytes_used > 0);
     });
 }

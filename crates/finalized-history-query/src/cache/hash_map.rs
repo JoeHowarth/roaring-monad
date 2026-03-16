@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use bytes::Bytes;
 
-use super::{BytesCache, BytesCacheConfig, TableId};
+use super::{BytesCache, BytesCacheConfig, BytesCacheMetrics, TableCacheMetrics, TableId};
 
 #[derive(Debug)]
 struct CacheEntry {
@@ -16,6 +16,10 @@ struct CacheEntry {
 #[derive(Debug, Default)]
 struct TableState {
     bytes_used: u64,
+    hits: u64,
+    misses: u64,
+    inserts: u64,
+    evictions: u64,
     entries: HashMap<Vec<u8>, CacheEntry>,
 }
 
@@ -68,7 +72,33 @@ impl HashMapBytesCache {
         };
         if let Some(removed) = table_state.entries.remove(&lru_key) {
             table_state.bytes_used = table_state.bytes_used.saturating_sub(removed.weight);
+            table_state.evictions = table_state.evictions.saturating_add(1);
         }
+    }
+
+    pub fn metrics_snapshot(&self) -> BytesCacheMetrics {
+        let guard = self.inner.lock().unwrap();
+        BytesCacheMetrics {
+            block_log_headers: table_metrics(&guard.tables[TableId::BlockLogHeaders.as_index()]),
+            log_directory_buckets: table_metrics(
+                &guard.tables[TableId::LogDirectoryBuckets.as_index()],
+            ),
+            log_directory_sub_buckets: table_metrics(
+                &guard.tables[TableId::LogDirectorySubBuckets.as_index()],
+            ),
+            block_log_blobs: table_metrics(&guard.tables[TableId::BlockLogBlobs.as_index()]),
+            stream_pages: table_metrics(&guard.tables[TableId::StreamPages.as_index()]),
+        }
+    }
+}
+
+fn table_metrics(state: &TableState) -> TableCacheMetrics {
+    TableCacheMetrics {
+        hits: state.hits,
+        misses: state.misses,
+        inserts: state.inserts,
+        evictions: state.evictions,
+        bytes_used: state.bytes_used,
     }
 }
 
@@ -91,7 +121,11 @@ impl BytesCache for HashMapBytesCache {
         let mut guard = self.inner.lock().unwrap();
         let touch = Self::next_touch(&mut guard);
         let table_state = &mut guard.tables[table.as_index()];
-        let entry = table_state.entries.get_mut(key)?;
+        let Some(entry) = table_state.entries.get_mut(key) else {
+            table_state.misses = table_state.misses.saturating_add(1);
+            return None;
+        };
+        table_state.hits = table_state.hits.saturating_add(1);
         entry.last_touch = touch;
         Some(entry.value.clone())
     }
@@ -116,6 +150,7 @@ impl BytesCache for HashMapBytesCache {
         }
 
         table_state.bytes_used = table_state.bytes_used.saturating_add(weight);
+        table_state.inserts = table_state.inserts.saturating_add(1);
         table_state.entries.insert(
             key.to_vec(),
             CacheEntry {
@@ -200,5 +235,30 @@ mod tests {
             cache.get(TableId::LogDirectoryBuckets, b"a"),
             Some(Bytes::from_static(b"bb"))
         );
+    }
+
+    #[test]
+    fn reports_per_table_metrics() {
+        let cache = HashMapBytesCache::new(BytesCacheConfig {
+            block_log_headers: super::super::TableCacheConfig { max_bytes: 3 },
+            ..BytesCacheConfig::disabled()
+        });
+
+        assert_eq!(
+            cache.metrics_snapshot().block_log_headers,
+            TableCacheMetrics::default()
+        );
+
+        assert_eq!(cache.get(TableId::BlockLogHeaders, b"missing"), None);
+        cache.put(TableId::BlockLogHeaders, b"a", Bytes::from_static(b"aa"), 2);
+        let _ = cache.get(TableId::BlockLogHeaders, b"a");
+        cache.put(TableId::BlockLogHeaders, b"b", Bytes::from_static(b"bb"), 2);
+
+        let metrics = cache.metrics_snapshot().block_log_headers;
+        assert_eq!(metrics.hits, 1);
+        assert_eq!(metrics.misses, 1);
+        assert_eq!(metrics.inserts, 2);
+        assert_eq!(metrics.evictions, 1);
+        assert_eq!(metrics.bytes_used, 2);
     }
 }

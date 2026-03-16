@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
-use crate::cache::HashMapBytesCache;
+use crate::cache::{BytesCacheMetrics, HashMapBytesCache};
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
@@ -94,6 +94,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
                 "ok".to_string()
             },
         }
+    }
+
+    pub fn cache_metrics(&self) -> BytesCacheMetrics {
+        self.cache.metrics_snapshot()
     }
 
     pub async fn run_maintenance(&self) -> Result<MaintenanceStats> {

@@ -82,6 +82,36 @@ impl Default for BytesCacheConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TableCacheMetrics {
+    pub hits: u64,
+    pub misses: u64,
+    pub inserts: u64,
+    pub evictions: u64,
+    pub bytes_used: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BytesCacheMetrics {
+    pub block_log_headers: TableCacheMetrics,
+    pub log_directory_buckets: TableCacheMetrics,
+    pub log_directory_sub_buckets: TableCacheMetrics,
+    pub block_log_blobs: TableCacheMetrics,
+    pub stream_pages: TableCacheMetrics,
+}
+
+impl BytesCacheMetrics {
+    pub const fn table(self, table: TableId) -> TableCacheMetrics {
+        match table {
+            TableId::BlockLogHeaders => self.block_log_headers,
+            TableId::LogDirectoryBuckets => self.log_directory_buckets,
+            TableId::LogDirectorySubBuckets => self.log_directory_sub_buckets,
+            TableId::BlockLogBlobs => self.block_log_blobs,
+            TableId::StreamPages => self.stream_pages,
+        }
+    }
+}
+
 pub trait BytesCache: Send + Sync {
     fn is_enabled(&self, table: TableId) -> bool;
 

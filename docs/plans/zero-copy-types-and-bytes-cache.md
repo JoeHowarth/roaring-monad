@@ -367,6 +367,7 @@ This section reflects the current state of the codebase.
 - cache tables have explicit per-table byte budgets
 - `max_bytes = 0` disables a table and bypasses cache lookup/insert work
 - cache eviction is LRU within each enabled table
+- cache metrics are available per table for hits, misses, inserts, evictions, and resident bytes
 - the normal `FinalizedHistoryService` query path uses a service-owned bytes cache
 - immutable read-path cache coverage currently includes:
   - `block_log_headers/<block_num>`
@@ -380,7 +381,6 @@ This section reflects the current state of the codebase.
 
 ### Not Yet Implemented
 
-- cache metrics
 - miss deduplication
 - eager cache population on ingest writes
 - compression or alternate backing allocation inside the cache
