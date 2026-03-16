@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -628,7 +629,15 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         ..IndexConfig::default()
     };
 
-    let svc = FinalizedHistoryService::new(config, meta, blob, args.distributed.writer_epoch);
+    let svc = FinalizedHistoryService::new_reader_writer(
+        IndexConfig {
+            observe_upstream_finalized_block: Arc::new(move || Some(args.range.end_block)),
+            ..config
+        },
+        meta,
+        blob,
+        args.distributed.writer_epoch,
+    );
 
     let started = Instant::now();
     let mut blocks_ingested = 0u64;
@@ -1038,8 +1047,11 @@ async fn connect_service(
         )
     })?;
 
-    Ok(FinalizedHistoryService::new(
-        config,
+    Ok(FinalizedHistoryService::new_reader_writer(
+        IndexConfig {
+            observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
+            ..config
+        },
         meta,
         blob,
         args.writer_epoch,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
@@ -121,8 +123,9 @@ fn matches_topic(topic: Option<[u8; 32]>, clause: &Option<Clause<[u8; 32]>>) -> 
 #[test]
 fn differential_query_matches_naive() {
     block_on(async {
-        let svc = FinalizedHistoryService::new(
+        let svc = FinalizedHistoryService::new_reader_writer(
             Config {
+                observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
                 target_entries_per_chunk: 2,
                 planner_max_or_terms: 10,
                 ..Config::default()

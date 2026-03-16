@@ -124,7 +124,7 @@ mod tests {
                     session_id: [5u8; 16],
                     epoch: 12,
                     indexed_finalized_head: 7,
-                    lease_expires_at_ms: u64::MAX,
+                    lease_valid_through_block: u64::MAX,
                 })
                 .await
                 .expect("write publication state"),

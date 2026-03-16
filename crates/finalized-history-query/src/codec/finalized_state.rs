@@ -3,7 +3,7 @@ use bytes::Bytes;
 use crate::domain::types::{BlockMeta, PublicationState};
 use crate::error::{Error, Result};
 
-const PUBLICATION_STATE_VERSION: u8 = 2;
+const PUBLICATION_STATE_VERSION: u8 = 3;
 
 pub fn encode_publication_state(state: &PublicationState) -> Bytes {
     let mut out = Vec::with_capacity(49);
@@ -12,7 +12,7 @@ pub fn encode_publication_state(state: &PublicationState) -> Bytes {
     out.extend_from_slice(&state.session_id);
     out.extend_from_slice(&state.epoch.to_be_bytes());
     out.extend_from_slice(&state.indexed_finalized_head.to_be_bytes());
-    out.extend_from_slice(&state.lease_expires_at_ms.to_be_bytes());
+    out.extend_from_slice(&state.lease_valid_through_block.to_be_bytes());
     Bytes::from(out)
 }
 
@@ -28,18 +28,18 @@ pub fn decode_publication_state(bytes: &[u8]) -> Result<PublicationState> {
     let mut session_id = [0u8; 16];
     let mut epoch = [0u8; 8];
     let mut indexed_finalized_head = [0u8; 8];
-    let mut lease_expires_at_ms = [0u8; 8];
+    let mut lease_valid_through_block = [0u8; 8];
     owner_id.copy_from_slice(&bytes[1..9]);
     session_id.copy_from_slice(&bytes[9..25]);
     epoch.copy_from_slice(&bytes[25..33]);
     indexed_finalized_head.copy_from_slice(&bytes[33..41]);
-    lease_expires_at_ms.copy_from_slice(&bytes[41..49]);
+    lease_valid_through_block.copy_from_slice(&bytes[41..49]);
     Ok(PublicationState {
         owner_id: u64::from_be_bytes(owner_id),
         session_id,
         epoch: u64::from_be_bytes(epoch),
         indexed_finalized_head: u64::from_be_bytes(indexed_finalized_head),
-        lease_expires_at_ms: u64::from_be_bytes(lease_expires_at_ms),
+        lease_valid_through_block: u64::from_be_bytes(lease_valid_through_block),
     })
 }
 
@@ -97,7 +97,7 @@ mod tests {
             session_id: [7u8; 16],
             epoch: 13,
             indexed_finalized_head: 21,
-            lease_expires_at_ms: 34,
+            lease_valid_through_block: 34,
         };
         assert_eq!(
             decode_publication_state(&encode_publication_state(&publication_state))

@@ -48,9 +48,14 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
 
-        let now_ms = (self.config.now_ms)();
         let prior_epoch = token.epoch;
-        let token = self.authority.authorize(&token, now_ms).await?;
+        let token = self
+            .authority
+            .authorize(
+                &token,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
+            .await?;
         debug_assert_eq!(prior_epoch, token.epoch);
 
         validate_block_sequence(&self.meta_store, blocks, &token).await?;
@@ -133,7 +138,10 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
 
         let publish_token = self
             .authority
-            .authorize(&token, (self.config.now_ms)())
+            .authorize(
+                &token,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
             .await?;
         debug_assert_eq!(token.epoch, publish_token.epoch);
         let next_token = self

@@ -1,6 +1,7 @@
 #![cfg(feature = "distributed-stores")]
 
 use std::process::Command;
+use std::sync::Arc;
 
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
@@ -72,8 +73,9 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     .expect("connect minio")
     .with_retry_policy(1, 10, 50);
 
-    let svc = FinalizedHistoryService::new(
+    let svc = FinalizedHistoryService::new_reader_writer(
         Config {
+            observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
             backend_error_throttle_after: 1,
             backend_error_degraded_after: 2,
             target_entries_per_chunk: 2,

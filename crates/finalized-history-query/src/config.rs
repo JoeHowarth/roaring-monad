@@ -1,3 +1,6 @@
+use std::fmt;
+use std::sync::Arc;
+
 use crate::cache::BytesCacheConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,11 +15,11 @@ pub enum IngestMode {
     SingleWriterFast,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
-    pub now_ms: fn() -> u64,
-    pub publication_lease_duration_ms: u64,
-    pub publication_lease_renew_skew_ms: u64,
+    pub observe_upstream_finalized_block: Arc<dyn Fn() -> Option<u64> + Send + Sync>,
+    pub publication_lease_blocks: u64,
+    pub publication_lease_renew_threshold_blocks: u64,
     pub target_entries_per_chunk: u32,
     pub target_chunk_bytes: usize,
     pub maintenance_seal_seconds: u64,
@@ -34,12 +37,49 @@ pub struct Config {
     pub bytes_cache: BytesCacheConfig,
 }
 
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("observe_upstream_finalized_block", &"<callback>")
+            .field("publication_lease_blocks", &self.publication_lease_blocks)
+            .field(
+                "publication_lease_renew_threshold_blocks",
+                &self.publication_lease_renew_threshold_blocks,
+            )
+            .field("target_entries_per_chunk", &self.target_entries_per_chunk)
+            .field("target_chunk_bytes", &self.target_chunk_bytes)
+            .field("maintenance_seal_seconds", &self.maintenance_seal_seconds)
+            .field("tail_flush_seconds", &self.tail_flush_seconds)
+            .field("planner_max_or_terms", &self.planner_max_or_terms)
+            .field("gc_guardrail_action", &self.gc_guardrail_action)
+            .field("max_orphan_chunk_bytes", &self.max_orphan_chunk_bytes)
+            .field(
+                "max_orphan_manifest_segments",
+                &self.max_orphan_manifest_segments,
+            )
+            .field("max_stale_tail_keys", &self.max_stale_tail_keys)
+            .field(
+                "backend_error_throttle_after",
+                &self.backend_error_throttle_after,
+            )
+            .field(
+                "backend_error_degraded_after",
+                &self.backend_error_degraded_after,
+            )
+            .field("ingest_mode", &self.ingest_mode)
+            .field("assume_empty_streams", &self.assume_empty_streams)
+            .field("stream_append_concurrency", &self.stream_append_concurrency)
+            .field("bytes_cache", &self.bytes_cache)
+            .finish()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
-            now_ms: crate::time::current_time_ms,
-            publication_lease_duration_ms: 30_000,
-            publication_lease_renew_skew_ms: 5_000,
+            observe_upstream_finalized_block: Arc::new(|| None),
+            publication_lease_blocks: 10,
+            publication_lease_renew_threshold_blocks: 2,
             target_entries_per_chunk: 1950,
             target_chunk_bytes: 32 * 1024,
             maintenance_seal_seconds: 600,

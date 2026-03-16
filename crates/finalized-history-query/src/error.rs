@@ -10,6 +10,8 @@ pub enum Error {
     ModeConflict(&'static str),
     #[error("active writer lease is still fresh")]
     LeaseStillFresh,
+    #[error("upstream finalized block observation unavailable")]
+    LeaseObservationUnavailable,
     #[error("lease lost")]
     LeaseLost,
     #[error("immutable artifact conflict")]

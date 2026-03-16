@@ -12,14 +12,15 @@ The current foundation is already in place:
 - `LeaseAuthority` and `SingleWriterAuthority` are both implemented
 - startup cleanup and marker repair run under acquired write authority
 
-The remaining work is mostly about the lease model and operational behavior. The main open items
-are:
+The core lease and role model is now in place:
 
-- how explicitly the system should surface `reader-only` vs `reader+writer` roles
-- moving lease freshness from wall-clock time to upstream-finalized-block validity
-- what takeover paths should exist besides ordinary lease-expiry takeover
-- how deployment guidance should distinguish lease-backed multi-writer mode from fail-closed
-  single-writer mode
+- lease freshness is measured against the observed upstream finalized block
+- `reader-only`, lease-backed `reader+writer`, and fail-closed `single-writer` roles are explicit
+  at the service constructor layer
+- lease-backed writer startup, ingest, maintenance, and GC all fail closed when the upstream
+  finalized-block observation is unavailable
+
+The remaining work is now mostly about operational replacement and deployment guidance.
 
 This document replaces the older overlapping plan set now kept under `docs/plans/superceded/`.
 
@@ -33,7 +34,7 @@ PublicationState {
     session_id: [u8; 16],
     epoch: u64,
     indexed_finalized_head: u64,
-    lease_expires_at_ms: u64,
+    lease_valid_through_block: u64,
 }
 ```
 
@@ -43,16 +44,16 @@ Current semantics:
 - `epoch` is the fencing clock for write-side artifact mutation and cleanup
 - `owner_id` identifies the node
 - `session_id` identifies the process instance
-- `lease_expires_at_ms` gates takeover in lease-backed mode
+- `lease_valid_through_block` gates takeover in lease-backed mode
 
 Readers must treat `publication_state.indexed_finalized_head` as the only visibility watermark.
 
-## Intended End State
+## Implemented End State
 
-The carried-forward lease model should use the upstream finalized block number as the external
-lease clock instead of wall-clock time.
+The lease model now uses the upstream finalized block number as the external lease clock instead
+of wall-clock time.
 
-Target shape:
+Implemented shape:
 
 ```rust
 PublicationState {
@@ -64,7 +65,7 @@ PublicationState {
 }
 ```
 
-Target semantics:
+Implemented semantics:
 
 - `indexed_finalized_head`
   - the only reader-visible publication head
@@ -114,6 +115,11 @@ Writer startup is explicit and authoritative:
 4. derive the next local write position
 
 `startup_plan(...)` is observational only.
+
+`FinalizedHistoryService::new_reader_only(...)` keeps startup observational and never attempts
+ownership. `FinalizedHistoryService::new_reader_writer(...)` is the explicit lease-backed writer
+role. `FinalizedHistoryService::new_single_writer(...)` remains the fail-closed exclusive-writer
+mode.
 
 ### Mutability model
 
@@ -229,21 +235,7 @@ observation is unavailable.
 
 ## Remaining Active Work
 
-### 1. Make node roles explicit in deployment shape
-
-The intended roles are:
-
-- `reader-only`
-  - never attempts ownership
-  - reads `publication_state` and published artifacts only
-- `reader+writer`
-  - may acquire ownership
-  - may ingest finalized blocks
-
-The code already allows these behaviors in practice, but the deployment model should be surfaced
-more explicitly in APIs, constructors, and operator guidance.
-
-### 2. Define administrative takeover and replacement paths
+### 1. Define administrative takeover and replacement paths
 
 Ordinary lease expiry takeover exists.
 
@@ -258,7 +250,7 @@ The system should continue to prefer:
 - healthy primary retention
 - standby readiness without opportunistic ownership theft
 
-### 3. Clarify single-writer vs lease-backed mode guidance
+### 2. Clarify single-writer vs lease-backed mode guidance
 
 `SingleWriterAuthority` is intentionally fail-closed and only safe under exclusive access.
 
@@ -268,7 +260,7 @@ The remaining work is to make deployment guidance unambiguous:
 - when `SingleWriterAuthority` is acceptable
 - what safety properties are deliberately absent in single-writer mode
 
-### 4. Keep publication state out of general caching
+### 3. Keep publication state out of general caching
 
 `publication_state` is mutable and correctness-critical.
 

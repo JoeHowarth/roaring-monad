@@ -18,7 +18,7 @@ use finalized_history_query::domain::keys::{
     stream_page_start_local,
 };
 use finalized_history_query::domain::types::{Block, BlockMeta, Log, PublicationState};
-use finalized_history_query::ingest::authority::lease::{LeaseAuthority, current_time_ms};
+use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -67,7 +67,7 @@ fn seeded_publication_state(
     epoch: u64,
     indexed_finalized_head: u64,
 ) -> PublicationState {
-    seeded_publication_state_with_expiry(
+    seeded_publication_state_with_valid_through(
         owner_id,
         session_id,
         epoch,
@@ -76,19 +76,30 @@ fn seeded_publication_state(
     )
 }
 
-fn seeded_publication_state_with_expiry(
+fn seeded_publication_state_with_valid_through(
     owner_id: u64,
     session_id: [u8; 16],
     epoch: u64,
     indexed_finalized_head: u64,
-    lease_expires_at_ms: u64,
+    lease_valid_through_block: u64,
 ) -> PublicationState {
     PublicationState {
         owner_id,
         session_id,
         epoch,
         indexed_finalized_head,
-        lease_expires_at_ms,
+        lease_valid_through_block,
+    }
+}
+
+fn static_observed_finalized_block() -> Option<u64> {
+    Some(u64::MAX / 4)
+}
+
+fn lease_writer_config() -> Config {
+    Config {
+        observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
+        ..Config::default()
     }
 }
 
@@ -122,17 +133,17 @@ where
 async fn acquire_lease_token<P: PublicationStore + FenceStore + Clone>(
     store: P,
     owner_id: u64,
-    now_ms: u64,
-    lease_duration_ms: u64,
+    observed_upstream_finalized_block: u64,
+    lease_blocks: u64,
 ) -> finalized_history_query::Result<finalized_history_query::WriteToken> {
-    LeaseAuthority::new(store, owner_id, lease_duration_ms, 0)
-        .acquire(now_ms)
+    LeaseAuthority::new(store, owner_id, lease_blocks, 0)
+        .acquire(Some(observed_upstream_finalized_block))
         .await
 }
 
-static CONTROLLED_NOW_MS: AtomicU64 = AtomicU64::new(0);
-fn controlled_now_ms() -> u64 {
-    CONTROLLED_NOW_MS.load(Ordering::Relaxed)
+static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
+fn controlled_observed_finalized_block() -> Option<u64> {
+    Some(CONTROLLED_OBSERVED_FINALIZED_BLOCK.load(Ordering::Relaxed))
 }
 
 #[derive(Clone)]
@@ -234,8 +245,10 @@ impl MetaStore for ExpireBeforePublishMetaStore {
                 .load()
                 .await?
                 .expect("publication state should exist before artifact writes");
-            CONTROLLED_NOW_MS.store(
-                publication_state.lease_expires_at_ms.saturating_add(1),
+            CONTROLLED_OBSERVED_FINALIZED_BLOCK.store(
+                publication_state
+                    .lease_valid_through_block
+                    .saturating_add(1),
                 Ordering::Relaxed,
             );
         }
@@ -279,7 +292,8 @@ impl PublicationStore for ExpireBeforePublishMetaStore {
         next: &PublicationState,
     ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
         if next.indexed_finalized_head > expected.indexed_finalized_head
-            && expected.lease_expires_at_ms < CONTROLLED_NOW_MS.load(Ordering::Relaxed)
+            && expected.lease_valid_through_block
+                < CONTROLLED_OBSERVED_FINALIZED_BLOCK.load(Ordering::Relaxed)
         {
             return Ok(CasOutcome::Failed {
                 current: Some(expected.clone()),
@@ -441,7 +455,11 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let config = lease_writer_config();
+        let expected_lease_valid_through_block = static_observed_finalized_block()
+            .expect("static observed finalized block")
+            .saturating_add(config.publication_lease_blocks);
+        let svc = FinalizedHistoryService::new_reader_writer(config, meta, blob, 1);
         let block = mk_block(
             1,
             [0; 32],
@@ -465,7 +483,10 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert_eq!(publication_state.owner_id, 1);
         assert_eq!(publication_state.epoch, 1);
         assert_eq!(publication_state.indexed_finalized_head, 1);
-        assert!(publication_state.lease_expires_at_ms > 0);
+        assert_eq!(
+            publication_state.lease_valid_through_block,
+            expected_lease_valid_through_block
+        );
         assert!(
             svc.ingest
                 .meta_store
@@ -503,8 +524,8 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
 #[test]
 fn ingest_and_query_with_limits_and_resume() {
     block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             1,
@@ -551,8 +572,8 @@ fn ingest_and_query_with_limits_and_resume() {
 #[test]
 fn query_range_clips_to_published_head() {
     block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             1,
@@ -651,7 +672,7 @@ fn readers_use_only_publication_state() {
         .await
         .expect("seed block meta");
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 11);
+        let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta, blob);
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 3);
         let state = load_finalized_head_state(&svc.ingest.meta_store)
             .await
@@ -662,14 +683,56 @@ fn readers_use_only_publication_state() {
 }
 
 #[test]
+fn reader_only_startup_is_observational_and_ingest_is_rejected() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        assert!(matches!(
+            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 4, 3))
+                .await
+                .expect("create publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        meta.put(
+            &block_meta_key(3),
+            encode_block_meta(&BlockMeta {
+                block_hash: [3; 32],
+                parent_hash: [2; 32],
+                first_log_id: 9,
+                count: 1,
+            }),
+            PutCond::Any,
+            FenceToken(0),
+        )
+        .await
+        .expect("seed block meta");
+
+        let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
+        let plan = svc.startup().await.expect("reader-only startup");
+        let state = meta.load().await.expect("load").expect("publication state");
+        let err = svc
+            .ingest_finalized_block(mk_block(4, [3; 32], vec![mk_log(1, 10, 20, 4, 0, 0)]))
+            .await
+            .expect_err("reader-only ingest should fail");
+
+        assert_eq!(plan.head_state.indexed_finalized_head, 3);
+        assert_eq!(state.owner_id, 11);
+        assert_eq!(state.epoch, 4);
+        assert!(matches!(err, Error::ModeConflict(_)));
+    });
+}
+
+#[test]
 fn ingest_and_query_across_24_bit_log_shard_boundary() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_expiry(1, [1u8; 16], 1, 1, 0))
-                .await
-                .expect("seed publication state"),
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 1, 1, 0,
+            ))
+            .await
+            .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
@@ -686,7 +749,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         .await
         .expect("seed block meta");
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(
             2,
             [1; 32],
@@ -709,9 +772,11 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         let blob = InMemoryBlobStore::default();
         let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_expiry(1, [1u8; 16], 1, 1, 0))
-                .await
-                .expect("seed publication state"),
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 1, 1, 0,
+            ))
+            .await
+            .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
@@ -728,7 +793,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         .await
         .expect("seed block meta");
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         let block = mk_block(
             2,
             [1; 32],
@@ -790,9 +855,11 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_expiry(1, [1u8; 16], 1, 1, 0))
-                .await
-                .expect("seed publication state"),
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 1, 1, 0,
+            ))
+            .await
+            .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
@@ -809,7 +876,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         .await
         .expect("seed block meta");
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(
             2,
             [1; 32],
@@ -836,8 +903,8 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
 #[test]
 fn service_startup_bootstraps_publication_ownership() {
     block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             5,
@@ -877,14 +944,17 @@ fn single_writer_service_ingests_and_publishes_reader_visible_head() {
 }
 
 #[test]
-fn service_startup_uses_configured_lease_duration() {
+fn service_startup_uses_configured_lease_blocks() {
     block_on(async {
+        let observed_upstream_finalized_block = 41;
         let config = Config {
-            publication_lease_duration_ms: 1_000,
+            observe_upstream_finalized_block: Arc::new(move || {
+                Some(observed_upstream_finalized_block)
+            }),
+            publication_lease_blocks: 7,
             ..Config::default()
         };
-        let before = current_time_ms();
-        let svc = FinalizedHistoryService::new(
+        let svc = FinalizedHistoryService::new_reader_writer(
             config,
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
@@ -892,7 +962,6 @@ fn service_startup_uses_configured_lease_duration() {
         );
 
         svc.startup().await.expect("startup");
-        let after = current_time_ms();
         let publication_state = svc
             .ingest
             .meta_store
@@ -901,16 +970,37 @@ fn service_startup_uses_configured_lease_duration() {
             .expect("load publication state")
             .expect("publication state");
 
-        assert!(publication_state.lease_expires_at_ms >= before + 1_000);
-        assert!(publication_state.lease_expires_at_ms <= after + 1_000);
+        assert_eq!(
+            publication_state.lease_valid_through_block,
+            observed_upstream_finalized_block + 7
+        );
+    });
+}
+
+#[test]
+fn lease_writer_startup_fails_closed_without_observed_finalized_block() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        let err = svc
+            .startup()
+            .await
+            .expect_err("missing observation should fail closed");
+
+        assert!(matches!(err, Error::LeaseObservationUnavailable));
     });
 }
 
 #[test]
 fn service_can_publish_a_contiguous_batch() {
     block_on(async {
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             InMemoryMetaStore::default(),
             InMemoryBlobStore::default(),
             1,
@@ -941,13 +1031,15 @@ fn ingest_uses_publication_epoch_for_fenced_writes() {
         let meta = InMemoryMetaStore::with_min_epoch(5);
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_expiry(1, [1u8; 16], 5, 0, 0))
-                .await
-                .expect("seed publication state"),
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 5, 0, 0,
+            ))
+            .await
+            .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.startup().await.expect("startup");
         svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
             .await
@@ -961,9 +1053,11 @@ fn startup_cleanup_uses_publication_epoch_for_fenced_deletes() {
         let meta = InMemoryMetaStore::with_min_epoch(5);
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_expiry(1, [1u8; 16], 5, 0, 0))
-                .await
-                .expect("seed publication state"),
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 5, 0, 0,
+            ))
+            .await
+            .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
@@ -980,7 +1074,7 @@ fn startup_cleanup_uses_publication_epoch_for_fenced_deletes() {
         .await
         .expect("seed unpublished block meta");
 
-        let svc = FinalizedHistoryService::new(Config::default(), meta, blob, 1);
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.startup()
             .await
             .expect("startup cleanup should use publication epoch as fence token");
@@ -1001,16 +1095,16 @@ fn takeover_should_fence_stale_writer_before_artifact_writes() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
-        let engine = IngestEngine::new(Config::default(), authority, meta.clone(), blob);
+        let engine = IngestEngine::new(lease_writer_config(), authority, meta.clone(), blob);
 
         let stale_lease = engine
             .authority
-            .acquire(100)
+            .acquire(Some(100))
             .await
             .expect("writer 1 acquires publication");
         let takeover = LeaseAuthority::new(meta.clone(), 2, 50, 0);
         let _takeover_lease = takeover
-            .acquire(151)
+            .acquire(Some(151))
             .await
             .expect("writer 2 takes over publication");
 
@@ -1091,8 +1185,8 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
             .await
             .expect("seed unpublished block meta");
 
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             FailDeleteOnceMetaStore {
                 inner,
                 failed: Arc::new(AtomicBool::new(false)),
@@ -1116,12 +1210,12 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
 #[test]
 fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
     block_on(async {
-        CONTROLLED_NOW_MS.store(1_000, Ordering::Relaxed);
+        CONTROLLED_OBSERVED_FINALIZED_BLOCK.store(1_000, Ordering::Relaxed);
 
         let config = Config {
-            now_ms: controlled_now_ms,
-            publication_lease_duration_ms: 50,
-            publication_lease_renew_skew_ms: 0,
+            observe_upstream_finalized_block: Arc::new(controlled_observed_finalized_block),
+            publication_lease_blocks: 50,
+            publication_lease_renew_threshold_blocks: 0,
             ..Config::default()
         };
         let meta = ExpireBeforePublishMetaStore {
@@ -1134,7 +1228,7 @@ fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
 
         let lease = engine
             .authority
-            .acquire(controlled_now_ms())
+            .acquire(controlled_observed_finalized_block())
             .await
             .expect("bootstrap");
 
@@ -1155,8 +1249,8 @@ fn service_clears_cached_writer_after_publication_conflict() {
             inner: Arc::new(InMemoryMetaStore::default()),
             conflicted: Arc::new(AtomicBool::new(false)),
         };
-        let svc = FinalizedHistoryService::new(
-            Config::default(),
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
             meta.clone(),
             InMemoryBlobStore::default(),
             1,
@@ -1199,7 +1293,7 @@ fn service_reuses_cached_block_log_blob_across_queries() {
             get_blob_calls: get_blob_calls.clone(),
             read_range_calls: read_range_calls.clone(),
         };
-        let svc = FinalizedHistoryService::new(
+        let svc = FinalizedHistoryService::new_reader_writer(
             Config {
                 bytes_cache: BytesCacheConfig {
                     block_log_blobs: TableCacheConfig {
@@ -1207,7 +1301,7 @@ fn service_reuses_cached_block_log_blob_across_queries() {
                     },
                     ..BytesCacheConfig::disabled()
                 },
-                ..Config::default()
+                ..lease_writer_config()
             },
             meta,
             blob,

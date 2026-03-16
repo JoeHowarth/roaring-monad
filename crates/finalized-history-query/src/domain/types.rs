@@ -64,7 +64,7 @@ pub struct PublicationState {
     pub session_id: SessionId,
     pub epoch: u64,
     pub indexed_finalized_head: u64,
-    pub lease_expires_at_ms: u64,
+    pub lease_valid_through_block: u64,
 }
 
 #[derive(Debug, Clone)]

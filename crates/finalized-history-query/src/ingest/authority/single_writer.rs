@@ -31,14 +31,14 @@ impl<P: MetaStore + PublicationStore + FenceStore> SingleWriterAuthority<P> {
             session_id: SINGLE_WRITER_SESSION_ID,
             epoch,
             indexed_finalized_head,
-            lease_expires_at_ms: u64::MAX,
+            lease_valid_through_block: u64::MAX,
         }
     }
 
     fn is_sentinel_state(state: &PublicationState) -> bool {
         state.owner_id == SINGLE_WRITER_OWNER_ID
             && state.session_id == SINGLE_WRITER_SESSION_ID
-            && state.lease_expires_at_ms == u64::MAX
+            && state.lease_valid_through_block == u64::MAX
     }
 
     fn mode_conflict() -> Error {
@@ -47,7 +47,11 @@ impl<P: MetaStore + PublicationStore + FenceStore> SingleWriterAuthority<P> {
 }
 
 impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWriterAuthority<P> {
-    async fn authorize(&self, current: &WriteToken, _now_ms: u64) -> Result<WriteToken> {
+    async fn authorize(
+        &self,
+        current: &WriteToken,
+        _observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<WriteToken> {
         let guard = self.token.lock().await;
         match *guard {
             Some(token) if token == *current => Ok(token),
@@ -105,7 +109,7 @@ impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWrit
         FenceToken(token.epoch)
     }
 
-    async fn acquire(&self, _now_ms: u64) -> Result<WriteToken> {
+    async fn acquire(&self, _observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken> {
         loop {
             let current_fence = self.publication_store.current_fence().await?.max(1);
             match self.publication_store.load().await? {
@@ -190,7 +194,7 @@ mod tests {
             let store = InMemoryMetaStore::default();
             let authority = SingleWriterAuthority::new(store.clone());
 
-            let token = authority.acquire(0).await.expect("acquire");
+            let token = authority.acquire(None).await.expect("acquire");
 
             assert_eq!(token.epoch, 1);
             assert_eq!(token.indexed_finalized_head, 0);
@@ -202,11 +206,11 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = SingleWriterAuthority::new(store.clone());
-            let first = authority.acquire(0).await.expect("first acquire");
+            let first = authority.acquire(None).await.expect("first acquire");
             let _ = authority.publish(&first, 7).await.expect("publish");
             let authority = SingleWriterAuthority::new(store);
 
-            let token = authority.acquire(0).await.expect("reacquire");
+            let token = authority.acquire(None).await.expect("reacquire");
 
             assert_eq!(token.indexed_finalized_head, 7);
         });
@@ -217,11 +221,11 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let lease = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-            let _ = lease.acquire(100).await.expect("lease acquire");
+            let _ = lease.acquire(Some(100)).await.expect("lease acquire");
             let authority = SingleWriterAuthority::new(store);
 
             let err = authority
-                .acquire(0)
+                .acquire(None)
                 .await
                 .expect_err("single writer should reject lease-managed state");
 
@@ -234,9 +238,9 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-            let _ = first.acquire(100).await.expect("first lease acquire");
+            let _ = first.acquire(Some(100)).await.expect("first lease acquire");
             let second = LeaseAuthority::with_session(store.clone(), 7, [2u8; 16], 50, 0);
-            let second = second.acquire(151).await.expect("takeover");
+            let second = second.acquire(Some(151)).await.expect("takeover");
             let state = store.load().await.expect("load").expect("state");
             store
                 .compare_and_set(
@@ -246,14 +250,17 @@ mod tests {
                         session_id: *b"single-writer-v1",
                         epoch: 1,
                         indexed_finalized_head: second.indexed_finalized_head,
-                        lease_expires_at_ms: u64::MAX,
+                        lease_valid_through_block: u64::MAX,
                     },
                 )
                 .await
                 .expect("seed sentinel");
             let authority = SingleWriterAuthority::new(store);
 
-            let token = authority.acquire(0).await.expect("single writer acquire");
+            let token = authority
+                .acquire(None)
+                .await
+                .expect("single writer acquire");
 
             assert_eq!(token.epoch, 2);
         });
@@ -264,7 +271,7 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = SingleWriterAuthority::new(store);
-            let token = authority.acquire(0).await.expect("acquire");
+            let token = authority.acquire(None).await.expect("acquire");
             let next = authority.publish(&token, 3).await.expect("publish");
 
             assert_eq!(next.indexed_finalized_head, 3);
@@ -281,7 +288,7 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = SingleWriterAuthority::new(store);
-            let token = authority.acquire(0).await.expect("acquire");
+            let token = authority.acquire(None).await.expect("acquire");
 
             assert_eq!(authority.fence(&token).0, token.epoch);
         });
@@ -292,7 +299,7 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = SingleWriterAuthority::new(store.clone());
-            let token = authority.acquire(0).await.expect("acquire");
+            let token = authority.acquire(None).await.expect("acquire");
             let _ = authority.publish(&token, 5).await.expect("publish");
 
             let head = load_finalized_head_state(&store)

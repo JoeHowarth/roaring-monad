@@ -230,8 +230,11 @@ fn mk_service_with_writer(
     injector: Arc<FaultInjector>,
     writer_id: u64,
 ) -> FinalizedHistoryService<LeaseAuthority<FaultyMetaStore>, FaultyMetaStore, FaultyBlobStore> {
-    FinalizedHistoryService::new(
-        Config::default(),
+    FinalizedHistoryService::new_reader_writer(
+        Config {
+            observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
+            ..Config::default()
+        },
         FaultyMetaStore {
             inner: meta,
             injector: injector.clone(),
@@ -402,7 +405,7 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
                 session_id: [1u8; 16],
                 epoch: 1,
                 indexed_finalized_head: 1,
-                lease_expires_at_ms: 0,
+                lease_valid_through_block: 0,
             })
             .await
             .expect("seed publication state"),
@@ -470,7 +473,7 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
             .expect("load publication state")
             .expect("publication state present");
         let expired_state = PublicationState {
-            lease_expires_at_ms: 0,
+            lease_valid_through_block: 0,
             ..current_state.clone()
         };
         assert!(matches!(

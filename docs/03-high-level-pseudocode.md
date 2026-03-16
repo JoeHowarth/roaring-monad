@@ -82,7 +82,7 @@ meta_store:
         session_id,
         epoch,
         indexed_finalized_head,
-        lease_expires_at_ms,
+        lease_valid_through_block,
     }
     "block_meta/<block_num>" -> BlockMeta
     "block_hash_to_num/<block_hash>" -> block_num
@@ -245,11 +245,14 @@ Queries without at least one indexed address/topic clause are rejected at the bo
 ## Ingest Flow
 
 ```python
-async def startup(writer_id):
-    lease = acquire_publication(writer_id)
+async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
+    lease = acquire_publication(owner_id, observed_upstream_finalized_block)
     cleanup_unpublished_suffix(lease.indexed_finalized_head)
     repair_open_stream_page_markers(derive_next_log_id_from_block_meta(lease.indexed_finalized_head))
     return lease
+
+async def startup_reader_only():
+    return startup_plan()
 
 async def ingest_finalized_blocks(blocks, lease):
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)

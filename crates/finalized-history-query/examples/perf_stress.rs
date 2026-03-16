@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use finalized_history_query::api::{
@@ -15,6 +16,10 @@ use finalized_history_query::store::publication::{FenceStore, PublicationStore};
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
 use finalized_history_query::{Clause, LogFilter, WriteAuthority};
 use futures::executor::block_on;
+
+fn static_observed_finalized_block() -> Option<u64> {
+    Some(u64::MAX / 4)
+}
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -220,6 +225,7 @@ fn main() {
 
     block_on(async move {
         let config = Config {
+            observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
             target_entries_per_chunk: chunk_size,
             planner_max_or_terms: 512,
             ..Config::default()
@@ -233,7 +239,7 @@ fn main() {
             fs::create_dir_all(&root).expect("create fs root");
 
             if restart_before_query {
-                let svc = FinalizedHistoryService::new(
+                let svc = FinalizedHistoryService::new_reader_writer(
                     config.clone(),
                     FsMetaStore::new(&root, 1).expect("fs meta"),
                     FsBlobStore::new(&root).expect("fs blob"),
@@ -244,17 +250,16 @@ fn main() {
                 let ingest_elapsed = ingest_start.elapsed();
                 drop(svc);
 
-                let query_svc = FinalizedHistoryService::new(
-                    config,
+                let query_svc = FinalizedHistoryService::new_reader_only(
+                    Config::default(),
                     FsMetaStore::new(&root, 1).expect("fs meta reopen"),
                     FsBlobStore::new(&root).expect("fs blob reopen"),
-                    1,
                 );
                 let (latencies, total_returned, query_elapsed) =
                     run_queries(&query_svc, blocks, queries, max_results).await;
                 (ingest_elapsed, latencies, total_returned, query_elapsed)
             } else {
-                let svc = FinalizedHistoryService::new(
+                let svc = FinalizedHistoryService::new_reader_writer(
                     config,
                     FsMetaStore::new(&root, 1).expect("fs meta"),
                     FsBlobStore::new(&root).expect("fs blob"),
@@ -263,7 +268,7 @@ fn main() {
                 run_stress(&svc, blocks, logs_per_block, queries, max_results).await
             }
         } else {
-            let svc = FinalizedHistoryService::new(
+            let svc = FinalizedHistoryService::new_reader_writer(
                 config,
                 InMemoryMetaStore::default(),
                 InMemoryBlobStore::default(),

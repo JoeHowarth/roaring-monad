@@ -7,7 +7,7 @@ use crate::ingest::authority::{WriteAuthority, WriteToken};
 use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use crate::store::traits::FenceToken;
 
-pub const DEFAULT_LEASE_DURATION_MS: u64 = 30_000;
+pub const DEFAULT_LEASE_BLOCKS: u64 = 10;
 
 static NEXT_SESSION_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -16,8 +16,8 @@ pub struct LeaseAuthority<P> {
     publication_store: P,
     owner_id: u64,
     session_id: SessionId,
-    lease_duration_ms: u64,
-    renew_skew_ms: u64,
+    lease_blocks: u64,
+    renew_threshold_blocks: u64,
     lease: futures::lock::Mutex<Option<PublicationLease>>,
 }
 
@@ -25,15 +25,15 @@ impl<P> LeaseAuthority<P> {
     pub fn new(
         publication_store: P,
         owner_id: u64,
-        lease_duration_ms: u64,
-        renew_skew_ms: u64,
+        lease_blocks: u64,
+        renew_threshold_blocks: u64,
     ) -> Self {
         Self::with_session(
             publication_store,
             owner_id,
             new_session_id(owner_id),
-            lease_duration_ms,
-            renew_skew_ms,
+            lease_blocks,
+            renew_threshold_blocks,
         )
     }
 
@@ -41,22 +41,35 @@ impl<P> LeaseAuthority<P> {
         publication_store: P,
         owner_id: u64,
         session_id: SessionId,
-        lease_duration_ms: u64,
-        renew_skew_ms: u64,
+        lease_blocks: u64,
+        renew_threshold_blocks: u64,
     ) -> Self {
+        assert!(
+            lease_blocks > 0,
+            "publication_lease_blocks must be at least 1"
+        );
+        assert!(
+            renew_threshold_blocks < lease_blocks,
+            "publication_lease_renew_threshold_blocks must be less than publication_lease_blocks"
+        );
         Self {
             publication_store,
             owner_id,
             session_id,
-            lease_duration_ms,
-            renew_skew_ms,
+            lease_blocks,
+            renew_threshold_blocks,
             lease: futures::lock::Mutex::new(None),
         }
     }
 }
 
 impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
-    async fn acquire_publication_with_session(&self, now_ms: u64) -> Result<PublicationLease> {
+    async fn acquire_publication_with_session(
+        &self,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<PublicationLease> {
+        let observed_upstream_finalized_block =
+            require_observed_finalized_block(observed_upstream_finalized_block)?;
         let mut current = match self.publication_store.load().await? {
             Some(state) => state,
             None => {
@@ -65,7 +78,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     session_id: self.session_id,
                     epoch: 1,
                     indexed_finalized_head: 0,
-                    lease_expires_at_ms: now_ms.saturating_add(self.lease_duration_ms),
+                    lease_valid_through_block: observed_upstream_finalized_block
+                        .saturating_add(self.lease_blocks),
                 };
                 match self.publication_store.create_if_absent(&initial).await? {
                     CasOutcome::Applied(state) => {
@@ -89,9 +103,10 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     session_id: self.session_id,
                     epoch: current.epoch,
                     indexed_finalized_head: current.indexed_finalized_head,
-                    lease_expires_at_ms: now_ms.saturating_add(self.lease_duration_ms),
+                    lease_valid_through_block: observed_upstream_finalized_block
+                        .saturating_add(self.lease_blocks),
                 };
-                if next.lease_expires_at_ms <= current.lease_expires_at_ms {
+                if next.lease_valid_through_block <= current.lease_valid_through_block {
                     return Ok(current.into());
                 }
 
@@ -113,7 +128,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 continue;
             }
 
-            if current.lease_expires_at_ms > now_ms {
+            if observed_upstream_finalized_block <= current.lease_valid_through_block {
                 return Err(Error::LeaseStillFresh);
             }
 
@@ -122,7 +137,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 session_id: self.session_id,
                 epoch: current.epoch.saturating_add(1),
                 indexed_finalized_head: current.indexed_finalized_head,
-                lease_expires_at_ms: now_ms.saturating_add(self.lease_duration_ms),
+                lease_valid_through_block: observed_upstream_finalized_block
+                    .saturating_add(self.lease_blocks),
             };
 
             match self
@@ -147,9 +163,14 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
     async fn renew_if_needed(
         &self,
         lease: PublicationLease,
-        now_ms: u64,
+        observed_upstream_finalized_block: Option<u64>,
     ) -> Result<PublicationLease> {
-        if !lease.needs_renewal(now_ms, self.renew_skew_ms) {
+        let observed_upstream_finalized_block =
+            require_observed_finalized_block(observed_upstream_finalized_block)?;
+        if !lease.needs_renewal(
+            observed_upstream_finalized_block,
+            self.renew_threshold_blocks,
+        ) {
             return Ok(lease);
         }
 
@@ -171,9 +192,10 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 session_id: current.session_id,
                 epoch: current.epoch,
                 indexed_finalized_head: current.indexed_finalized_head,
-                lease_expires_at_ms: now_ms.saturating_add(self.lease_duration_ms),
+                lease_valid_through_block: observed_upstream_finalized_block
+                    .saturating_add(self.lease_blocks),
             };
-            if next.lease_expires_at_ms <= current.lease_expires_at_ms {
+            if next.lease_valid_through_block <= current.lease_valid_through_block {
                 return Ok(current.into());
             }
 
@@ -193,7 +215,11 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
 }
 
 impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
-    async fn authorize(&self, current: &WriteToken, now_ms: u64) -> Result<WriteToken> {
+    async fn authorize(
+        &self,
+        current: &WriteToken,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<WriteToken> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
         if lease.as_token().epoch != current.epoch
@@ -202,7 +228,9 @@ impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
             return Err(Error::PublicationConflict);
         }
 
-        let renewed = self.renew_if_needed(lease, now_ms).await?;
+        let renewed = self
+            .renew_if_needed(lease, observed_upstream_finalized_block)
+            .await?;
         *guard = Some(renewed);
         Ok(renewed.as_token())
     }
@@ -222,7 +250,7 @@ impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
             session_id: lease.session_id,
             epoch: lease.epoch,
             indexed_finalized_head: new_head,
-            lease_expires_at_ms: lease.lease_expires_at_ms,
+            lease_valid_through_block: lease.lease_valid_through_block,
         };
         let next_state = next_lease.as_state();
         match self
@@ -253,8 +281,10 @@ impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
         FenceToken(token.epoch)
     }
 
-    async fn acquire(&self, now_ms: u64) -> Result<WriteToken> {
-        let lease = self.acquire_publication_with_session(now_ms).await?;
+    async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken> {
+        let lease = self
+            .acquire_publication_with_session(observed_upstream_finalized_block)
+            .await?;
         *self.lease.lock().await = Some(lease);
         Ok(lease.as_token())
     }
@@ -266,7 +296,7 @@ struct PublicationLease {
     session_id: SessionId,
     epoch: u64,
     indexed_finalized_head: u64,
-    lease_expires_at_ms: u64,
+    lease_valid_through_block: u64,
 }
 
 impl From<PublicationState> for PublicationLease {
@@ -276,7 +306,7 @@ impl From<PublicationState> for PublicationLease {
             session_id: value.session_id,
             epoch: value.epoch,
             indexed_finalized_head: value.indexed_finalized_head,
-            lease_expires_at_ms: value.lease_expires_at_ms,
+            lease_valid_through_block: value.lease_valid_through_block,
         }
     }
 }
@@ -288,7 +318,7 @@ impl PublicationLease {
             session_id: self.session_id,
             epoch: self.epoch,
             indexed_finalized_head: self.indexed_finalized_head,
-            lease_expires_at_ms: self.lease_expires_at_ms,
+            lease_valid_through_block: self.lease_valid_through_block,
         }
     }
 
@@ -299,15 +329,19 @@ impl PublicationLease {
         }
     }
 
-    fn needs_renewal(self, now_ms: u64, renew_skew_ms: u64) -> bool {
-        self.lease_expires_at_ms
-            .saturating_sub(now_ms)
-            .le(&renew_skew_ms)
+    fn needs_renewal(
+        self,
+        observed_upstream_finalized_block: u64,
+        renew_threshold_blocks: u64,
+    ) -> bool {
+        self.lease_valid_through_block
+            .saturating_sub(observed_upstream_finalized_block)
+            .le(&renew_threshold_blocks)
     }
 }
 
-pub fn current_time_ms() -> u64 {
-    crate::time::current_time_ms()
+fn require_observed_finalized_block(observed_upstream_finalized_block: Option<u64>) -> Result<u64> {
+    observed_upstream_finalized_block.ok_or(Error::LeaseObservationUnavailable)
 }
 
 pub fn new_session_id(owner_id: u64) -> SessionId {
@@ -332,7 +366,7 @@ mod tests {
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
 
-    use super::{LeaseAuthority, current_time_ms};
+    use super::LeaseAuthority;
 
     struct BootstrapRaceStore {
         state: Mutex<Option<PublicationState>>,
@@ -403,11 +437,14 @@ mod tests {
                 session_id: [9u8; 16],
                 epoch: 1,
                 indexed_finalized_head: 0,
-                lease_expires_at_ms: 500,
+                lease_valid_through_block: 500,
             });
             let authority = LeaseAuthority::with_session(store, 7, [7u8; 16], 100, 0);
 
-            let lease = authority.acquire(1_000).await.expect("acquire publication");
+            let lease = authority
+                .acquire(Some(1_000))
+                .await
+                .expect("acquire publication");
 
             assert_eq!(lease.epoch, 2);
             assert_eq!(lease.indexed_finalized_head, 0);
@@ -421,9 +458,12 @@ mod tests {
             let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
             let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
 
-            let _ = first.acquire(100).await.expect("bootstrap publication");
+            let _ = first
+                .acquire(Some(100))
+                .await
+                .expect("bootstrap publication");
             let err = second
-                .acquire(120)
+                .acquire(Some(120))
                 .await
                 .expect_err("fresh foreign lease should reject takeover");
 
@@ -438,9 +478,12 @@ mod tests {
             let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
             let second = LeaseAuthority::with_session(store, 7, [2u8; 16], 50, 0);
 
-            let first_token = first.acquire(100).await.expect("first acquire publication");
+            let first_token = first
+                .acquire(Some(100))
+                .await
+                .expect("first acquire publication");
             let second_token = second
-                .acquire(151)
+                .acquire(Some(151))
                 .await
                 .expect("same owner restart after expiry");
 
@@ -453,12 +496,12 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 10);
-            let token = authority.acquire(100).await.expect("acquire");
+            let token = authority.acquire(Some(100)).await.expect("acquire");
             let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 10);
-            let _ = takeover.acquire(151).await.expect("takeover");
+            let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
             let err = authority
-                .authorize(&token, 151)
+                .authorize(&token, Some(151))
                 .await
                 .expect_err("authorize should observe takeover");
 
@@ -471,9 +514,9 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-            let token = authority.acquire(100).await.expect("acquire");
+            let token = authority.acquire(Some(100)).await.expect("acquire");
             let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
-            let _ = takeover.acquire(151).await.expect("takeover");
+            let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
             let err = authority
                 .publish(&token, 1)
@@ -489,7 +532,7 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-            let token = authority.acquire(100).await.expect("acquire");
+            let token = authority.acquire(Some(100)).await.expect("acquire");
             let current = store.load().await.expect("load").expect("state");
             let next = PublicationState {
                 indexed_finalized_head: 9,
@@ -510,7 +553,17 @@ mod tests {
     }
 
     #[test]
-    fn current_time_is_nonzero() {
-        assert!(current_time_ms() > 0);
+    fn acquire_fails_closed_without_observed_finalized_block() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+
+            let err = authority
+                .acquire(None)
+                .await
+                .expect_err("missing observation should fail closed");
+
+            assert!(matches!(err, Error::LeaseObservationUnavailable));
+        });
     }
 }

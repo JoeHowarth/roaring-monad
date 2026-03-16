@@ -603,7 +603,7 @@ mod tests {
             session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 0,
-            lease_expires_at_ms: u64::MAX,
+            lease_valid_through_block: u64::MAX,
         };
 
         let handles = (0..2)
@@ -637,7 +637,7 @@ mod tests {
             session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 0,
-            lease_expires_at_ms: u64::MAX,
+            lease_valid_through_block: u64::MAX,
         };
         block_on(store.create_if_absent(&initial)).expect("seed publication state");
 
@@ -646,14 +646,14 @@ mod tests {
             session_id: [1u8; 16],
             epoch: 1,
             indexed_finalized_head: 1,
-            lease_expires_at_ms: u64::MAX,
+            lease_valid_through_block: u64::MAX,
         };
         let next_b = PublicationState {
             owner_id: 2,
             session_id: [2u8; 16],
             epoch: 2,
             indexed_finalized_head: 0,
-            lease_expires_at_ms: u64::MAX,
+            lease_valid_through_block: u64::MAX,
         };
 
         let store_a = Arc::clone(&store);

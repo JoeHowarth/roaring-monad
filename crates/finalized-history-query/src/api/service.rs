@@ -9,13 +9,15 @@ use crate::core::runtime::RuntimeState;
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::{Error, Result};
 use crate::gc::worker::{GcStats, GcWorker};
-use crate::ingest::authority::{LeaseAuthority, SingleWriterAuthority, WriteAuthority, WriteToken};
+use crate::ingest::authority::{
+    LeaseAuthority, ReadOnlyAuthority, SingleWriterAuthority, WriteAuthority, WriteToken,
+};
 use crate::ingest::engine::{IngestEngine, MaintenanceStats};
 use crate::ingest::open_pages::repair_open_stream_page_markers;
 use crate::ingest::recovery::cleanup_unpublished_suffix;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
-use crate::recovery::startup::{RecoveryPlan, build_recovery_plan};
+use crate::recovery::startup::{RecoveryPlan, build_recovery_plan, startup_plan};
 use crate::store::publication::{FenceStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -25,13 +27,33 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     cache: HashMapBytesCache,
     config: Config,
     state: Arc<RuntimeState>,
+    role: ServiceRole,
     writer: Arc<futures::lock::Mutex<Option<WriteToken>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceRole {
+    ReaderOnly,
+    ReaderWriter,
+    SingleWriter,
+}
+
+impl ServiceRole {
+    fn allows_writes(self) -> bool {
+        !matches!(self, Self::ReaderOnly)
+    }
 }
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     FinalizedHistoryService<A, M, B>
 {
-    pub fn with_authority(config: Config, meta_store: M, blob_store: B, authority: A) -> Self {
+    pub(crate) fn with_authority(
+        config: Config,
+        meta_store: M,
+        blob_store: B,
+        authority: A,
+        role: ServiceRole,
+    ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
         let cache = HashMapBytesCache::new(config.bytes_cache);
         let ingest = IngestEngine::new(config.clone(), authority, meta_store, blob_store);
@@ -41,6 +63,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             cache,
             config,
             state: Arc::new(RuntimeState::default()),
+            role,
             writer: Arc::new(futures::lock::Mutex::new(None)),
         }
     }
@@ -62,6 +85,12 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     }
 
     pub async fn startup(&self) -> Result<RecoveryPlan> {
+        if !self.role.allows_writes() {
+            let result = startup_plan(&self.ingest.meta_store, &self.ingest.blob_store, 0).await;
+            self.update_backend_state(&result);
+            return result;
+        }
+
         let mut writer = self.writer.lock().await;
         let result = self.startup_locked(&mut writer).await;
         self.update_backend_state(&result);
@@ -175,6 +204,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
+        debug_assert!(self.role.allows_writes());
         if let Some(token) = *writer {
             return self.recovery_plan_for_token(token).await;
         }
@@ -182,7 +212,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         let token = self
             .ingest
             .authority
-            .acquire((self.config.now_ms)())
+            .acquire(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
         let fence = self.ingest.authority.fence(&token);
         let _cleaned = cleanup_unpublished_suffix(
@@ -214,6 +244,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
+        if !self.role.allows_writes() {
+            return Err(reader_only_mode_error());
+        }
+
         let mut writer = self.writer.lock().await;
         if writer.is_none() {
             let _ = self.startup_locked(&mut writer).await?;
@@ -238,6 +272,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
+        if !self.role.allows_writes() {
+            return Err(reader_only_mode_error());
+        }
+
         let mut writer = self.writer.lock().await;
         if writer.is_none() {
             let _ = self.startup_locked(&mut writer).await?;
@@ -247,7 +285,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         let result = self
             .ingest
             .authority
-            .authorize(&token, (self.config.now_ms)())
+            .authorize(
+                &token,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
             .await;
         let token = match result {
             Ok(token) => token,
@@ -275,6 +316,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
+        if !self.role.allows_writes() {
+            return Err(reader_only_mode_error());
+        }
+
         let mut writer = self.writer.lock().await;
         if writer.is_none() {
             let _ = self.startup_locked(&mut writer).await?;
@@ -284,7 +329,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         let result = self
             .ingest
             .authority
-            .authorize(&token, (self.config.now_ms)())
+            .authorize(
+                &token,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
             .await;
         let token = match result {
             Ok(token) => token,
@@ -313,6 +361,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
+        if !self.role.allows_writes() {
+            return Err(reader_only_mode_error());
+        }
+
         let mut writer = self.writer.lock().await;
         if writer.is_none() {
             let _ = self.startup_locked(&mut writer).await?;
@@ -322,7 +374,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         let result = self
             .ingest
             .authority
-            .authorize(&token, (self.config.now_ms)())
+            .authorize(
+                &token,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
             .await;
         let token = match result {
             Ok(token) => token,
@@ -366,23 +421,49 @@ fn should_clear_writer(error: &Error) -> bool {
     )
 }
 
+fn reader_only_mode_error() -> Error {
+    Error::ModeConflict("reader-only service cannot acquire write authority")
+}
+
 impl<M, B> FinalizedHistoryService<LeaseAuthority<M>, M, B>
 where
     M: MetaStore + PublicationStore + FenceStore + Clone,
     B: BlobStore,
 {
-    pub fn new(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
-        Self::new_with_lease(config, meta_store, blob_store, writer_id)
+    pub fn new(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
+        Self::new_reader_writer(config, meta_store, blob_store, owner_id)
     }
 
-    pub fn new_with_lease(config: Config, meta_store: M, blob_store: B, writer_id: u64) -> Self {
+    pub fn new_reader_writer(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
         let authority = LeaseAuthority::new(
             meta_store.clone(),
-            writer_id,
-            config.publication_lease_duration_ms,
-            config.publication_lease_renew_skew_ms,
+            owner_id,
+            config.publication_lease_blocks,
+            config.publication_lease_renew_threshold_blocks,
         );
-        Self::with_authority(config, meta_store, blob_store, authority)
+        Self::with_authority(
+            config,
+            meta_store,
+            blob_store,
+            authority,
+            ServiceRole::ReaderWriter,
+        )
+    }
+}
+
+impl<M, B> FinalizedHistoryService<ReadOnlyAuthority, M, B>
+where
+    M: MetaStore + PublicationStore + Clone,
+    B: BlobStore,
+{
+    pub fn new_reader_only(config: Config, meta_store: M, blob_store: B) -> Self {
+        Self::with_authority(
+            config,
+            meta_store,
+            blob_store,
+            ReadOnlyAuthority,
+            ServiceRole::ReaderOnly,
+        )
     }
 }
 
@@ -393,7 +474,13 @@ where
 {
     pub fn new_single_writer(config: Config, meta_store: M, blob_store: B) -> Self {
         let authority = SingleWriterAuthority::new(meta_store.clone());
-        Self::with_authority(config, meta_store, blob_store, authority)
+        Self::with_authority(
+            config,
+            meta_store,
+            blob_store,
+            authority,
+            ServiceRole::SingleWriter,
+        )
     }
 }
 

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use finalized_history_query::api::{
@@ -38,6 +39,10 @@ use roaring::RoaringBitmap;
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
 pub const DEFAULT_WRITER_EPOCH: u64 = 1;
 static NOOP_BYTES_CACHE: NoopBytesCache = NoopBytesCache;
+
+fn static_observed_finalized_block() -> Option<u64> {
+    Some(u64::MAX / 4)
+}
 
 pub type BenchService = FinalizedHistoryService<
     LeaseAuthority<InMemoryMetaStore>,
@@ -97,8 +102,9 @@ impl PrimaryMaterializer for PassThroughMaterializer {
 }
 
 pub fn build_service(target_entries_per_chunk: u32) -> BenchService {
-    FinalizedHistoryService::new(
+    FinalizedHistoryService::new_reader_writer(
         Config {
+            observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
             target_entries_per_chunk,
             planner_max_or_terms: 256,
             ..Config::default()
@@ -114,8 +120,9 @@ pub fn build_service_with_stores(
     meta_store: InMemoryMetaStore,
     blob_store: InMemoryBlobStore,
 ) -> BenchService {
-    FinalizedHistoryService::new(
+    FinalizedHistoryService::new_reader_writer(
         Config {
+            observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
             target_entries_per_chunk,
             planner_max_or_terms: 256,
             ..Config::default()
@@ -419,7 +426,7 @@ pub fn seed_publication_state(
                 session_id: [0u8; 16],
                 epoch: DEFAULT_WRITER_EPOCH,
                 indexed_finalized_head,
-                lease_expires_at_ms: u64::MAX,
+                lease_valid_through_block: u64::MAX,
             }),
         )
         .await;

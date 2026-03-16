@@ -99,7 +99,7 @@ Important log-specific view types:
 
 Shared metadata:
 
-- `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_expires_at_ms }`
+- `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_valid_through_block }`
 - `block_meta/<block_num> -> BlockMeta`
 - `block_hash_to_num/<block_hash> -> block_num`
 - `block_log_headers/<block_num> -> BlockLogHeader`
@@ -154,6 +154,10 @@ It is responsible for:
 - cleanup-first recovery of unpublished suffix artifacts
 - sealed open-page marker repair
 - deriving the startup `next_log_id` view
+
+Lease-backed reader+writer nodes renew ownership against the configured upstream finalized-block
+observer. Reader-only nodes stay observational: they load `startup_plan(...)` state and never take
+ownership.
 
 `startup_plan(...)` is observational only:
 
