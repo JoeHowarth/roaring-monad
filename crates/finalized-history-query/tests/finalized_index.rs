@@ -221,6 +221,80 @@ impl FenceStore for FailDeleteOnceMetaStore {
 }
 
 #[derive(Clone)]
+struct FailAdvanceFenceOnceMetaStore {
+    inner: Arc<InMemoryMetaStore>,
+    failed: Arc<AtomicBool>,
+}
+
+impl MetaStore for FailAdvanceFenceOnceMetaStore {
+    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<PutResult> {
+        self.inner.put(key, value, cond, fence).await
+    }
+
+    async fn delete(
+        &self,
+        key: &[u8],
+        cond: DelCond,
+        fence: FenceToken,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete(key, cond, fence).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_history_query::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
+
+impl PublicationStore for FailAdvanceFenceOnceMetaStore {
+    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
+        self.inner.load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        self.inner.compare_and_set(expected, next).await
+    }
+}
+
+impl FenceStore for FailAdvanceFenceOnceMetaStore {
+    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
+        if !self.failed.swap(true, Ordering::Relaxed) {
+            return Err(Error::Backend("injected advance_fence failure".to_string()));
+        }
+        self.inner.advance_fence(min_epoch).await
+    }
+
+    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
+        self.inner.current_fence().await
+    }
+}
+
+#[derive(Clone)]
 struct ExpireBeforePublishMetaStore {
     inner: Arc<InMemoryMetaStore>,
     advanced: Arc<AtomicBool>,
@@ -622,6 +696,41 @@ fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
 }
 
 #[test]
+fn retrying_same_session_takeover_rearms_the_backend_fence() {
+    block_on(async {
+        let inner = Arc::new(InMemoryMetaStore::with_min_epoch(1));
+        assert!(matches!(
+            inner
+                .create_if_absent(&seeded_publication_state_with_valid_through(
+                    7, [1u8; 16], 1, 0, 150,
+                ))
+                .await
+                .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        let meta = FailAdvanceFenceOnceMetaStore {
+            inner: inner.clone(),
+            failed: Arc::new(AtomicBool::new(false)),
+        };
+        let authority = LeaseAuthority::new(meta.clone(), 9, 50, 0);
+
+        let err = authority
+            .acquire(Some(151))
+            .await
+            .expect_err("first takeover should surface injected fence failure");
+        assert!(matches!(err, Error::Backend(_)));
+
+        let token = authority
+            .acquire(Some(151))
+            .await
+            .expect("retry should succeed after re-arming fence");
+
+        assert_eq!(token.epoch, 2);
+        assert_eq!(meta.current_fence().await.expect("current fence"), 2);
+    });
+}
+
+#[test]
 fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
@@ -991,6 +1100,36 @@ fn lease_writer_startup_fails_closed_without_observed_finalized_block() {
             .startup()
             .await
             .expect_err("missing observation should fail closed");
+
+        assert!(matches!(err, Error::LeaseObservationUnavailable));
+    });
+}
+
+#[test]
+fn startup_rechecks_observation_for_a_cached_writer() {
+    block_on(async {
+        let observation_available = Arc::new(AtomicBool::new(true));
+        let config = Config {
+            observe_upstream_finalized_block: {
+                let observation_available = observation_available.clone();
+                Arc::new(move || observation_available.load(Ordering::Relaxed).then_some(100))
+            },
+            ..Config::default()
+        };
+        let svc = FinalizedHistoryService::new_reader_writer(
+            config,
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        svc.startup().await.expect("first startup");
+        observation_available.store(false, Ordering::Relaxed);
+
+        let err = svc
+            .startup()
+            .await
+            .expect_err("cached writer startup should fail closed without observation");
 
         assert!(matches!(err, Error::LeaseObservationUnavailable));
     });

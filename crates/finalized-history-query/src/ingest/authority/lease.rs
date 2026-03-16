@@ -64,6 +64,11 @@ impl<P> LeaseAuthority<P> {
 }
 
 impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
+    async fn ensure_fence_for(&self, lease: PublicationLease) -> Result<PublicationLease> {
+        self.publication_store.advance_fence(lease.epoch).await?;
+        Ok(lease)
+    }
+
     async fn acquire_publication_with_session(
         &self,
         observed_upstream_finalized_block: Option<u64>,
@@ -82,10 +87,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                         .saturating_add(self.lease_blocks),
                 };
                 match self.publication_store.create_if_absent(&initial).await? {
-                    CasOutcome::Applied(state) => {
-                        self.publication_store.advance_fence(state.epoch).await?;
-                        return Ok(state.into());
-                    }
+                    CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
                     CasOutcome::Failed {
                         current: Some(state),
                     } => state,
@@ -107,7 +109,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                         .saturating_add(self.lease_blocks),
                 };
                 if next.lease_valid_through_block <= current.lease_valid_through_block {
-                    return Ok(current.into());
+                    return self.ensure_fence_for(current.into()).await;
                 }
 
                 match self
@@ -115,7 +117,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     .compare_and_set(&current, &next)
                     .await?
                 {
-                    CasOutcome::Applied(state) => return Ok(state.into()),
+                    CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
                     CasOutcome::Failed {
                         current: Some(state),
                     } => {
@@ -146,10 +148,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 .compare_and_set(&current, &next)
                 .await?
             {
-                CasOutcome::Applied(state) => {
-                    self.publication_store.advance_fence(state.epoch).await?;
-                    return Ok(state.into());
-                }
+                CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
                 CasOutcome::Failed {
                     current: Some(state),
                 } => current = state,

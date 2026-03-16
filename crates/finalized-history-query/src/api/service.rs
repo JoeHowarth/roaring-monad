@@ -206,6 +206,24 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     {
         debug_assert!(self.role.allows_writes());
         if let Some(token) = *writer {
+            let result = self
+                .ingest
+                .authority
+                .authorize(
+                    &token,
+                    self.config.observe_upstream_finalized_block.as_ref()(),
+                )
+                .await;
+            let token = match result {
+                Ok(token) => token,
+                Err(error) => {
+                    if should_clear_writer(&error) {
+                        *writer = None;
+                    }
+                    return Err(error);
+                }
+            };
+            *writer = Some(token);
             return self.recovery_plan_for_token(token).await;
         }
 
@@ -417,7 +435,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 fn should_clear_writer(error: &Error) -> bool {
     matches!(
         error,
-        Error::LeaseLost | Error::PublicationConflict | Error::ModeConflict(_)
+        Error::LeaseLost
+            | Error::LeaseObservationUnavailable
+            | Error::PublicationConflict
+            | Error::ModeConflict(_)
     )
 }
 
@@ -430,10 +451,6 @@ where
     M: MetaStore + PublicationStore + FenceStore + Clone,
     B: BlobStore,
 {
-    pub fn new(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
-        Self::new_reader_writer(config, meta_store, blob_store, owner_id)
-    }
-
     pub fn new_reader_writer(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
         let authority = LeaseAuthority::new(
             meta_store.clone(),
