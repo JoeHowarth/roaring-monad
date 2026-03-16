@@ -8,7 +8,7 @@ Today, stale-writer rejection still comes from the existing fence-token mechanis
 
 The active design follow-up for fixing this is:
 
-- `docs/plans/publication-state-architecture.md`
+- `docs/plans/completed/publication-state-architecture.md`
 
 ## Current Behavior
 

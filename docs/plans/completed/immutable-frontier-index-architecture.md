@@ -719,10 +719,10 @@ The architecture depends on tuning choices, not open correctness questions:
 
 This document is intended to replace the mutable-state assumptions in:
 
-- `docs/plans/boundary-sealing-architecture.md`
+- `docs/plans/superceded/boundary-sealing-architecture.md`
 
 It also changes the cache design inputs described in:
 
-- `docs/plans/metadata-caching-architecture.md`
+- `docs/plans/zero-copy-types-and-bytes-cache.md`
 
 Under this model, cross-request caching should focus on immutable fragments and immutable grouped summaries rather than on mutable manifests or tails.
