@@ -174,6 +174,100 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
             u64::try_from(local_ordinal).map_err(|_| Error::Decode("local ordinal overflow"))?;
         Ok(point_log_payload_cache_key(block_num, local_ordinal))
     }
+
+    pub(crate) async fn load_contiguous_run(
+        &mut self,
+        block_num: u64,
+        start_local_ordinal: usize,
+        end_local_ordinal_inclusive: usize,
+    ) -> Result<Vec<LogRef>> {
+        if end_local_ordinal_inclusive < start_local_ordinal {
+            return Ok(Vec::new());
+        }
+
+        let mut cached = Vec::with_capacity(
+            end_local_ordinal_inclusive
+                .saturating_sub(start_local_ordinal)
+                .saturating_add(1),
+        );
+        let mut all_cached = true;
+        for local_ordinal in start_local_ordinal..=end_local_ordinal_inclusive {
+            let payload_key = self.point_log_payload_key(block_num, local_ordinal)?;
+            let maybe_cached = self.cache.get(TableId::PointLogPayloads, &payload_key);
+            cached.push((payload_key, maybe_cached));
+            if cached
+                .last()
+                .and_then(|(_, value)| value.as_ref())
+                .is_none()
+            {
+                all_cached = false;
+            }
+        }
+        if all_cached {
+            return cached
+                .into_iter()
+                .map(|(_, bytes)| bytes.map(LogRef::new).transpose()?.ok_or(Error::NotFound))
+                .collect();
+        }
+
+        let Some(header) = self.load_block_header(block_num).await? else {
+            return Ok(Vec::new());
+        };
+        if end_local_ordinal_inclusive + 1 >= header.count() {
+            return Ok(Vec::new());
+        }
+
+        let start = header.offset(start_local_ordinal);
+        let end = header.offset(end_local_ordinal_inclusive + 1);
+        let Some(run_bytes) = self
+            .blob_store
+            .read_range(
+                &block_logs_blob_key(block_num),
+                u64::from(start),
+                u64::from(end),
+            )
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut out = Vec::with_capacity(cached.len());
+        for (index, (payload_key, maybe_cached)) in cached.into_iter().enumerate() {
+            if let Some(bytes) = maybe_cached {
+                out.push(LogRef::new(bytes)?);
+                continue;
+            }
+
+            let local_ordinal = start_local_ordinal + index;
+            let relative_start = header
+                .offset(local_ordinal)
+                .checked_sub(start)
+                .ok_or(Error::Decode("invalid block log range"))?;
+            let relative_end = header
+                .offset(local_ordinal + 1)
+                .checked_sub(start)
+                .ok_or(Error::Decode("invalid block log range"))?;
+            let payload = slice_relative(&run_bytes, relative_start, relative_end)?;
+            self.cache.put(
+                TableId::PointLogPayloads,
+                &payload_key,
+                payload.clone(),
+                payload.len(),
+            );
+            out.push(LogRef::new(payload)?);
+        }
+
+        Ok(out)
+    }
+}
+
+fn slice_relative(bytes: &bytes::Bytes, start: u32, end: u32) -> Result<bytes::Bytes> {
+    let start = usize::try_from(start).map_err(|_| Error::Decode("block log range overflow"))?;
+    let end = usize::try_from(end).map_err(|_| Error::Decode("block log range overflow"))?;
+    if start > end || end > bytes.len() {
+        return Err(Error::Decode("invalid block log range"));
+    }
+    Ok(bytes.slice(start..end))
 }
 
 fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Option<usize> {
@@ -217,40 +311,15 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
         let Some(location) = self.resolve_log_id(id).await? else {
             return Ok(None);
         };
-        let payload_key = self.point_log_payload_key(location.block_num, location.local_ordinal)?;
-        if let Some(bytes) = self.cache.get(TableId::PointLogPayloads, &payload_key) {
-            return Ok(Some(LogRef::new(bytes)?));
-        }
-
-        let Some(header) = self.load_block_header(location.block_num).await? else {
-            return Ok(None);
-        };
-        if location.local_ordinal >= header.count() {
-            return Ok(None);
-        }
-        let start = header.offset(location.local_ordinal);
-        if location.local_ordinal + 1 >= header.count() {
-            return Ok(None);
-        }
-        let end = header.offset(location.local_ordinal + 1);
-        let Some(bytes) = self
-            .blob_store
-            .read_range(
-                &block_logs_blob_key(location.block_num),
-                u64::from(start),
-                u64::from(end),
+        Ok(self
+            .load_contiguous_run(
+                location.block_num,
+                location.local_ordinal,
+                location.local_ordinal,
             )
             .await?
-        else {
-            return Ok(None);
-        };
-        self.cache.put(
-            TableId::PointLogPayloads,
-            &payload_key,
-            bytes.clone(),
-            bytes.len(),
-        );
-        Ok(Some(LogRef::new(bytes)?))
+            .into_iter()
+            .next())
     }
 
     async fn block_ref_for(&mut self, item: &Self::Primary) -> Result<BlockRef> {
@@ -544,6 +613,93 @@ mod tests {
             assert_eq!(metrics.point_log_payloads.misses, 1);
             assert_eq!(metrics.point_log_payloads.hits, 1);
             assert_eq!(metrics.point_log_payloads.inserts, 1);
+        });
+    }
+
+    #[test]
+    fn load_contiguous_run_reads_one_range_and_populates_all_point_payloads() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = CountingBlobStore {
+                inner: InMemoryBlobStore::default(),
+                get_blob_count: Arc::new(AtomicU64::new(0)),
+                read_range_count: Arc::new(AtomicU64::new(0)),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                point_log_payloads: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+            let block_num = 701u64;
+            let logs = [
+                Log {
+                    address: [1u8; 20],
+                    topics: vec![[11u8; 32]],
+                    data: vec![1],
+                    block_num,
+                    tx_idx: 0,
+                    log_idx: 0,
+                    block_hash: [9u8; 32],
+                },
+                Log {
+                    address: [2u8; 20],
+                    topics: vec![[12u8; 32]],
+                    data: vec![2, 2],
+                    block_num,
+                    tx_idx: 0,
+                    log_idx: 1,
+                    block_hash: [9u8; 32],
+                },
+                Log {
+                    address: [3u8; 20],
+                    topics: vec![[13u8; 32]],
+                    data: vec![3, 3, 3],
+                    block_num,
+                    tx_idx: 0,
+                    log_idx: 2,
+                    block_hash: [9u8; 32],
+                },
+            ];
+            let encoded_logs = logs.iter().map(encode_log).collect::<Vec<_>>();
+            let mut blob_bytes = Vec::new();
+            let mut offsets = Vec::with_capacity(encoded_logs.len() + 1);
+            offsets.push(0);
+            for encoded in &encoded_logs {
+                blob_bytes.extend_from_slice(encoded);
+                offsets.push(blob_bytes.len() as u32);
+            }
+
+            meta.put(
+                &block_log_header_key(block_num),
+                encode_block_log_header(&BlockLogHeader { offsets }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write block log header");
+            blob.put_blob(&block_logs_blob_key(block_num), Bytes::from(blob_bytes))
+                .await
+                .expect("write block log blob");
+
+            let mut materializer = LogMaterializer::new(&meta, &blob, &cache);
+            let first = materializer
+                .load_contiguous_run(block_num, 0, 2)
+                .await
+                .expect("first contiguous load");
+            let second = materializer
+                .load_contiguous_run(block_num, 0, 2)
+                .await
+                .expect("second contiguous load");
+
+            assert_eq!(first, second);
+            assert_eq!(blob.get_blob_count.load(Ordering::Relaxed), 0);
+            assert_eq!(blob.read_range_count.load(Ordering::Relaxed), 1);
+
+            let metrics = cache.metrics_snapshot();
+            assert_eq!(metrics.point_log_payloads.misses, 3);
+            assert_eq!(metrics.point_log_payloads.hits, 3);
+            assert_eq!(metrics.point_log_payloads.inserts, 3);
         });
     }
 }

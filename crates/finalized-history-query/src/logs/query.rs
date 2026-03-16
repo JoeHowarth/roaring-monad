@@ -278,24 +278,58 @@ impl LogsQueryEngine {
                 continue;
             }
 
-            for local_raw in shard_accumulator {
+            let mut locals = shard_accumulator.into_iter().peekable();
+            while let Some(local_raw) = locals.next() {
                 let local = LogLocalId::new(local_raw).expect("bitmap values must fit local-id");
                 let id = compose_log_id(shard, local);
-                let Some(item) = materializer.load_by_id(id).await? else {
+                let Some(location) = materializer.resolve_log_id(id).await? else {
                     continue;
                 };
-                if !materializer.exact_match(&item, filter) {
-                    continue;
+
+                let mut run = vec![(id, location)];
+                loop {
+                    let Some(&next_local_raw) = locals.peek() else {
+                        break;
+                    };
+                    let next_local =
+                        LogLocalId::new(next_local_raw).expect("bitmap values must fit local-id");
+                    let next_id = compose_log_id(shard, next_local);
+                    let Some(next_location) = materializer.resolve_log_id(next_id).await? else {
+                        let _ = locals.next();
+                        continue;
+                    };
+                    let previous = run.last().expect("run must be non-empty").1;
+                    if next_location.block_num != previous.block_num
+                        || next_location.local_ordinal != previous.local_ordinal + 1
+                    {
+                        break;
+                    }
+
+                    let _ = locals.next();
+                    run.push((next_id, next_location));
                 }
 
-                let block_ref = materializer.block_ref_for(&item).await?;
-                matched.push(MatchedPrimary {
-                    id,
-                    item,
-                    block_ref,
-                });
-                if matched.len() >= take {
-                    return Ok(matched);
+                let run_items = materializer
+                    .load_contiguous_run(
+                        location.block_num,
+                        location.local_ordinal,
+                        run.last().expect("run must be non-empty").1.local_ordinal,
+                    )
+                    .await?;
+                for ((run_id, _), item) in run.into_iter().zip(run_items) {
+                    if !materializer.exact_match(&item, filter) {
+                        continue;
+                    }
+
+                    let block_ref = materializer.block_ref_for(&item).await?;
+                    matched.push(MatchedPrimary {
+                        id: run_id,
+                        item,
+                        block_ref,
+                    });
+                    if matched.len() >= take {
+                        return Ok(matched);
+                    }
                 }
             }
         }

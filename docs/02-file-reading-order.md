@@ -64,7 +64,7 @@ Look for:
 18. `crates/finalized-history-query/src/logs/window.rs`
     Read this for the exact bridge from resolved block ranges to inclusive primary-ID ranges.
 19. `crates/finalized-history-query/src/logs/materialize.rs`
-    Read this to see how a `log_id` resolves into `block_num` and local ordinal, then into a single log via cached bucket/header lookups and range reads.
+    Read this to see how a `log_id` resolves into `block_num` and local ordinal, then into point-payload cache lookups and exact or coalesced range reads.
 20. `crates/finalized-history-query/src/logs/materialize.rs`
     Read this to see `log_id -> block_num -> byte-range` resolution against compacted directory summaries with immutable-fragment fallback.
 21. `crates/finalized-history-query/src/logs/query.rs`
@@ -79,6 +79,7 @@ Look for:
 - block-window to log-ID-window mapping
 - indexed-only query execution
 - exact pagination boundary handling
+- contiguous same-block range-read coalescing
 - directory fragments, sub-bucket summaries, and optional 1M summaries
 - stream fragments, page summaries, and stream fanout during ingest
 

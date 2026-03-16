@@ -1092,3 +1092,55 @@ Baseline was the pre-change `HEAD` at `b9d326b`. Current was the working tree af
 
 - This benchmark is useful for catching warm-path regressions, but it underweights the sparse one-log-per-block workload that motivated the design change.
 - For the next pass, the better measurement will be a same-block contiguous-log benchmark so the coalescing work can be judged against the exact workload it is meant to help.
+
+## 2026-03-16T23:16:10Z - Coalesce contiguous same-block log reads into one range read
+
+### Change Summary
+
+- Added same-block contiguous-run loading in `LogMaterializer`.
+- Updated the indexed query executor to group adjacent resolved log IDs from the same block and materialize the whole run with one `read_range(...)`.
+- Added unit and end-to-end tests proving that contiguous same-block logs collapse to one range read and populate the point-payload cache.
+
+### Hypothesis
+
+- Query-time grouping of contiguous same-block log IDs should reduce redundant range reads for locality-heavy matches even if existing single-log materialization microbenches do not improve.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench materialize_bench -- materialize_locality/same_block_warm --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
+```
+
+Baseline was commit `6d350d8`. Current was the working tree after contiguous-run coalescing.
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+
+### Workload Shape
+
+- Benchmark: `materialize_locality/same_block_warm`
+- Store backend: in-memory meta/blob stores
+- Access pattern: repeated `load_by_id(...)` calls within one block
+
+### Before / After Metrics
+
+- Baseline `6d350d8`: `2.4946 us` median
+- Current working tree: `2.8332 us` median
+- Delta: `+338.6 ns` (`+13.57%`)
+
+### Bottleneck Evidence
+
+- This benchmark drives `LogMaterializer::load_by_id(...)` directly, so it does not exercise the new query-executor grouping path that detects and batches contiguous same-block runs.
+- The new code adds run-building and cache-plumbing surface area, so it is plausible for this proxy benchmark to regress while the grouped query path improves on real contiguous candidate sets.
+
+### Interpretation
+
+- The benchmark regression is real for this proxy shape, but it is not the workload the change was designed to optimize.
+- The relevant correctness/performance evidence for this commit is the new coverage proving a single `read_range(...)` for contiguous same-block query results.
+
+### Methodology Learnings
+
+- Existing materialization benches are not sufficient to judge query-level contiguous-run coalescing because they bypass the query executor entirely.
+- If this path needs further tuning, the next useful benchmark should live closer to `query_logs` and seed a block with several contiguous matching logs in one result page.

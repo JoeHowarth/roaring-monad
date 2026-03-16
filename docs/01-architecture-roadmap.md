@@ -131,6 +131,7 @@ Payload blobs:
 - indexed queries execute one shard at a time in ascending `log_id` order
 - stream scans prefer compacted `stream_page_*` blobs and fall back to `stream_frag_*` blobs for the bounded frontier or compaction lag
 - `log_id -> block_num` resolution prefers compacted `log_dir_sub/*` or `log_dir/*` summaries and falls back to `log_dir_frag/*`
+- contiguous same-block log payload reads may be coalesced into one range read before point payloads are cached
 - non-indexed queries are rejected instead of falling back to a scan.
 - pagination uses `resume_log_id` as a declarative lower bound.
 - responses return `cursor_block` separately from `next_resume_log_id`.
