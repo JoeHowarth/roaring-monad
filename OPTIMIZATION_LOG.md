@@ -986,3 +986,57 @@ cargo bench -p finalized-history-query --bench query_end_to_end_bench
 - The most suspicious result is `execution_clip_and_empty/{first_edge,last_edge}` being much slower than `both_edges`. That likely reflects the synthetic fixture keeping nearly full bitmaps alive for many shards and only clipping one side, so the executor still iterates a very large surviving set. This is plausible, but it is the first result worth double-checking if future changes affect clipping behavior.
 - `clause_loading_density/dense_chunks` being faster than `sparse_chunks` is plausible here because the dense case uses one contiguous bitmap that deserializes/merges efficiently, while the sparse case pays more per-entry overhead. It is not obviously a bug.
 - The OR-width results are large but not surprising; `256` terms already reaches `~90 ms` in clause loading alone, so very wide indexed OR filters are clearly expensive even before full query execution.
+
+## 2026-03-16T22:38:01Z - Zero-copy bytes cache rollout and service wiring
+
+### Change Summary
+
+- Added per-table byte-budget config for the immutable bytes cache and implemented bounded per-table LRU eviction.
+- Wired `FinalizedHistoryService` to use a service-owned bytes cache on the normal query path.
+- Extended immutable read-path caching to block-log blobs and sealed stream-page meta/blob reads.
+
+### Hypothesis
+
+- Enabling the configured bytes cache in the actual service query path should reduce repeated immutable artifact fetches and slightly improve warm materialization latency without changing query semantics.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench materialize_bench -- materialize_cache_shape/warm_bucket_warm_header --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
+```
+
+Baseline was run from a detached `HEAD` worktree at `8747535` after applying the same no-op benchmark helper fix needed to compile the bench with the already-landed `LogMaterializer::new(..., cache)` signature. Current was run from the working tree after the cache rollout.
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+- The detached baseline worktree required `/tmp/monad-bft -> /Users/jh/work/monad-bft` so the workspace's relative path dependencies resolved.
+
+### Workload Shape
+
+- Benchmark: `materialize_cache_shape/warm_bucket_warm_header`
+- Store backend: in-memory meta/blob stores
+- Access pattern: repeated warm point materialization from the same block after priming the materializer once
+
+### Before / After Metrics
+
+- Baseline `8747535`: `222.39 ns` median
+- Current working tree: `217.99 ns` median
+- Delta: `-4.40 ns` (`-1.98%`)
+
+### Bottleneck Evidence
+
+- The measured delta is small, which is consistent with this benchmark already operating on warm in-memory data and mostly exercising internal decode/materialization overhead rather than remote storage latency.
+- The larger practical win from this change is reduction of repeated immutable blob/meta fetches in the actual service query path, which the new tests validate directly.
+
+### Interpretation
+
+- This change does not produce a dramatic microbenchmark shift on the warm same-block materialization path; that path was already cheap.
+- The measured improvement is directionally positive and does not indicate regression.
+- The more important behavior change is architectural: cache budgets now exist per immutable table, disabled tables bypass the cache cleanly, and repeated service queries can reuse cached immutable artifacts instead of always falling through the no-op cache.
+
+### Methodology Learnings
+
+- Criterion with `0.2s` measurement windows is enough to catch directionality on sub-microsecond materialization benches, but the absolute delta is noisy; treat anything near `~2%` as suggestive rather than decisive.
+- Detached worktrees are useful for baseline comparisons in this repo, but the workspace's relative external dependencies must resolve identically or the baseline run will fail before the benchmark starts.

@@ -21,8 +21,9 @@ Follow the main path first:
 4. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for the block exist
 5. `query_logs` resolves a finalized block window
 6. the logs family maps that block window to a log-ID window
-7. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
-8. the query returns `QueryPage<Log>` with exact resume metadata
+7. the query reads immutable artifacts through the configured bytes cache when a table budget is enabled
+8. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
+9. the query returns `QueryPage<Log>` with exact resume metadata
 
 ## Layering
 
@@ -33,6 +34,7 @@ The crate is organized in three layers.
   - `src/api/write.rs`
   - `src/api/service.rs`
 - shared finalized-history substrate
+  - `src/cache/*`
   - `src/core/*`
   - `src/ingest/authority.rs`
   - `src/ingest/authority/*`
@@ -63,6 +65,7 @@ The shared layer owns:
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
+- immutable-bytes cache policy for immutable read artifacts
 - runtime degraded / throttled state
 - write-authority policy and fencing
 - publication-state reads

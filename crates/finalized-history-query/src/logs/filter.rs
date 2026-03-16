@@ -46,16 +46,28 @@ pub fn exact_match(log: &impl crate::codec::log_ref::LogView, filter: &LogFilter
     }
 
     let tc = log.topic_count();
-    if !match_topic(if tc > 0 { Some(*log.topic(0)) } else { None }, &filter.topic0) {
+    if !match_topic(
+        if tc > 0 { Some(*log.topic(0)) } else { None },
+        &filter.topic0,
+    ) {
         return false;
     }
-    if !match_topic(if tc > 1 { Some(*log.topic(1)) } else { None }, &filter.topic1) {
+    if !match_topic(
+        if tc > 1 { Some(*log.topic(1)) } else { None },
+        &filter.topic1,
+    ) {
         return false;
     }
-    if !match_topic(if tc > 2 { Some(*log.topic(2)) } else { None }, &filter.topic2) {
+    if !match_topic(
+        if tc > 2 { Some(*log.topic(2)) } else { None },
+        &filter.topic2,
+    ) {
         return false;
     }
-    if !match_topic(if tc > 3 { Some(*log.topic(3)) } else { None }, &filter.topic3) {
+    if !match_topic(
+        if tc > 3 { Some(*log.topic(3)) } else { None },
+        &filter.topic3,
+    ) {
         return false;
     }
     true

@@ -23,30 +23,33 @@ Look for:
 
 ## Pass 2: Shared finalized-history substrate
 
-5. `crates/finalized-history-query/src/core/clause.rs`
+5. `crates/finalized-history-query/src/cache/mod.rs`
+   Read this first for the immutable-bytes cache boundary: logical table IDs, byte-budget config, and the cache trait that query/materialization code sits behind.
+6. `crates/finalized-history-query/src/core/clause.rs`
    Read this for the tiny shared clause vocabulary (`Any`, `One`, `Or`) that log filters build on.
-6. `crates/finalized-history-query/src/core/page.rs`
+7. `crates/finalized-history-query/src/core/page.rs`
    Read this for the pagination/result vocabulary: query order, page items, and the metadata fields the query path must fill exactly.
-7. `crates/finalized-history-query/src/core/refs.rs`
+8. `crates/finalized-history-query/src/core/refs.rs`
    Read this for the shared `BlockRef` type used in page metadata and internal block lookups.
-8. `crates/finalized-history-query/src/core/state.rs`
+9. `crates/finalized-history-query/src/core/state.rs`
    Read this for shared state projections from persisted bytes: finalized head and block identity loaders.
-9. `crates/finalized-history-query/src/core/range.rs`
+10. `crates/finalized-history-query/src/core/range.rs`
    Read this to understand block-range validation and clipping against the indexed finalized head, including empty-range behavior.
-10. `crates/finalized-history-query/src/core/execution.rs`
-    Read this for the shared matched-primary vocabulary that the query path still uses for pagination metadata and benchmark helpers.
-11. `crates/finalized-history-query/src/core/runtime.rs`
-    Read this for the in-memory degraded/throttled state machine driven by backend failures and guardrails.
-12. `crates/finalized-history-query/src/domain/keys.rs`
-    Read this for the immutable-frontier key layout: `publication_state`, open stream-page markers, directory fragments/sub-buckets, and stream fragments/pages.
-13. `crates/finalized-history-query/src/streams/chunk.rs`
-    Read this for the roaring bitmap blob format reused by immutable stream fragments and compacted stream pages.
+11. `crates/finalized-history-query/src/core/execution.rs`
+   Read this for the shared matched-primary vocabulary that the query path still uses for pagination metadata and benchmark helpers.
+12. `crates/finalized-history-query/src/core/runtime.rs`
+   Read this for the in-memory degraded/throttled state machine driven by backend failures and guardrails.
+13. `crates/finalized-history-query/src/domain/keys.rs`
+   Read this for the immutable-frontier key layout: `publication_state`, open stream-page markers, directory fragments/sub-buckets, and stream fragments/pages.
+14. `crates/finalized-history-query/src/streams/chunk.rs`
+   Read this for the roaring bitmap blob format reused by immutable stream fragments and compacted stream pages.
 
 Look for:
 
 - shared finalized-head and block-identity helpers
 - block-range clipping against finalized head
 - shard-streaming candidate execution on primary IDs
+- immutable bytes-cache boundaries and per-table budgets
 - runtime degraded vs throttled handling
 - immutable frontier key layout and roaring bitmap blob format
 

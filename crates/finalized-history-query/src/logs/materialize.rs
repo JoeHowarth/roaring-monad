@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use bytes::Bytes;
+
 use crate::cache::{BytesCache, TableId};
 use crate::codec::log::decode_log_dir_fragment;
 use crate::codec::log_ref::{BlockLogHeaderRef, LogDirectoryBucketRef, LogRef};
@@ -84,9 +86,7 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
         }
 
         let sub_bucket_start = log_directory_sub_bucket_start(id);
-        if let Some(bucket) = self
-            .load_directory_sub_bucket(sub_bucket_start)
-            .await?
+        if let Some(bucket) = self.load_directory_sub_bucket(sub_bucket_start).await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
             return resolved_location_from_bucket_ref(&bucket, entry_index, id);
@@ -170,6 +170,40 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
             .map(Vec::as_slice)
             .unwrap_or(&[]))
     }
+
+    async fn load_block_log_range(
+        &self,
+        block_num: u64,
+        start: u32,
+        end: u32,
+    ) -> Result<Option<Bytes>> {
+        let key = block_logs_blob_key(block_num);
+        if self.cache.is_enabled(TableId::BlockLogBlobs) {
+            if let Some(bytes) = self.cache.get(TableId::BlockLogBlobs, &key) {
+                return slice_block_log_blob(bytes, start, end).map(Some);
+            }
+
+            let Some(bytes) = self.blob_store.get_blob(&key).await? else {
+                return Ok(None);
+            };
+            self.cache
+                .put(TableId::BlockLogBlobs, &key, bytes.clone(), bytes.len());
+            return slice_block_log_blob(bytes, start, end).map(Some);
+        }
+
+        self.blob_store
+            .read_range(&key, u64::from(start), u64::from(end))
+            .await
+    }
+}
+
+fn slice_block_log_blob(bytes: Bytes, start: u32, end: u32) -> Result<Bytes> {
+    let start = usize::try_from(start).map_err(|_| Error::Decode("block log range overflow"))?;
+    let end = usize::try_from(end).map_err(|_| Error::Decode("block log range overflow"))?;
+    if start > end || end > bytes.len() {
+        return Err(Error::Decode("invalid block log range"));
+    }
+    Ok(bytes.slice(start..end))
 }
 
 fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Option<usize> {
@@ -225,12 +259,7 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
         }
         let end = header.offset(location.local_ordinal + 1);
         let Some(bytes) = self
-            .blob_store
-            .read_range(
-                &block_logs_blob_key(location.block_num),
-                u64::from(start),
-                u64::from(end),
-            )
+            .load_block_log_range(location.block_num, start, end)
             .await?
         else {
             return Ok(None);

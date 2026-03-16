@@ -6,6 +6,7 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
+use finalized_history_query::cache::NoopBytesCache;
 use finalized_history_query::codec::finalized_state::{
     encode_block_meta, encode_publication_state,
 };
@@ -36,6 +37,7 @@ use roaring::RoaringBitmap;
 
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
 pub const DEFAULT_WRITER_EPOCH: u64 = 1;
+static NOOP_BYTES_CACHE: NoopBytesCache = NoopBytesCache;
 
 pub type BenchService = FinalizedHistoryService<
     LeaseAuthority<InMemoryMetaStore>,
@@ -435,8 +437,8 @@ pub fn stream_for_address(address: [u8; 20], shard: u64) -> String {
 pub fn materializer<'a>(
     meta_store: &'a InMemoryMetaStore,
     blob_store: &'a InMemoryBlobStore,
-) -> LogMaterializer<'a, InMemoryMetaStore, InMemoryBlobStore> {
-    LogMaterializer::new(meta_store, blob_store)
+) -> LogMaterializer<'a, InMemoryMetaStore, InMemoryBlobStore, NoopBytesCache> {
+    LogMaterializer::new(meta_store, blob_store, &NOOP_BYTES_CACHE)
 }
 
 async fn put_meta_record(meta_store: &InMemoryMetaStore, key: &[u8], value: Bytes) {

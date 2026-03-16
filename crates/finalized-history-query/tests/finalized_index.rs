@@ -5,6 +5,7 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
+use finalized_history_query::cache::{BytesCacheConfig, TableCacheConfig};
 use finalized_history_query::codec::finalized_state::{
     decode_publication_state, encode_block_meta, encode_publication_state,
 };
@@ -24,7 +25,7 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
 use futures::executor::block_on;
@@ -378,6 +379,60 @@ impl FenceStore for PublishConflictOnceMetaStore {
 
     async fn current_fence(&self) -> finalized_history_query::Result<u64> {
         self.inner.current_fence().await
+    }
+}
+
+#[derive(Clone)]
+struct CountingBlobStore {
+    inner: Arc<InMemoryBlobStore>,
+    target_key: Vec<u8>,
+    get_blob_calls: Arc<AtomicU64>,
+    read_range_calls: Arc<AtomicU64>,
+}
+
+impl BlobStore for CountingBlobStore {
+    async fn put_blob(&self, key: &[u8], value: Bytes) -> finalized_history_query::Result<()> {
+        self.inner.put_blob(key, value).await
+    }
+
+    async fn put_blob_if_absent(
+        &self,
+        key: &[u8],
+        value: Bytes,
+    ) -> finalized_history_query::Result<CreateOutcome> {
+        self.inner.put_blob_if_absent(key, value).await
+    }
+
+    async fn get_blob(&self, key: &[u8]) -> finalized_history_query::Result<Option<Bytes>> {
+        if key == self.target_key.as_slice() {
+            self.get_blob_calls.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.get_blob(key).await
+    }
+
+    async fn read_range(
+        &self,
+        key: &[u8],
+        start: u64,
+        end_exclusive: u64,
+    ) -> finalized_history_query::Result<Option<Bytes>> {
+        if key == self.target_key.as_slice() {
+            self.read_range_calls.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.read_range(key, start, end_exclusive).await
+    }
+
+    async fn delete_blob(&self, key: &[u8]) -> finalized_history_query::Result<()> {
+        self.inner.delete_blob(key).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> finalized_history_query::Result<Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
     }
 }
 
@@ -1128,5 +1183,50 @@ fn service_clears_cached_writer_after_publication_conflict() {
                 .expect("head after retry"),
             2
         );
+    });
+}
+
+#[test]
+fn service_reuses_cached_block_log_blob_across_queries() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let target_key = block_logs_blob_key(1);
+        let get_blob_calls = Arc::new(AtomicU64::new(0));
+        let read_range_calls = Arc::new(AtomicU64::new(0));
+        let blob = CountingBlobStore {
+            inner: Arc::new(InMemoryBlobStore::default()),
+            target_key: target_key.clone(),
+            get_blob_calls: get_blob_calls.clone(),
+            read_range_calls: read_range_calls.clone(),
+        };
+        let svc = FinalizedHistoryService::new(
+            Config {
+                bytes_cache: BytesCacheConfig {
+                    block_log_blobs: TableCacheConfig {
+                        max_bytes: 1024 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+                ..Config::default()
+            },
+            meta,
+            blob,
+            1,
+        );
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(7, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest block");
+
+        let first = query_page(&svc, 1, 1, indexed_address_filter(7), 10, None)
+            .await
+            .expect("first query");
+        let second = query_page(&svc, 1, 1, indexed_address_filter(7), 10, None)
+            .await
+            .expect("second query");
+
+        assert_eq!(first.items, second.items);
+        assert_eq!(get_blob_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
     });
 }

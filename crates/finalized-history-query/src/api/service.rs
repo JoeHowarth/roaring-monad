@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
+use crate::cache::HashMapBytesCache;
 use crate::config::{Config, GuardrailAction};
 use crate::core::runtime::RuntimeState;
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
@@ -21,6 +22,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A, M, B>,
     query: LogsQueryEngine,
+    cache: HashMapBytesCache,
     config: Config,
     state: Arc<RuntimeState>,
     writer: Arc<futures::lock::Mutex<Option<WriteToken>>>,
@@ -31,10 +33,12 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 {
     pub fn with_authority(config: Config, meta_store: M, blob_store: B, authority: A) -> Self {
         let query = LogsQueryEngine::from_config(&config);
+        let cache = HashMapBytesCache::new(config.bytes_cache);
         let ingest = IngestEngine::new(config.clone(), authority, meta_store, blob_store);
         Self {
             ingest,
             query,
+            cache,
             config,
             state: Arc::new(RuntimeState::default()),
             writer: Arc::new(futures::lock::Mutex::new(None)),
@@ -434,9 +438,10 @@ where
 
         let result = self
             .query
-            .query_logs(
+            .query_logs_with_cache(
                 &self.ingest.meta_store,
                 &self.ingest.blob_store,
+                &self.cache,
                 request,
                 budget,
             )

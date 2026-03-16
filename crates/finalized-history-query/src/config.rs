@@ -1,3 +1,5 @@
+use crate::cache::BytesCacheConfig;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardrailAction {
     Throttle,
@@ -29,6 +31,7 @@ pub struct Config {
     pub ingest_mode: IngestMode,
     pub assume_empty_streams: bool,
     pub stream_append_concurrency: usize,
+    pub bytes_cache: BytesCacheConfig,
 }
 
 impl Default for Config {
@@ -51,6 +54,7 @@ impl Default for Config {
             ingest_mode: IngestMode::StrictCas,
             assume_empty_streams: false,
             stream_append_concurrency: 96,
+            bytes_cache: BytesCacheConfig::default(),
         }
     }
 }

@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
-use crate::cache::{BytesCache, NoopBytesCache};
+use crate::cache::{BytesCache, NoopBytesCache, TableId};
 use crate::codec::log::decode_stream_bitmap_meta;
 use crate::codec::log_ref::LogRef;
 use crate::config::Config;
@@ -72,7 +73,11 @@ impl LogsQueryEngine {
             .await
     }
 
-    pub async fn query_logs_with_cache<M: MetaStore + PublicationStore, B: BlobStore, C: BytesCache>(
+    pub async fn query_logs_with_cache<
+        M: MetaStore + PublicationStore,
+        B: BlobStore,
+        C: BytesCache,
+    >(
         &self,
         meta_store: &M,
         blob_store: &B,
@@ -148,8 +153,7 @@ impl LogsQueryEngine {
                 blob_store,
                 cache,
                 &request.filter,
-                log_window.start,
-                log_window.end_inclusive,
+                (log_window.start, log_window.end_inclusive),
                 take,
             )
             .await?;
@@ -214,10 +218,10 @@ impl LogsQueryEngine {
         blob_store: &B,
         cache: &C,
         filter: &LogFilter,
-        from_log_id: LogId,
-        to_log_id_inclusive: LogId,
+        id_window: (LogId, LogId),
         take: usize,
     ) -> Result<Vec<MatchedPrimary<LogRef>>> {
+        let (from_log_id, to_log_id_inclusive) = id_window;
         let clause_specs = build_clause_specs(filter);
         let mut matched = Vec::new();
         let mut materializer = LogMaterializer::new(meta_store, blob_store, cache);
@@ -226,9 +230,15 @@ impl LogsQueryEngine {
             let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
             let (local_from, local_to) =
                 local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
-            let shard_clauses =
-                prepare_shard_clauses(meta_store, &clause_specs, shard, local_from, local_to)
-                    .await?;
+            let shard_clauses = prepare_shard_clauses(
+                meta_store,
+                cache,
+                &clause_specs,
+                shard,
+                local_from,
+                local_to,
+            )
+            .await?;
 
             if shard_clauses.is_empty() {
                 continue;
@@ -239,6 +249,7 @@ impl LogsQueryEngine {
                 let clause_bitmap = load_prepared_clause_bitmap(
                     meta_store,
                     blob_store,
+                    cache,
                     &prepared_clause,
                     local_from.get(),
                     local_to.get(),
@@ -300,12 +311,32 @@ async fn load_clause_sets<M: MetaStore, B: BlobStore>(
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
 ) -> Result<Vec<ShardBitmapSet>> {
+    load_clause_sets_with_cache(
+        meta_store,
+        blob_store,
+        &NoopBytesCache,
+        clause_specs,
+        from_log_id,
+        to_log_id_inclusive,
+    )
+    .await
+}
+
+async fn load_clause_sets_with_cache<M: MetaStore, B: BlobStore, C: BytesCache>(
+    meta_store: &M,
+    blob_store: &B,
+    cache: &C,
+    clause_specs: &[IndexedClauseSpec],
+    from_log_id: LogId,
+    to_log_id_inclusive: LogId,
+) -> Result<Vec<ShardBitmapSet>> {
     let mut clause_sets = Vec::new();
 
     for clause_spec in clause_specs {
-        let set = fetch_union_log_level(
+        let set = fetch_union_log_level_with_cache(
             meta_store,
             blob_store,
+            cache,
             clause_spec.stream_kind,
             &clause_spec.values,
             from_log_id,
@@ -399,6 +430,7 @@ fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
 
 async fn prepare_shard_clauses<M: MetaStore>(
     meta_store: &M,
+    cache: &impl BytesCache,
     clause_specs: &[IndexedClauseSpec],
     shard: LogShard,
     local_from: LogLocalId,
@@ -408,7 +440,8 @@ async fn prepare_shard_clauses<M: MetaStore>(
 
     for clause_spec in clause_specs {
         let clause =
-            prepare_shard_clause(meta_store, clause_spec, shard, local_from, local_to).await?;
+            prepare_shard_clause(meta_store, cache, clause_spec, shard, local_from, local_to)
+                .await?;
         prepared.push(clause);
     }
 
@@ -418,6 +451,7 @@ async fn prepare_shard_clauses<M: MetaStore>(
 
 async fn prepare_shard_clause<M: MetaStore>(
     meta_store: &M,
+    cache: &impl BytesCache,
     clause_spec: &IndexedClauseSpec,
     shard: LogShard,
     local_from: LogLocalId,
@@ -429,7 +463,8 @@ async fn prepare_shard_clause<M: MetaStore>(
     for value in &clause_spec.values {
         let stream = stream_id(clause_spec.stream_kind, value, shard);
         estimated_count = estimated_count.saturating_add(
-            estimate_stream_overlap(meta_store, &stream, local_from.get(), local_to.get()).await?,
+            estimate_stream_overlap(meta_store, cache, &stream, local_from.get(), local_to.get())
+                .await?,
         );
         stream_ids.push(stream);
     }
@@ -443,6 +478,7 @@ async fn prepare_shard_clause<M: MetaStore>(
 
 async fn estimate_stream_overlap<M: MetaStore>(
     meta_store: &M,
+    cache: &impl BytesCache,
     stream_id: &str,
     local_from: u32,
     local_to: u32,
@@ -452,11 +488,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
     let last_page_start = stream_page_start_local(local_to);
 
     loop {
-        if let Some(record) = meta_store
-            .get(&stream_page_meta_key(stream_id, page_start))
-            .await?
-        {
-            let meta = decode_stream_bitmap_meta(&record.value)?;
+        if let Some(meta) = load_stream_page_meta(meta_store, cache, stream_id, page_start).await? {
             if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
                 estimated = estimated.saturating_add(u64::from(meta.count));
             }
@@ -491,6 +523,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
 async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
+    cache: &impl BytesCache,
     prepared_clause: &PreparedShardClause,
     local_from: u32,
     local_to: u32,
@@ -500,7 +533,10 @@ async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
 
     for stream_id in &prepared_clause.stream_ids {
         in_flight.push(async move {
-            load_stream_entries(meta_store, blob_store, stream_id, local_from, local_to).await
+            load_stream_entries(
+                meta_store, blob_store, cache, stream_id, local_from, local_to,
+            )
+            .await
         });
         if in_flight.len() >= STREAM_LOAD_CONCURRENCY
             && let Some(result) = in_flight.next().await
@@ -526,9 +562,10 @@ fn clause_kind_rank(kind: ClauseKind) -> u8 {
     }
 }
 
-async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
+async fn fetch_union_log_level_with_cache<M: MetaStore, B: BlobStore, C: BytesCache>(
     meta_store: &M,
     blob_store: &B,
+    cache: &C,
     kind: &str,
     values: &[Vec<u8>],
     from_log_id: LogId,
@@ -549,6 +586,7 @@ async fn fetch_union_log_level<M: MetaStore, B: BlobStore>(
                 let entries = load_stream_entries(
                     meta_store,
                     blob_store,
+                    cache,
                     &stream,
                     local_from.get(),
                     local_to.get(),
@@ -583,6 +621,7 @@ fn merge_union_entries(out: &mut ShardBitmapSet, (shard, entries): (LogShard, Ro
 async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
+    cache: &impl BytesCache,
     stream: &str,
     local_from: u32,
     local_to: u32,
@@ -592,14 +631,11 @@ async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     let last_page_start = stream_page_start_local(local_to);
 
     loop {
-        if let Some(record) = meta_store
-            .get(&stream_page_meta_key(stream, page_start))
-            .await?
-        {
-            let meta = decode_stream_bitmap_meta(&record.value)?;
+        if let Some(meta) = load_stream_page_meta(meta_store, cache, stream, page_start).await? {
             if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                let loaded_page_blob = maybe_merge_bitmap_blob(
+                let loaded_page_blob = maybe_merge_cached_bitmap_blob(
                     blob_store,
+                    cache,
                     &stream_page_blob_key(stream, page_start),
                     &mut out,
                     local_from,
@@ -692,6 +728,72 @@ async fn maybe_merge_bitmap_blob<B: BlobStore>(
     Ok(true)
 }
 
+async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
+    meta_store: &M,
+    cache: &C,
+    stream: &str,
+    page_start: u32,
+) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
+    let key = stream_page_meta_key(stream, page_start);
+    if let Some(bytes) = cache.get(TableId::StreamPages, &key) {
+        return Ok(Some(decode_stream_bitmap_meta(&bytes)?));
+    }
+
+    let Some(record) = meta_store.get(&key).await? else {
+        return Ok(None);
+    };
+    cache.put(
+        TableId::StreamPages,
+        &key,
+        record.value.clone(),
+        record.value.len(),
+    );
+    Ok(Some(decode_stream_bitmap_meta(&record.value)?))
+}
+
+async fn load_stream_page_blob<B: BlobStore, C: BytesCache>(
+    blob_store: &B,
+    cache: &C,
+    key: &[u8],
+) -> Result<Option<Bytes>> {
+    if let Some(bytes) = cache.get(TableId::StreamPages, key) {
+        return Ok(Some(bytes));
+    }
+
+    let Some(bytes) = blob_store.get_blob(key).await? else {
+        return Ok(None);
+    };
+    cache.put(TableId::StreamPages, key, bytes.clone(), bytes.len());
+    Ok(Some(bytes))
+}
+
+async fn maybe_merge_cached_bitmap_blob<B: BlobStore, C: BytesCache>(
+    blob_store: &B,
+    cache: &C,
+    key: &[u8],
+    out: &mut RoaringBitmap,
+    local_from: u32,
+    local_to: u32,
+) -> Result<bool> {
+    let Some(bytes) = load_stream_page_blob(blob_store, cache, key).await? else {
+        return Ok(false);
+    };
+    let chunk = decode_chunk(&bytes)?;
+    if is_full_shard_range(local_from, local_to)
+        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+    {
+        *out |= &chunk.bitmap;
+        return Ok(true);
+    }
+
+    for value in chunk.bitmap {
+        if value >= local_from && value <= local_to {
+            out.insert(value);
+        }
+    }
+    Ok(true)
+}
+
 fn overlaps(min_local: u32, max_local: u32, local_from: u32, local_to: u32) -> bool {
     min_local <= local_to && max_local >= local_from
 }
@@ -708,17 +810,109 @@ fn read_u64_suffix(key: &[u8]) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::load_stream_entries;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use bytes::Bytes;
+
+    use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
     use crate::codec::log::encode_stream_bitmap_meta;
     use crate::domain::keys::{
-        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_meta_key,
+        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
+        stream_page_meta_key,
     };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{
+        BlobStore, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    };
     use crate::streams::chunk::{ChunkBlob, encode_chunk};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
+
+    struct CountingMetaStore {
+        inner: InMemoryMetaStore,
+        target_key: Vec<u8>,
+        get_count: Arc<AtomicU64>,
+    }
+
+    impl MetaStore for CountingMetaStore {
+        async fn get(&self, key: &[u8]) -> crate::Result<Option<Record>> {
+            if key == self.target_key.as_slice() {
+                self.get_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get(key).await
+        }
+
+        async fn put(
+            &self,
+            key: &[u8],
+            value: Bytes,
+            cond: PutCond,
+            fence: FenceToken,
+        ) -> crate::Result<PutResult> {
+            self.inner.put(key, value, cond, fence).await
+        }
+
+        async fn delete(
+            &self,
+            key: &[u8],
+            cond: crate::store::traits::DelCond,
+            fence: FenceToken,
+        ) -> crate::Result<()> {
+            self.inner.delete(key, cond, fence).await
+        }
+
+        async fn list_prefix(
+            &self,
+            prefix: &[u8],
+            cursor: Option<Vec<u8>>,
+            limit: usize,
+        ) -> crate::Result<Page> {
+            self.inner.list_prefix(prefix, cursor, limit).await
+        }
+    }
+
+    struct CountingBlobStore {
+        inner: InMemoryBlobStore,
+        target_key: Vec<u8>,
+        get_blob_count: Arc<AtomicU64>,
+    }
+
+    impl BlobStore for CountingBlobStore {
+        async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
+            self.inner.put_blob(key, value).await
+        }
+
+        async fn put_blob_if_absent(
+            &self,
+            key: &[u8],
+            value: Bytes,
+        ) -> crate::Result<crate::store::traits::CreateOutcome> {
+            self.inner.put_blob_if_absent(key, value).await
+        }
+
+        async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
+            if key == self.target_key.as_slice() {
+                self.get_blob_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get_blob(key).await
+        }
+
+        async fn delete_blob(&self, key: &[u8]) -> crate::Result<()> {
+            self.inner.delete_blob(key).await
+        }
+
+        async fn list_prefix(
+            &self,
+            prefix: &[u8],
+            cursor: Option<Vec<u8>>,
+            limit: usize,
+        ) -> crate::Result<Page> {
+            self.inner.list_prefix(prefix, cursor, limit).await
+        }
+    }
 
     #[test]
     fn load_stream_entries_falls_back_to_fragments_when_page_blob_is_missing() {
@@ -773,12 +967,87 @@ mod tests {
             .await
             .expect("write stream page meta");
 
-            let entries = load_stream_entries(&meta, &blob, stream, 0, 20)
+            let entries = load_stream_entries(&meta, &blob, &NoopBytesCache, stream, 0, 20)
                 .await
                 .expect("load stream entries");
 
             assert!(entries.contains(11));
             assert_eq!(entries.len(), 1);
+        });
+    }
+
+    #[test]
+    fn load_stream_entries_reuses_cached_stream_page_meta_and_blob() {
+        block_on(async {
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let meta_key = stream_page_meta_key(stream, page_start);
+            let blob_key = stream_page_blob_key(stream, page_start);
+
+            let inner_meta = InMemoryMetaStore::default();
+            let inner_blob = InMemoryBlobStore::default();
+            let meta_gets = Arc::new(AtomicU64::new(0));
+            let blob_gets = Arc::new(AtomicU64::new(0));
+
+            let mut bitmap = RoaringBitmap::new();
+            bitmap.insert(11);
+            let chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap,
+            };
+
+            inner_meta
+                .put(
+                    &meta_key,
+                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                        block_num: 7,
+                        count: 1,
+                        min_local: 11,
+                        max_local: 11,
+                    }),
+                    PutCond::Any,
+                    FenceToken(1),
+                )
+                .await
+                .expect("write stream page meta");
+            inner_blob
+                .put_blob(
+                    &blob_key,
+                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                )
+                .await
+                .expect("write stream page blob");
+
+            let meta = CountingMetaStore {
+                inner: inner_meta,
+                target_key: meta_key.clone(),
+                get_count: meta_gets.clone(),
+            };
+            let blob = CountingBlobStore {
+                inner: inner_blob,
+                target_key: blob_key.clone(),
+                get_blob_count: blob_gets.clone(),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                stream_pages: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+
+            let first = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("first load");
+            let second = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("second load");
+
+            assert_eq!(first, second);
+            assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
+            assert_eq!(blob_gets.load(Ordering::Relaxed), 1);
         });
     }
 }

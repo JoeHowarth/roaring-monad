@@ -249,10 +249,7 @@ impl LogDirectoryBucketRef {
     }
 
     pub fn first_log_id(&self, i: usize) -> u64 {
-        assert!(
-            i < self.count as usize,
-            "first_log_id index out of bounds"
-        );
+        assert!(i < self.count as usize, "first_log_id index out of bounds");
         let pos = 13 + i * 8;
         u64::from_be_bytes(self.buf[pos..pos + 8].try_into().unwrap())
     }
