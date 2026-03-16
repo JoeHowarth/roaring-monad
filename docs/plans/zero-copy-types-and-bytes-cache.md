@@ -9,6 +9,8 @@ The intended end state is:
 - cache only immutable read-path artifacts
 - keep `publication_state` and `open_stream_page/*` out of the cache
 - store cached values as raw `Bytes`, not typed decoded objects
+- configure each cache table independently with a byte budget
+- treat `size = 0` for a table as "disabled" and bypass the cache for that table entirely
 - construct zero-copy reference views (`LogRef`, `BlockLogHeaderRef`, `LogDirectoryBucketRef`)
   on demand from cached bytes
 - keep the public query boundary as `QueryPage<Log>` while using zero-copy types internally
@@ -81,6 +83,26 @@ Why:
 
 The cache should not store deep-cloned owned values like `BlockLogHeader` or `LogDirectoryBucket`.
 
+### 3a. Every table gets an explicit size budget
+
+Each cache table, whether it fronts metadata or blob-backed reads, should have an explicit size
+budget configured in bytes.
+
+Operationally these values will typically be set in MB or GB, but the cache should normalize them
+to byte budgets internally.
+
+Required behavior:
+
+- each table has its own byte budget
+- eviction is LRU within that table
+- `size = 0` means the table is disabled
+- a disabled table should be bypassed entirely rather than paying lookup/insert overhead
+
+This applies equally to:
+
+- metadata-backed tables such as block headers and directory summaries
+- blob-backed tables such as block-log payload bytes or future sealed stream-page blobs
+
 ### 4a. Fold payload dedup into the same read-path optimization track
 
 The next storage-level optimization in this same area is to remove duplicated block context from the
@@ -125,6 +147,9 @@ The base cache should provide:
 - `put`
 - logical table IDs
 - caller-supplied weight
+- per-table byte-budget configuration
+- per-table LRU eviction
+- a fast disabled-table path when configured size is `0`
 
 The base design does not require:
 
@@ -156,11 +181,17 @@ So this document should be read as:
 Conceptually:
 
 ```rust
+pub struct TableCacheConfig {
+    pub max_bytes: u64,
+}
+
 pub trait BytesCache: Send + Sync {
     fn get(&self, table: TableId, key: &[u8]) -> Option<Bytes>;
     fn put(&self, table: TableId, key: &[u8], value: Bytes, weight: usize);
 }
 ```
+
+`max_bytes == 0` means the table is disabled.
 
 Recommended logical tables:
 
@@ -175,6 +206,8 @@ The cache implementation remains free to choose its own internal structure.
 For the carried-forward design, the important properties are:
 
 - table-aware capacity policy
+- per-table enable/disable via byte budget
+- LRU eviction within each enabled table
 - exact byte weight accounting
 - immutable-entry-only semantics
 
@@ -246,7 +279,8 @@ The current `HashMapBytesCache` is only a simple starting point.
 The next practical step is:
 
 - per-table capacity budgets
-- eviction
+- `size = 0` bypass behavior
+- LRU eviction
 - metrics
 
 This is more important than miss deduplication.
