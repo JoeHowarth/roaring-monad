@@ -1040,3 +1040,55 @@ Baseline was run from a detached `HEAD` worktree at `8747535` after applying the
 
 - Criterion with `0.2s` measurement windows is enough to catch directionality on sub-microsecond materialization benches, but the absolute delta is noisy; treat anything near `~2%` as suggestive rather than decisive.
 - Detached worktrees are useful for baseline comparisons in this repo, but the workspace's relative external dependencies must resolve identically or the baseline run will fail before the benchmark starts.
+
+## 2026-03-16T23:11:06Z - Split stream-page tables and switch block payload caching to point reads
+
+### Change Summary
+
+- Split the stream-page cache into distinct `StreamPageMeta` and `StreamPageBlobs` tables.
+- Removed whole-block `block_logs/*` caching from `LogMaterializer`.
+- Added point-log payload caching keyed per resolved log record while keeping cold reads on exact `read_range(...)`.
+
+### Hypothesis
+
+- This should remove the enabled-cache full-blob over-fetch regression for sparse block-range queries and make stream-page cache budgets tunable independently, even if the warm same-log microbench gets a bit slower.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench materialize_bench -- materialize_cache_shape/warm_bucket_warm_header --warm-up-time 0.1 --measurement-time 0.2 --sample-size 10
+```
+
+Baseline was the pre-change `HEAD` at `b9d326b`. Current was the working tree after the structural cache change.
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+
+### Workload Shape
+
+- Benchmark: `materialize_cache_shape/warm_bucket_warm_header`
+- Store backend: in-memory meta/blob stores
+- Access pattern: repeated warm point materialization of the same log from the same block after one priming read
+
+### Before / After Metrics
+
+- Baseline `b9d326b`: `223.45 ns` median
+- Current working tree: `269.29 ns` median
+- Delta: `+45.84 ns` (`+20.51%`)
+
+### Bottleneck Evidence
+
+- This benchmark favors the old whole-block cache shape because it repeatedly reads the exact same log after the first warm-up in an in-memory backend.
+- The new design now performs point-payload cache lookups and exact range reads on the cold path instead of promoting the entire block blob into cache, so it gives up some same-log warm-path speed in exchange for fixing sparse-query over-fetch behavior.
+
+### Interpretation
+
+- The regression on this particular warm microbench is expected and acceptable for the architectural change being made.
+- The important win here is not raw same-log warm latency; it is eliminating the pathological “small nonzero cache budget forces full blob fetches” regime and separating stream-page metadata residency from blob residency.
+
+### Methodology Learnings
+
+- This benchmark is useful for catching warm-path regressions, but it underweights the sparse one-log-per-block workload that motivated the design change.
+- For the next pass, the better measurement will be a same-block contiguous-log benchmark so the coalescing work can be judged against the exact workload it is meant to help.

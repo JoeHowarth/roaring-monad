@@ -75,6 +75,13 @@ pub fn block_logs_blob_key(block_num: u64) -> Vec<u8> {
     k
 }
 
+pub fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
+    let mut k = b"point_log_payload/".to_vec();
+    k.extend_from_slice(&u64_be(block_num));
+    k.extend_from_slice(&u64_be(local_ordinal));
+    k
+}
+
 pub fn block_meta_key(block_num: u64) -> Vec<u8> {
     let mut k = b"block_meta/".to_vec();
     k.extend_from_slice(&u64_be(block_num));

@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use bytes::Bytes;
-
 use crate::cache::{BytesCache, TableId};
 use crate::codec::log::decode_log_dir_fragment;
 use crate::codec::log_ref::{BlockLogHeaderRef, LogDirectoryBucketRef, LogRef};
@@ -12,7 +10,7 @@ use crate::core::refs::BlockRef;
 use crate::domain::keys::{
     block_log_header_key, block_logs_blob_key, log_directory_bucket_key,
     log_directory_bucket_start, log_directory_fragment_prefix, log_directory_sub_bucket_key,
-    log_directory_sub_bucket_start,
+    log_directory_sub_bucket_start, point_log_payload_cache_key,
 };
 use crate::domain::types::LogDirFragment;
 use crate::error::{Error, Result};
@@ -171,39 +169,11 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
             .unwrap_or(&[]))
     }
 
-    async fn load_block_log_range(
-        &self,
-        block_num: u64,
-        start: u32,
-        end: u32,
-    ) -> Result<Option<Bytes>> {
-        let key = block_logs_blob_key(block_num);
-        if self.cache.is_enabled(TableId::BlockLogBlobs) {
-            if let Some(bytes) = self.cache.get(TableId::BlockLogBlobs, &key) {
-                return slice_block_log_blob(bytes, start, end).map(Some);
-            }
-
-            let Some(bytes) = self.blob_store.get_blob(&key).await? else {
-                return Ok(None);
-            };
-            self.cache
-                .put(TableId::BlockLogBlobs, &key, bytes.clone(), bytes.len());
-            return slice_block_log_blob(bytes, start, end).map(Some);
-        }
-
-        self.blob_store
-            .read_range(&key, u64::from(start), u64::from(end))
-            .await
+    fn point_log_payload_key(&self, block_num: u64, local_ordinal: usize) -> Result<Vec<u8>> {
+        let local_ordinal =
+            u64::try_from(local_ordinal).map_err(|_| Error::Decode("local ordinal overflow"))?;
+        Ok(point_log_payload_cache_key(block_num, local_ordinal))
     }
-}
-
-fn slice_block_log_blob(bytes: Bytes, start: u32, end: u32) -> Result<Bytes> {
-    let start = usize::try_from(start).map_err(|_| Error::Decode("block log range overflow"))?;
-    let end = usize::try_from(end).map_err(|_| Error::Decode("block log range overflow"))?;
-    if start > end || end > bytes.len() {
-        return Err(Error::Decode("invalid block log range"));
-    }
-    Ok(bytes.slice(start..end))
 }
 
 fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Option<usize> {
@@ -247,6 +217,11 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
         let Some(location) = self.resolve_log_id(id).await? else {
             return Ok(None);
         };
+        let payload_key = self.point_log_payload_key(location.block_num, location.local_ordinal)?;
+        if let Some(bytes) = self.cache.get(TableId::PointLogPayloads, &payload_key) {
+            return Ok(Some(LogRef::new(bytes)?));
+        }
+
         let Some(header) = self.load_block_header(location.block_num).await? else {
             return Ok(None);
         };
@@ -259,11 +234,22 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
         }
         let end = header.offset(location.local_ordinal + 1);
         let Some(bytes) = self
-            .load_block_log_range(location.block_num, start, end)
+            .blob_store
+            .read_range(
+                &block_logs_blob_key(location.block_num),
+                u64::from(start),
+                u64::from(end),
+            )
             .await?
         else {
             return Ok(None);
         };
+        self.cache.put(
+            TableId::PointLogPayloads,
+            &payload_key,
+            bytes.clone(),
+            bytes.len(),
+        );
         Ok(Some(LogRef::new(bytes)?))
     }
 
@@ -301,18 +287,79 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
 #[cfg(test)]
 mod tests {
     use super::LogMaterializer;
-    use crate::cache::NoopBytesCache;
-    use crate::codec::log::{encode_log_dir_fragment, encode_log_directory_bucket};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use bytes::Bytes;
+
+    use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
+    use crate::codec::log::{
+        encode_block_log_header, encode_log, encode_log_dir_fragment, encode_log_directory_bucket,
+    };
+    use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, log_directory_bucket_key,
-        log_directory_bucket_start, log_directory_fragment_key, log_directory_sub_bucket_start,
+        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_header_key,
+        block_logs_blob_key, log_directory_bucket_key, log_directory_bucket_start,
+        log_directory_fragment_key, log_directory_sub_bucket_start,
     };
-    use crate::domain::types::{LogDirFragment, LogDirectoryBucket};
+    use crate::domain::types::{BlockLogHeader, Log, LogDirFragment, LogDirectoryBucket};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{BlobStore, CreateOutcome, FenceToken, MetaStore, Page, PutCond};
     use futures::executor::block_on;
+
+    struct CountingBlobStore {
+        inner: InMemoryBlobStore,
+        get_blob_count: Arc<AtomicU64>,
+        read_range_count: Arc<AtomicU64>,
+    }
+
+    impl BlobStore for CountingBlobStore {
+        async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
+            self.inner.put_blob(key, value).await
+        }
+
+        async fn put_blob_if_absent(
+            &self,
+            key: &[u8],
+            value: Bytes,
+        ) -> crate::Result<CreateOutcome> {
+            self.inner.put_blob_if_absent(key, value).await
+        }
+
+        async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
+            if key.starts_with(b"block_logs/") {
+                self.get_blob_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get_blob(key).await
+        }
+
+        async fn read_range(
+            &self,
+            key: &[u8],
+            start: u64,
+            end_exclusive: u64,
+        ) -> crate::Result<Option<Bytes>> {
+            if key.starts_with(b"block_logs/") {
+                self.read_range_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.read_range(key, start, end_exclusive).await
+        }
+
+        async fn delete_blob(&self, key: &[u8]) -> crate::Result<()> {
+            self.inner.delete_blob(key).await
+        }
+
+        async fn list_prefix(
+            &self,
+            prefix: &[u8],
+            cursor: Option<Vec<u8>>,
+            limit: usize,
+        ) -> crate::Result<Page> {
+            self.inner.list_prefix(prefix, cursor, limit).await
+        }
+    }
 
     #[test]
     fn resolve_log_id_prefers_1m_bucket_summary_when_present() {
@@ -422,6 +469,81 @@ mod tests {
                     local_ordinal: (LOG_DIRECTORY_BUCKET_SIZE + 5) as usize,
                 })
             );
+        });
+    }
+
+    #[test]
+    fn load_by_id_caches_point_log_payload_without_full_blob_reads() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = CountingBlobStore {
+                inner: InMemoryBlobStore::default(),
+                get_blob_count: Arc::new(AtomicU64::new(0)),
+                read_range_count: Arc::new(AtomicU64::new(0)),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                point_log_payloads: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+            let block_num = 700u64;
+            let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+            let log = Log {
+                address: [7u8; 20],
+                topics: vec![[8u8; 32]],
+                data: vec![1, 2, 3],
+                block_num,
+                tx_idx: 1,
+                log_idx: 2,
+                block_hash: [9u8; 32],
+            };
+            let encoded = encode_log(&log);
+
+            meta.put(
+                &log_directory_fragment_key(log_directory_sub_bucket_start(log_id), block_num),
+                encode_log_dir_fragment(&LogDirFragment {
+                    block_num,
+                    first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                    end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write directory fragment");
+            meta.put(
+                &block_log_header_key(block_num),
+                encode_block_log_header(&BlockLogHeader {
+                    offsets: vec![0, encoded.len() as u32],
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write block log header");
+            blob.put_blob(&block_logs_blob_key(block_num), encoded.clone())
+                .await
+                .expect("write block log blob");
+
+            let mut materializer = LogMaterializer::new(&meta, &blob, &cache);
+            let first = PrimaryMaterializer::load_by_id(&mut materializer, log_id)
+                .await
+                .expect("first load")
+                .expect("first log");
+            let second = PrimaryMaterializer::load_by_id(&mut materializer, log_id)
+                .await
+                .expect("second load")
+                .expect("second log");
+
+            assert_eq!(first, second);
+            assert_eq!(blob.get_blob_count.load(Ordering::Relaxed), 0);
+            assert_eq!(blob.read_range_count.load(Ordering::Relaxed), 1);
+
+            let metrics = cache.metrics_snapshot();
+            assert_eq!(metrics.point_log_payloads.misses, 1);
+            assert_eq!(metrics.point_log_payloads.hits, 1);
+            assert_eq!(metrics.point_log_payloads.inserts, 1);
         });
     }
 }

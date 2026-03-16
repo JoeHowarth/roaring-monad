@@ -9,18 +9,20 @@ pub enum TableId {
     BlockLogHeaders,
     LogDirectoryBuckets,
     LogDirectorySubBuckets,
-    BlockLogBlobs,
-    StreamPages,
+    PointLogPayloads,
+    StreamPageMeta,
+    StreamPageBlobs,
 }
 
 impl TableId {
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
     pub const ALL: [Self; Self::COUNT] = [
         Self::BlockLogHeaders,
         Self::LogDirectoryBuckets,
         Self::LogDirectorySubBuckets,
-        Self::BlockLogBlobs,
-        Self::StreamPages,
+        Self::PointLogPayloads,
+        Self::StreamPageMeta,
+        Self::StreamPageBlobs,
     ];
 
     pub const fn as_index(self) -> usize {
@@ -28,8 +30,9 @@ impl TableId {
             Self::BlockLogHeaders => 0,
             Self::LogDirectoryBuckets => 1,
             Self::LogDirectorySubBuckets => 2,
-            Self::BlockLogBlobs => 3,
-            Self::StreamPages => 4,
+            Self::PointLogPayloads => 3,
+            Self::StreamPageMeta => 4,
+            Self::StreamPageBlobs => 5,
         }
     }
 }
@@ -50,8 +53,9 @@ pub struct BytesCacheConfig {
     pub block_log_headers: TableCacheConfig,
     pub log_directory_buckets: TableCacheConfig,
     pub log_directory_sub_buckets: TableCacheConfig,
-    pub block_log_blobs: TableCacheConfig,
-    pub stream_pages: TableCacheConfig,
+    pub point_log_payloads: TableCacheConfig,
+    pub stream_page_meta: TableCacheConfig,
+    pub stream_page_blobs: TableCacheConfig,
 }
 
 impl BytesCacheConfig {
@@ -60,8 +64,9 @@ impl BytesCacheConfig {
             block_log_headers: TableCacheConfig::disabled(),
             log_directory_buckets: TableCacheConfig::disabled(),
             log_directory_sub_buckets: TableCacheConfig::disabled(),
-            block_log_blobs: TableCacheConfig::disabled(),
-            stream_pages: TableCacheConfig::disabled(),
+            point_log_payloads: TableCacheConfig::disabled(),
+            stream_page_meta: TableCacheConfig::disabled(),
+            stream_page_blobs: TableCacheConfig::disabled(),
         }
     }
 
@@ -70,8 +75,9 @@ impl BytesCacheConfig {
             TableId::BlockLogHeaders => self.block_log_headers,
             TableId::LogDirectoryBuckets => self.log_directory_buckets,
             TableId::LogDirectorySubBuckets => self.log_directory_sub_buckets,
-            TableId::BlockLogBlobs => self.block_log_blobs,
-            TableId::StreamPages => self.stream_pages,
+            TableId::PointLogPayloads => self.point_log_payloads,
+            TableId::StreamPageMeta => self.stream_page_meta,
+            TableId::StreamPageBlobs => self.stream_page_blobs,
         }
     }
 }
@@ -96,8 +102,9 @@ pub struct BytesCacheMetrics {
     pub block_log_headers: TableCacheMetrics,
     pub log_directory_buckets: TableCacheMetrics,
     pub log_directory_sub_buckets: TableCacheMetrics,
-    pub block_log_blobs: TableCacheMetrics,
-    pub stream_pages: TableCacheMetrics,
+    pub point_log_payloads: TableCacheMetrics,
+    pub stream_page_meta: TableCacheMetrics,
+    pub stream_page_blobs: TableCacheMetrics,
 }
 
 impl BytesCacheMetrics {
@@ -106,8 +113,9 @@ impl BytesCacheMetrics {
             TableId::BlockLogHeaders => self.block_log_headers,
             TableId::LogDirectoryBuckets => self.log_directory_buckets,
             TableId::LogDirectorySubBuckets => self.log_directory_sub_buckets,
-            TableId::BlockLogBlobs => self.block_log_blobs,
-            TableId::StreamPages => self.stream_pages,
+            TableId::PointLogPayloads => self.point_log_payloads,
+            TableId::StreamPageMeta => self.stream_page_meta,
+            TableId::StreamPageBlobs => self.stream_page_blobs,
         }
     }
 }

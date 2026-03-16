@@ -735,7 +735,7 @@ async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
     page_start: u32,
 ) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
     let key = stream_page_meta_key(stream, page_start);
-    if let Some(bytes) = cache.get(TableId::StreamPages, &key) {
+    if let Some(bytes) = cache.get(TableId::StreamPageMeta, &key) {
         return Ok(Some(decode_stream_bitmap_meta(&bytes)?));
     }
 
@@ -743,7 +743,7 @@ async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
         return Ok(None);
     };
     cache.put(
-        TableId::StreamPages,
+        TableId::StreamPageMeta,
         &key,
         record.value.clone(),
         record.value.len(),
@@ -756,14 +756,14 @@ async fn load_stream_page_blob<B: BlobStore, C: BytesCache>(
     cache: &C,
     key: &[u8],
 ) -> Result<Option<Bytes>> {
-    if let Some(bytes) = cache.get(TableId::StreamPages, key) {
+    if let Some(bytes) = cache.get(TableId::StreamPageBlobs, key) {
         return Ok(Some(bytes));
     }
 
     let Some(bytes) = blob_store.get_blob(key).await? else {
         return Ok(None);
     };
-    cache.put(TableId::StreamPages, key, bytes.clone(), bytes.len());
+    cache.put(TableId::StreamPageBlobs, key, bytes.clone(), bytes.len());
     Ok(Some(bytes))
 }
 
@@ -1032,7 +1032,10 @@ mod tests {
                 get_blob_count: blob_gets.clone(),
             };
             let cache = HashMapBytesCache::new(BytesCacheConfig {
-                stream_pages: TableCacheConfig {
+                stream_page_meta: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                stream_page_blobs: TableCacheConfig {
                     max_bytes: 4 * 1024,
                 },
                 ..BytesCacheConfig::disabled()
@@ -1048,6 +1051,81 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
             assert_eq!(blob_gets.load(Ordering::Relaxed), 1);
+        });
+    }
+
+    #[test]
+    fn load_stream_entries_can_cache_meta_without_caching_blobs() {
+        block_on(async {
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let meta_key = stream_page_meta_key(stream, page_start);
+            let blob_key = stream_page_blob_key(stream, page_start);
+
+            let inner_meta = InMemoryMetaStore::default();
+            let inner_blob = InMemoryBlobStore::default();
+            let meta_gets = Arc::new(AtomicU64::new(0));
+            let blob_gets = Arc::new(AtomicU64::new(0));
+
+            let mut bitmap = RoaringBitmap::new();
+            bitmap.insert(11);
+            let chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap,
+            };
+
+            inner_meta
+                .put(
+                    &meta_key,
+                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                        block_num: 7,
+                        count: 1,
+                        min_local: 11,
+                        max_local: 11,
+                    }),
+                    PutCond::Any,
+                    FenceToken(1),
+                )
+                .await
+                .expect("write stream page meta");
+            inner_blob
+                .put_blob(
+                    &blob_key,
+                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                )
+                .await
+                .expect("write stream page blob");
+
+            let meta = CountingMetaStore {
+                inner: inner_meta,
+                target_key: meta_key.clone(),
+                get_count: meta_gets.clone(),
+            };
+            let blob = CountingBlobStore {
+                inner: inner_blob,
+                target_key: blob_key.clone(),
+                get_blob_count: blob_gets.clone(),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                stream_page_meta: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+
+            let first = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("first load");
+            let second = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("second load");
+
+            assert_eq!(first, second);
+            assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
+            assert_eq!(blob_gets.load(Ordering::Relaxed), 2);
         });
     }
 }

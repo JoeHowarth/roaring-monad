@@ -205,8 +205,9 @@ Recommended logical tables:
 - `BlockLogHeaders`
 - `LogDirectorySubBuckets`
 - `LogDirectoryBuckets`
-- `BlockLogBlobs`
-- `StreamPages`
+- `PointLogPayloads`
+- `StreamPageMeta`
+- `StreamPageBlobs`
 
 All immutable read tables should be represented in the cache configuration and implementation from
 the start, even if some are configured with `max_bytes = 0` initially.
@@ -373,7 +374,7 @@ This section reflects the current state of the codebase.
   - `block_log_headers/<block_num>`
   - `log_dir_sub/<sub_bucket_start>`
   - optional `log_dir/<bucket_start>`
-  - `block_logs/<block_num>`
+  - point log payload bytes derived from `block_logs/<block_num>` range reads
   - sealed `stream_page_meta/*`
   - sealed `stream_page_blob/*`
 - `publication_state` is not part of the normal immutable query cache

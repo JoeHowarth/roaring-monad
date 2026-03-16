@@ -86,8 +86,9 @@ impl HashMapBytesCache {
             log_directory_sub_buckets: table_metrics(
                 &guard.tables[TableId::LogDirectorySubBuckets.as_index()],
             ),
-            block_log_blobs: table_metrics(&guard.tables[TableId::BlockLogBlobs.as_index()]),
-            stream_pages: table_metrics(&guard.tables[TableId::StreamPages.as_index()]),
+            point_log_payloads: table_metrics(&guard.tables[TableId::PointLogPayloads.as_index()]),
+            stream_page_meta: table_metrics(&guard.tables[TableId::StreamPageMeta.as_index()]),
+            stream_page_blobs: table_metrics(&guard.tables[TableId::StreamPageBlobs.as_index()]),
         }
     }
 }
