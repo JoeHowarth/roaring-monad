@@ -1144,3 +1144,51 @@ Baseline was commit `6d350d8`. Current was the working tree after contiguous-run
 
 - Existing materialization benches are not sufficient to judge query-level contiguous-run coalescing because they bypass the query executor entirely.
 - If this path needs further tuning, the next useful benchmark should live closer to `query_logs` and seed a block with several contiguous matching logs in one result page.
+
+## 2026-03-17T00:27:05Z - Add grouped query benchmark for storage access patterns
+
+### Change Summary
+
+- Extracted same-block contiguous-run collection in the query executor into a helper for readability.
+- Added `query_end_to_end_storage_patterns/*` Criterion cases on the real `query_logs(...)` path.
+- Added a counting blob-store bench harness that includes `get_blob` calls, `read_range` calls, and `read_range` bytes in the measured result.
+
+### Hypothesis
+
+- A query-level benchmark is needed to judge the grouped contiguous-run path accurately because materializer-only microbenches do not exercise the executor grouping logic.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_end_to_end_storage_patterns/same_block_contiguous/warm --warm-up-time 0.05 --measurement-time 0.1 --sample-size 10
+```
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+
+### Workload Shape
+
+- Benchmark: `query_end_to_end_storage_patterns/same_block_contiguous/warm`
+- Store backend: in-memory meta store plus counting blob store
+- Access pattern: one block with contiguous matching logs queried through `FinalizedHistoryService::query_logs(...)` after one warm-up run
+- Measured result payload includes query result length plus blob access counters snapshot
+
+### Metrics
+
+- `query_end_to_end_storage_patterns/same_block_contiguous/warm`: `20.019 us` median
+
+### Bottleneck Evidence
+
+- This benchmark finally exercises the grouped query path directly rather than `load_by_id(...)` in isolation.
+- The counting blob store is wired into the benchmark result path, so the fixture can be extended to compare latency against storage-access counts without changing the production query path.
+
+### Interpretation
+
+- This is the right benchmark layer for future tuning of contiguous-run coalescing.
+- One benchmark case is now in place; the remaining storage-pattern cases in the bench file provide the fuller cold/warm sparse/non-contiguous/mixed matrix.
+
+### Methodology Learnings
+
+- The earlier bench failure surfaced an unrelated fixture bug: one-byte synthetic block hashes were colliding in larger seeded benches. Bench fixtures now use full-width block hashes so longer query benches remain valid.

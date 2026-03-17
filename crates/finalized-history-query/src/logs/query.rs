@@ -23,7 +23,7 @@ use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{
     ClauseKind, clause_values_20, clause_values_32, is_full_shard_range, is_too_broad,
 };
-use crate::logs::materialize::LogMaterializer;
+use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
 use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
 use crate::store::publication::PublicationStore;
@@ -286,28 +286,9 @@ impl LogsQueryEngine {
                     continue;
                 };
 
-                let mut run = vec![(id, location)];
-                loop {
-                    let Some(&next_local_raw) = locals.peek() else {
-                        break;
-                    };
-                    let next_local =
-                        LogLocalId::new(next_local_raw).expect("bitmap values must fit local-id");
-                    let next_id = compose_log_id(shard, next_local);
-                    let Some(next_location) = materializer.resolve_log_id(next_id).await? else {
-                        let _ = locals.next();
-                        continue;
-                    };
-                    let previous = run.last().expect("run must be non-empty").1;
-                    if next_location.block_num != previous.block_num
-                        || next_location.local_ordinal != previous.local_ordinal + 1
-                    {
-                        break;
-                    }
-
-                    let _ = locals.next();
-                    run.push((next_id, next_location));
-                }
+                let run =
+                    collect_contiguous_run(&mut locals, shard, (id, location), &mut materializer)
+                        .await?;
 
                 let run_items = materializer
                     .load_contiguous_run(
@@ -339,6 +320,39 @@ impl LogsQueryEngine {
 
         Ok(matched)
     }
+}
+
+async fn collect_contiguous_run<I, M: MetaStore, B: BlobStore, C: BytesCache>(
+    locals: &mut std::iter::Peekable<I>,
+    shard: LogShard,
+    first: (LogId, ResolvedLogLocation),
+    materializer: &mut LogMaterializer<'_, M, B, C>,
+) -> Result<Vec<(LogId, ResolvedLogLocation)>>
+where
+    I: Iterator<Item = u32>,
+{
+    let mut run = vec![first];
+    loop {
+        let Some(&next_local_raw) = locals.peek() else {
+            break;
+        };
+        let next_local = LogLocalId::new(next_local_raw).expect("bitmap values must fit local-id");
+        let next_id = compose_log_id(shard, next_local);
+        let Some(next_location) = materializer.resolve_log_id(next_id).await? else {
+            let _ = locals.next();
+            continue;
+        };
+        let previous = run.last().expect("run must be non-empty").1;
+        if next_location.block_num != previous.block_num
+            || next_location.local_ordinal != previous.local_ordinal + 1
+        {
+            break;
+        }
+
+        let _ = locals.next();
+        run.push((next_id, next_location));
+    }
+    Ok(run)
 }
 
 async fn load_clause_sets<M: MetaStore, B: BlobStore>(

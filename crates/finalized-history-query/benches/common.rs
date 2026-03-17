@@ -2,12 +2,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::cache::NoopBytesCache;
+use finalized_history_query::cache::{BytesCacheConfig, NoopBytesCache, TableCacheConfig};
 use finalized_history_query::codec::finalized_state::{
     encode_block_meta, encode_publication_state,
 };
@@ -31,14 +32,23 @@ use finalized_history_query::domain::types::{
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::PublicationStore;
 use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
-use finalized_history_query::{Clause, LeaseAuthority, LogFilter, QueryPage, Result};
+use finalized_history_query::{
+    Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
+};
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
 pub const DEFAULT_WRITER_EPOCH: u64 = 1;
 static NOOP_BYTES_CACHE: NoopBytesCache = NoopBytesCache;
+
+fn bench_hash(block_num: u64) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    hash[..8].copy_from_slice(&block_num.to_be_bytes());
+    hash
+}
 
 fn static_observed_finalized_block() -> Option<u64> {
     Some(u64::MAX / 4)
@@ -49,6 +59,104 @@ pub type BenchService = FinalizedHistoryService<
     InMemoryMetaStore,
     InMemoryBlobStore,
 >;
+pub type CountingBenchService = FinalizedHistoryService<
+    LeaseAuthority<InMemoryMetaStore>,
+    InMemoryMetaStore,
+    CountingBlobStore,
+>;
+
+#[derive(Debug, Default)]
+pub struct BlobAccessCounters {
+    get_blob_calls: AtomicU64,
+    read_range_calls: AtomicU64,
+    read_range_bytes: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlobAccessSnapshot {
+    pub get_blob_calls: u64,
+    pub read_range_calls: u64,
+    pub read_range_bytes: u64,
+}
+
+impl BlobAccessCounters {
+    pub fn reset(&self) {
+        self.get_blob_calls.store(0, Ordering::Relaxed);
+        self.read_range_calls.store(0, Ordering::Relaxed);
+        self.read_range_bytes.store(0, Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> BlobAccessSnapshot {
+        BlobAccessSnapshot {
+            get_blob_calls: self.get_blob_calls.load(Ordering::Relaxed),
+            read_range_calls: self.read_range_calls.load(Ordering::Relaxed),
+            read_range_bytes: self.read_range_bytes.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct CountingBlobStore {
+    inner: Arc<InMemoryBlobStore>,
+    counters: Arc<BlobAccessCounters>,
+}
+
+impl CountingBlobStore {
+    pub fn counters(&self) -> Arc<BlobAccessCounters> {
+        self.counters.clone()
+    }
+}
+
+impl BlobStore for CountingBlobStore {
+    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
+        self.inner.put_blob(key, value).await
+    }
+
+    async fn put_blob_if_absent(
+        &self,
+        key: &[u8],
+        value: Bytes,
+    ) -> Result<finalized_history_query::store::traits::CreateOutcome> {
+        self.inner.put_blob_if_absent(key, value).await
+    }
+
+    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        if key.starts_with(b"block_logs/") {
+            self.counters.get_blob_calls.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.get_blob(key).await
+    }
+
+    async fn read_range(
+        &self,
+        key: &[u8],
+        start: u64,
+        end_exclusive: u64,
+    ) -> Result<Option<Bytes>> {
+        if key.starts_with(b"block_logs/") {
+            self.counters
+                .read_range_calls
+                .fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .read_range_bytes
+                .fetch_add(end_exclusive.saturating_sub(start), Ordering::Relaxed);
+        }
+        self.inner.read_range(key, start, end_exclusive).await
+    }
+
+    async fn delete_blob(&self, key: &[u8]) -> Result<()> {
+        self.inner.delete_blob(key).await
+    }
+
+    async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<finalized_history_query::store::traits::Page> {
+        self.inner.list_prefix(prefix, cursor, limit).await
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SeededLogBlock {
@@ -86,8 +194,8 @@ impl PrimaryMaterializer for PassThroughMaterializer {
             id,
             block_ref: BlockRef {
                 number: block_num,
-                hash: [block_num as u8; 32],
-                parent_hash: [block_num.saturating_sub(1) as u8; 32],
+                hash: bench_hash(block_num),
+                parent_hash: bench_hash(block_num.saturating_sub(1)),
             },
         }))
     }
@@ -113,6 +221,32 @@ pub fn build_service(target_entries_per_chunk: u32) -> BenchService {
         InMemoryBlobStore::default(),
         DEFAULT_WRITER_EPOCH,
     )
+}
+
+pub fn build_counting_service(
+    target_entries_per_chunk: u32,
+) -> (CountingBenchService, Arc<BlobAccessCounters>) {
+    let blob_store = CountingBlobStore::default();
+    let counters = blob_store.counters();
+    let svc = FinalizedHistoryService::new_reader_writer(
+        Config {
+            observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
+            target_entries_per_chunk,
+            planner_max_or_terms: 256,
+            bytes_cache: BytesCacheConfig {
+                block_log_headers: TableCacheConfig { max_bytes: 1 << 20 },
+                log_directory_buckets: TableCacheConfig { max_bytes: 1 << 20 },
+                log_directory_sub_buckets: TableCacheConfig { max_bytes: 1 << 20 },
+                point_log_payloads: TableCacheConfig { max_bytes: 4 << 20 },
+                ..BytesCacheConfig::disabled()
+            },
+            ..Config::default()
+        },
+        InMemoryMetaStore::default(),
+        blob_store,
+        DEFAULT_WRITER_EPOCH,
+    );
+    (svc, counters)
 }
 
 pub fn build_service_with_stores(
@@ -155,7 +289,7 @@ pub fn mk_log(
 pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
     Block {
         block_num,
-        block_hash: [block_num as u8; 32],
+        block_hash: bench_hash(block_num),
         parent_hash,
         logs,
     }
@@ -185,14 +319,19 @@ pub fn seed_service_blocks(svc: &BenchService, blocks: u64, logs_per_block: u32)
     });
 }
 
-pub fn query_page(
-    svc: &BenchService,
+pub fn query_page<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
     limit: usize,
     resume_log_id: Option<u64>,
-) -> QueryPage<Log> {
+) -> QueryPage<Log>
+where
+    A: WriteAuthority,
+    M: MetaStore + PublicationStore,
+    B: BlobStore,
+{
     block_on(svc.query_logs(
         QueryLogsRequest {
             from_block,
@@ -207,16 +346,172 @@ pub fn query_page(
     .expect("query")
 }
 
-pub fn query_len(
-    svc: &BenchService,
+pub fn query_len<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
     from_block: u64,
     to_block: u64,
     filter: LogFilter,
     limit: usize,
-) -> usize {
+) -> usize
+where
+    A: WriteAuthority,
+    M: MetaStore + PublicationStore,
+    B: BlobStore,
+{
     query_page(svc, from_block, to_block, filter, limit, None)
         .items
         .len()
+}
+
+pub fn contiguous_block_filter() -> LogFilter {
+    LogFilter {
+        address: Some(Clause::One([90; 20])),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
+pub fn non_contiguous_block_filter() -> LogFilter {
+    LogFilter {
+        address: Some(Clause::One([91; 20])),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
+pub fn sparse_cross_block_filter() -> LogFilter {
+    LogFilter {
+        address: Some(Clause::One([92; 20])),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
+pub fn mixed_page_filter() -> LogFilter {
+    LogFilter {
+        address: Some(Clause::One([93; 20])),
+        topic0: None,
+        topic1: None,
+        topic2: None,
+        topic3: None,
+    }
+}
+
+pub fn seed_sparse_cross_block_fixture(svc: &CountingBenchService, blocks: u64) {
+    block_on(async {
+        let mut parent = [0u8; 32];
+        for block_num in 1..=blocks {
+            let block = mk_block(
+                block_num,
+                parent,
+                vec![Log {
+                    address: [92; 20],
+                    topics: vec![[1; 32]],
+                    data: vec![1],
+                    block_num,
+                    tx_idx: 0,
+                    log_idx: 0,
+                    block_hash: [block_num as u8; 32],
+                }],
+            );
+            parent = block.block_hash;
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("seed ingest");
+        }
+    });
+}
+
+pub fn seed_contiguous_block_fixture(svc: &CountingBenchService, block_num: u64, matches: u32) {
+    block_on(async {
+        let logs = (0..matches)
+            .map(|idx| Log {
+                address: [90; 20],
+                topics: vec![[2; 32]],
+                data: vec![idx as u8],
+                block_num,
+                tx_idx: 0,
+                log_idx: idx,
+                block_hash: [block_num as u8; 32],
+            })
+            .collect();
+        svc.ingest_finalized_block(mk_block(block_num, [0; 32], logs))
+            .await
+            .expect("seed ingest");
+    });
+}
+
+pub fn seed_non_contiguous_block_fixture(
+    svc: &CountingBenchService,
+    block_num: u64,
+    total_logs: u32,
+) {
+    block_on(async {
+        let logs = (0..total_logs)
+            .map(|idx| Log {
+                address: if idx % 2 == 0 { [91; 20] } else { [0; 20] },
+                topics: vec![[3; 32]],
+                data: vec![idx as u8],
+                block_num,
+                tx_idx: 0,
+                log_idx: idx,
+                block_hash: [block_num as u8; 32],
+            })
+            .collect();
+        svc.ingest_finalized_block(mk_block(block_num, [0; 32], logs))
+            .await
+            .expect("seed ingest");
+    });
+}
+
+pub fn seed_mixed_page_fixture(svc: &CountingBenchService) {
+    block_on(async {
+        let mut parent = [0; 32];
+        let first = mk_block(
+            1,
+            parent,
+            (0..16)
+                .map(|idx| Log {
+                    address: [93; 20],
+                    topics: vec![[4; 32]],
+                    data: vec![idx as u8],
+                    block_num: 1,
+                    tx_idx: 0,
+                    log_idx: idx,
+                    block_hash: [1; 32],
+                })
+                .collect(),
+        );
+        parent = first.block_hash;
+        svc.ingest_finalized_block(first)
+            .await
+            .expect("seed block 1");
+        for block_num in 2..=9 {
+            let block = mk_block(
+                block_num,
+                parent,
+                vec![Log {
+                    address: [93; 20],
+                    topics: vec![[5; 32]],
+                    data: vec![block_num as u8],
+                    block_num,
+                    tx_idx: 0,
+                    log_idx: 0,
+                    block_hash: [block_num as u8; 32],
+                }],
+            );
+            parent = block.block_hash;
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("seed sparse block");
+        }
+    });
 }
 
 pub fn narrow_indexed_filter() -> LogFilter {
@@ -324,8 +619,8 @@ pub fn seed_materialized_blocks(
         let mut bucket_entries: BTreeMap<u64, Vec<(u64, u64, u64)>> = BTreeMap::new();
 
         for block in &sorted_blocks {
-            let block_hash = [block.block_num as u8; 32];
-            let parent_hash = [block.block_num.saturating_sub(1) as u8; 32];
+            let block_hash = bench_hash(block.block_num);
+            let parent_hash = bench_hash(block.block_num.saturating_sub(1));
             let mut offsets = Vec::with_capacity(block.logs.len().saturating_add(1));
             let mut payload = Vec::new();
             offsets.push(0);
