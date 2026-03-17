@@ -311,14 +311,8 @@ impl LogsQueryEngine {
                 let run_items = materializer
                     .load_contiguous_run(
                         location.block_num,
-                        run.first()
-                            .expect("run must be non-empty")
-                            .1
-                            .local_ordinal,
-                        run.last()
-                            .expect("run must be non-empty")
-                            .1
-                            .local_ordinal,
+                        run.first().expect("run must be non-empty").1.local_ordinal,
+                        run.last().expect("run must be non-empty").1.local_ordinal,
                     )
                     .await?;
                 if run_items.len() != run.len() {
