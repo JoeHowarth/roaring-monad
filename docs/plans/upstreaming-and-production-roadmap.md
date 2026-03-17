@@ -53,6 +53,8 @@ The active plans assume the following shared model.
   a deep integration into an existing subsystem
 - the primary upstreaming problem is reviewer cognitive load, not API
   adaptation
+- this repo should reach its intended end state before the design-review
+  docs for the landing stack are circulated for review
 - the review stack should land the full crate surface over time,
   including distributed backends and supporting benchmarking/tooling
   crates, but not as one monolithic PR
@@ -62,6 +64,11 @@ The active plans assume the following shared model.
 - temporary compatibility layers or transitional abstractions should be
   avoided unless strictly necessary to keep an intermediate PR compiling
   and reviewable
+- design-review docs are reviewed out-of-band from this repo before PR
+  cutting
+- current-state docs should be updated in the same implementation PR
+  whenever that PR changes architecture, terminology, storage layout, or
+  user-visible behavior
 
 ### Verification model
 

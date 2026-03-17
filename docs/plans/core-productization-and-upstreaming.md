@@ -71,6 +71,8 @@ The constraints for this workstream are:
 - `finalized-history-query` is the main focus, but supporting crates such
   as `benchmarking` and `log-workload-gen` should land as early as makes
   sense
+- this repo should be considered "done" before the design-review docs
+  for the landing stack are sent out for review
 - review-motivated internal restructures should happen in this repo
   first, before creating the monorepo review commits
 - the review commits should diverge from this repo's eventual end state
@@ -80,6 +82,10 @@ The constraints for this workstream are:
 - early review PRs may land infrastructure that is not yet fully wired
   into the final service path, so long as each PR compiles and has
   meaningful local tests
+- design-review docs for the review stack are reviewed separately from
+  the implementation PRs
+- current-state docs should travel with the implementation PR that makes
+  them true
 
 ## Current State
 
@@ -154,6 +160,12 @@ The RPC or host-service integration should remain outside this crate's
 core review path. The crate should continue to present a transport-free
 boundary.
 
+### Separate design-review docs from current-state docs
+
+Design-review docs may be reviewed before PR cutting, but the current-
+state docs in `docs/` should remain truthful to the landed code at each
+review step.
+
 ### Isolate production-only follow-up work
 
 Known unfinished production topics should be documented and isolated
@@ -174,6 +186,9 @@ not have to reconcile current code with superseded narratives.
   historical context
 - remove, rewrite, or clearly supersede docs that conflict with the
   current `publication_state` and `WriteAuthority` model
+- define which docs are design-review artifacts reviewed before PR
+  cutting versus which docs are current-state docs that must land with
+  code
 - ensure the topic docs and active plan docs agree on:
   - publication and visibility
   - lease and fencing semantics
@@ -186,6 +201,7 @@ not have to reconcile current code with superseded narratives.
 - one coherent active-doc set
 - stale docs either removed from the active path or clearly marked
 - no contradictory "current behavior" narratives in active docs
+- a clear rule for which docs travel with implementation PRs
 
 ## 2. Split Large Implementation Surfaces
 
@@ -332,6 +348,9 @@ The exact stack may change, but it should roughly track these slices:
 - review notes that tell reviewers what to focus on in each slice
 - a stack shape where each PR is approximately one commit and stays close
   to this repo's intended end state
+- a rule that current-state docs update in the same PR whenever the slice
+  changes architecture, terminology, storage layout, or user-visible
+  behavior
 
 ## Milestones
 
@@ -340,6 +359,7 @@ The exact stack may change, but it should roughly track these slices:
 Complete when:
 
 - active docs no longer conflict
+- design-review versus current-state doc responsibilities are explicit
 - the first upstream scope is explicit
 - the PR-stack target shape is agreed
 
