@@ -199,7 +199,7 @@ The expected standby-writer takeover path is:
    - a fresh `session_id`
    - `epoch = current.epoch + 1`
    - unchanged `indexed_finalized_head`
-   - `lease_valid_through_block = observed_block + publication_lease_blocks`
+   - `lease_valid_through_block = observed_block + publication_lease_blocks - 1`
 7. after acquisition, the new primary:
    - advances backend fence state
    - cleans any unpublished suffix above the published head
