@@ -28,6 +28,10 @@ proving readiness.
 - build a storage and cleanup capacity model
 - document deployment prerequisites such as backend topology,
   configuration, secrets, TLS, and rollback expectations
+- document deployment-mode guidance for lease-backed versus
+  single-writer operation
+- decide whether optional cache and storage optimizations remain
+  necessary after baseline tuning evidence is available
 
 ## Out Of Scope
 
@@ -41,6 +45,7 @@ proving readiness.
 - performance numbers are tied to representative workloads instead of
   ad hoc local runs
 - storage growth and cleanup lag have an explicit operating model
+- deployment mode selection and replacement expectations are documented
 - deployment requirements and rollback expectations are documented
 
 ## Dependencies
@@ -57,3 +62,6 @@ proving readiness.
   pipelines
 - how much deployment configuration should live in this repo versus the
   eventual host/service repo
+- whether optional optimizations such as miss deduplication, ingest-time
+  cache population, compression, alternate cache backing allocation, or
+  payload-only stored log encoding are justified by measured evidence

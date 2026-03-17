@@ -80,5 +80,5 @@ That is why these two older completed plans are now replaced by this single comp
 ## Relationship To Other Plans
 
 - The immutable artifact cache plan that complements this query architecture is
-  `docs/plans/zero-copy-types-and-bytes-cache.md`.
+  `docs/plans/completed/zero-copy-types-and-bytes-cache.md`.
 - Historical step-by-step planning docs for this work now live under `docs/plans/superceded/`.

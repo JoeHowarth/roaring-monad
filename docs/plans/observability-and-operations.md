@@ -25,6 +25,8 @@ runbook set tied to the failure modes the service can enter.
 - decide how those metrics are exported and consumed by a host service
 - define the initial alert set and operator-facing runbooks
 - make degraded and throttled transitions observable and explainable
+- define operator guidance for writer replacement, restart, and failover
+  procedures in lease-backed versus single-writer deployments
 
 ## Out Of Scope
 
@@ -40,6 +42,8 @@ runbook set tied to the failure modes the service can enter.
   workload behavior
 - there is a documented alert and runbook path for the major failure
   classes
+- operator guidance exists for healthy-writer replacement, restart, and
+  failover expectations
 - operators would be able to tell the difference between transient
   backend trouble, lease loss, backlog growth, and correctness-triggered
   fail-closed behavior
@@ -58,3 +62,5 @@ runbook set tied to the failure modes the service can enter.
   host service to bind into its own telemetry stack
 - what the minimum required operational footprint is for initial
   upstreaming versus real production rollout
+- how much forced replacement behavior needs explicit runbook support
+  before a dedicated administrative takeover mechanism exists

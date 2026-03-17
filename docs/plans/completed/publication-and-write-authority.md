@@ -2,7 +2,8 @@
 
 ## Summary
 
-This is the active plan for finalized-history publication and writer ownership.
+This document records the landed finalized-history publication and
+writer-ownership design.
 
 The current foundation is already in place:
 
@@ -25,7 +26,11 @@ The core lease and role model is now in place:
 - successful lease acquisition re-arms backend fence state even when retrying the same session
   after a partial acquisition failure
 
-The remaining work is now mostly about operational replacement and deployment guidance.
+The remaining operational replacement and deployment guidance now lives
+in:
+
+- `docs/plans/observability-and-operations.md`
+- `docs/plans/performance-capacity-and-deployment.md`
 
 This document replaces the older overlapping plan set now kept under `docs/plans/superceded/`.
 
@@ -259,52 +264,6 @@ Owner-only maintenance and GC should use the same lease-authority validation pat
 They should require a current observed upstream finalized block and fail closed when that
 observation is unavailable.
 
-## Remaining Active Work
-
-### 1. Define administrative takeover and replacement paths
-
-Ordinary lease expiry takeover exists.
-
-What remains to define clearly is:
-
-- operator-forced replacement of a healthy writer
-- expected behavior for rolling restarts
-- whether there is any preferred-primary concept beyond lease validity
-
-The system should continue to prefer:
-
-- healthy primary retention
-- standby readiness without opportunistic ownership theft
-
-The v1 operational story is: stop the writer process and wait for the lease to expire (at most
-`publication_lease_blocks` finalized blocks). A standby will take over once expiry is observed.
-An explicit force-takeover mechanism is deferred until there is a deployment where the expiry
-wait is unacceptable.
-
-### 2. Single-writer vs lease-backed mode guidance
-
-Use `LeaseAuthority` (`new_reader_writer`) when:
-
-- multiple writer-capable nodes exist (active/standby)
-- automatic failover on writer stall is required
-- the upstream finalized-block observation is available
-
-Use `SingleWriterAuthority` (`new_single_writer`) when:
-
-- exactly one writer process exists with no standby
-- the deployment guarantees exclusive access (e.g., single-node or process-level lock)
-- lease overhead and observation dependency are unwanted
-
-Safety properties deliberately absent in single-writer mode:
-
-- no lease-based expiry or takeover — a second writer is not fenced by lease freshness
-- `publish` uses `PutCond::Any` rather than `compare_and_set` — concurrent writers would
-  silently overwrite each other's heads
-- the backend fence is the only protection against stale-epoch writes; there is no lease-level
-  guard against a split-brain scenario
-
-Single-writer mode relies entirely on the deployment preventing concurrent writers.
-
 ## Non-Goals
 
 - changing query semantics
@@ -316,6 +275,6 @@ Single-writer mode relies entirely on the deployment preventing concurrent write
 ## Relationship To Other Plans
 
 - The active immutable artifact cache direction is in
-  `docs/plans/zero-copy-types-and-bytes-cache.md`.
+  `docs/plans/completed/zero-copy-types-and-bytes-cache.md`.
 - Historical publication and write-authority plans now live under
   `docs/plans/superceded/`.

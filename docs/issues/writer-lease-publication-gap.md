@@ -6,9 +6,10 @@ The immutable-frontier implementation introduced a persisted `writer_lease` reco
 
 Today, stale-writer rejection still comes from the existing fence-token mechanism in the storage layer, not from the new `writer_lease` record itself.
 
-The active design follow-up for fixing this is:
+Relevant current-state references are:
 
-- `docs/plans/publication-and-write-authority.md`
+- `docs/write-authority.md`
+- `docs/plans/performance-capacity-and-deployment.md`
 
 ## Current Behavior
 

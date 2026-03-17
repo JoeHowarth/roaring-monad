@@ -723,6 +723,6 @@ This document is intended to replace the mutable-state assumptions in:
 
 It also changes the cache design inputs described in:
 
-- `docs/plans/zero-copy-types-and-bytes-cache.md`
+- `docs/plans/completed/zero-copy-types-and-bytes-cache.md`
 
 Under this model, cross-request caching should focus on immutable fragments and immutable grouped summaries rather than on mutable manifests or tails.

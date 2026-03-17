@@ -2,7 +2,8 @@
 
 ## Summary
 
-This document is the active caching plan for `crates/finalized-history-query`.
+This document records the landed zero-copy immutable bytes-cache
+architecture for `crates/finalized-history-query`.
 
 The intended end state is:
 
@@ -275,63 +276,10 @@ The query path does not read them. They exist to:
 
 They should not be cache targets for the query cache.
 
-## Follow-Up Work
+Remaining optional optimization follow-ups now live in:
 
-### Phase 1: finish the immutable bytes cache rollout
-
-- keep using zero-copy ref types internally
-- finish wiring cache usage through the relevant immutable readers
-- align docs and tests with the current `QueryPage<Log>` public boundary
-
-### Phase 2: add bounded cache policy
-
-The current `HashMapBytesCache` is only a simple starting point.
-
-The next practical step is:
-
-- per-table capacity budgets
-- `size = 0` bypass behavior
-- LRU eviction
-- metrics
-
-This is more important than miss deduplication.
-
-### Phase 3: tune per-table budgets
-
-After profiling, tune the per-table budgets rather than adding cache coverage to new immutable
-tables later.
-
-The intended rollout already includes all immutable read tables. The operational question is:
-
-- which tables should have non-zero budgets in a given deployment
-- how large those budgets should be relative to one another
-
-### Phase 4: optional miss deduplication
-
-Only pursue this if redundant concurrent fetches show up in profiling.
-
-It is a useful optimization, but it should not be treated as foundational.
-
-### Phase 5: optional compression / alternate backing allocation
-
-Compression and arena allocation are both compatible with the bytes-only cache shape, but they are
-follow-up optimizations.
-
-They should be justified by profiling before they become committed architectural requirements.
-
-In particular, per-log compression of `block_logs/*` is not part of the base caching plan. It is a
-separate storage optimization decision and should remain optional until measured evidence says it is
-worth the format churn.
-
-### Phase 6: remove duplicated block context from stored log payloads
-
-After the cache/materialization direction is settled, the next clean storage optimization is:
-
-- introduce a payload-only stored log encoding
-- stop persisting `block_num` and `block_hash` inside each encoded log
-- inject block context during materialization
-
-That is a local storage-format change with no intended query-semantics change.
+- `docs/caching.md`
+- `docs/plans/performance-capacity-and-deployment.md`
 
 ## Non-Goals
 
@@ -343,9 +291,9 @@ That is a local storage-format change with no intended query-semantics change.
 
 ## Relationship To Other Plans
 
-- This plan supersedes
+- This document supersedes
   `docs/plans/superceded/metadata-caching-architecture.md`.
-- It also absorbs the forward-looking work from
+- It also absorbs the original forward-looking work from
   `docs/plans/superceded/log-payload-block-context-dedup-plan.md`.
 - It aligns with the current immutable-frontier architecture in
   `docs/plans/completed/immutable-frontier-index-architecture.md`.
@@ -380,18 +328,10 @@ This section reflects the current state of the codebase.
 - `publication_state` is not part of the normal immutable query cache
 - `open_stream_page/*` is not part of the query cache
 
-### Not Yet Implemented
-
-- miss deduplication
-- eager cache population on ingest writes
-- compression or alternate backing allocation inside the cache
-- payload-only stored log encoding
-- removal of persisted per-log `block_num` and `block_hash`
-- materialization that injects block context into payload-only log bytes
-- operational tuning guidance for real deployed cache budgets beyond the current basic benchmark notes
-
 ### Notes
 
 - The bounded cache rollout and main immutable-reader wiring are implemented.
-- The document still includes forward work that has not landed yet, especially metrics and the
-  payload-only log storage follow-up.
+- Optional optimization work such as miss deduplication, ingest-time
+  cache population, compression, alternate backing allocation, and
+  payload-only stored log encoding is now tracked as performance follow-up
+  work rather than as part of the base cache architecture.
