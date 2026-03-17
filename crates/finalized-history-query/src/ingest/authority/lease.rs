@@ -79,7 +79,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     epoch: 1,
                     indexed_finalized_head: 0,
                     lease_valid_through_block: observed_upstream_finalized_block
-                        .saturating_add(self.lease_blocks),
+                        .saturating_add(self.lease_blocks - 1),
                 };
                 match self.publication_store.create_if_absent(&initial).await? {
                     CasOutcome::Applied(state) => {
@@ -97,14 +97,17 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
         };
 
         loop {
-            if current.owner_id == self.owner_id && current.session_id == self.session_id {
+            if current.owner_id == self.owner_id
+                && current.session_id == self.session_id
+                && observed_upstream_finalized_block <= current.lease_valid_through_block
+            {
                 let next = PublicationState {
                     owner_id: self.owner_id,
                     session_id: self.session_id,
                     epoch: current.epoch,
                     indexed_finalized_head: current.indexed_finalized_head,
                     lease_valid_through_block: observed_upstream_finalized_block
-                        .saturating_add(self.lease_blocks),
+                        .saturating_add(self.lease_blocks - 1),
                 };
                 if next.lease_valid_through_block <= current.lease_valid_through_block {
                     return Ok(current.into());
@@ -138,7 +141,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 epoch: current.epoch.saturating_add(1),
                 indexed_finalized_head: current.indexed_finalized_head,
                 lease_valid_through_block: observed_upstream_finalized_block
-                    .saturating_add(self.lease_blocks),
+                    .saturating_add(self.lease_blocks - 1),
             };
 
             match self
@@ -187,13 +190,17 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 return Err(Error::LeaseLost);
             }
 
+            if observed_upstream_finalized_block > current.lease_valid_through_block {
+                return Err(Error::LeaseLost);
+            }
+
             let next = PublicationState {
                 owner_id: current.owner_id,
                 session_id: current.session_id,
                 epoch: current.epoch,
                 indexed_finalized_head: current.indexed_finalized_head,
                 lease_valid_through_block: observed_upstream_finalized_block
-                    .saturating_add(self.lease_blocks),
+                    .saturating_add(self.lease_blocks - 1),
             };
             if next.lease_valid_through_block <= current.lease_valid_through_block {
                 return Ok(current.into());
@@ -549,6 +556,81 @@ mod tests {
                 .expect_err("publish should reject head mismatch");
 
             assert!(matches!(err, Error::PublicationConflict));
+        });
+    }
+
+    #[test]
+    fn same_session_acquire_after_expiry_bumps_epoch() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+
+            let first = authority.acquire(Some(100)).await.expect("first acquire");
+            // valid_through = 100 + 49 = 149; observed 150 > 149 → expired
+            let second = authority
+                .acquire(Some(150))
+                .await
+                .expect("re-acquire after expiry");
+
+            assert!(second.epoch > first.epoch);
+        });
+    }
+
+    #[test]
+    fn same_session_acquire_before_expiry_keeps_epoch() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+
+            let first = authority.acquire(Some(100)).await.expect("first acquire");
+            // valid_through = 149; observed 140 <= 149 → still valid
+            let second = authority
+                .acquire(Some(140))
+                .await
+                .expect("re-acquire before expiry");
+
+            assert_eq!(second.epoch, first.epoch);
+        });
+    }
+
+    #[test]
+    fn authorize_returns_lease_lost_after_own_expiry() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 10);
+
+            let token = authority.acquire(Some(100)).await.expect("acquire");
+            // valid_through = 149; observed 150 > 149 → expired, no external takeover
+            let err = authority
+                .authorize(&token, Some(150))
+                .await
+                .expect_err("authorize should fail after own expiry");
+
+            assert!(matches!(err, Error::LeaseLost));
+        });
+    }
+
+    #[test]
+    fn lease_blocks_grants_exact_n_blocks() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 10, 0);
+            let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 10, 0);
+
+            let _ = first.acquire(Some(100)).await.expect("bootstrap");
+            // valid_through = 100 + 9 = 109; observed 109 <= 109 → still fresh
+            let err = second
+                .acquire(Some(109))
+                .await
+                .expect_err("should be still fresh at last valid block");
+            assert!(matches!(err, Error::LeaseStillFresh));
+
+            // observed 110 > 109 → expired, takeover allowed
+            let token = second
+                .acquire(Some(110))
+                .await
+                .expect("takeover at first expired block");
+            assert_eq!(token.epoch, 2);
         });
     }
 

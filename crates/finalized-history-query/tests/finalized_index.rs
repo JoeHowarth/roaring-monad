@@ -458,7 +458,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         let config = lease_writer_config();
         let expected_lease_valid_through_block = static_observed_finalized_block()
             .expect("static observed finalized block")
-            .saturating_add(config.publication_lease_blocks);
+            .saturating_add(config.publication_lease_blocks - 1);
         let svc = FinalizedHistoryService::new_reader_writer(config, meta, blob, 1);
         let block = mk_block(
             1,
@@ -972,7 +972,7 @@ fn service_startup_uses_configured_lease_blocks() {
 
         assert_eq!(
             publication_state.lease_valid_through_block,
-            observed_upstream_finalized_block + 7
+            observed_upstream_finalized_block + 6
         );
     });
 }
@@ -1208,7 +1208,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
 }
 
 #[test]
-fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
+fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
     block_on(async {
         CONTROLLED_OBSERVED_FINALIZED_BLOCK.store(1_000, Ordering::Relaxed);
 
@@ -1232,13 +1232,14 @@ fn ingest_renews_again_before_final_publish_when_lease_expires_mid_batch() {
             .await
             .expect("bootstrap");
 
-        engine
+        let err = engine
             .ingest_finalized_block(
                 &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
                 lease,
             )
             .await
-            .expect("ingest should renew before final publish");
+            .expect_err("mid-batch lease expiry should fail with LeaseLost");
+        assert!(matches!(err, Error::LeaseLost));
     });
 }
 
