@@ -1192,3 +1192,68 @@ cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_e
 ### Methodology Learnings
 
 - The earlier bench failure surfaced an unrelated fixture bug: one-byte synthetic block hashes were colliding in larger seeded benches. Bench fixtures now use full-width block hashes so longer query benches remain valid.
+
+## 2026-03-16T23:27:22-07:00 - Run full query storage-pattern benchmark matrix
+
+### Change Summary
+
+- Re-ran the full `query_end_to_end_storage_patterns/*` matrix on the query-level benchmark harness.
+- Compared sparse cross-block, same-block contiguous, same-block non-contiguous, and mixed-page shapes in both warm and cold modes.
+
+### Hypothesis
+
+- The grouped contiguous-run path should show its value most clearly on cold same-block queries, while sparse cross-block should remain the most expensive shape because it defeats locality.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_end_to_end_storage_patterns --warm-up-time 0.05 --measurement-time 0.1 --sample-size 10
+```
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+
+### Workload Shape
+
+- Benchmark group: `query_end_to_end_storage_patterns`
+- Store backend: in-memory meta store plus counting blob store
+- Access patterns:
+  - `sparse_cross_block`: 64 blocks, one matching log per block
+  - `same_block_contiguous`: 64 contiguous matching logs in one block
+  - `same_block_non_contiguous`: 32 matches spread across 64 logs in one block
+  - `mixed_page`: one block with a contiguous run plus sparse singleton matches in later blocks
+- Warm mode primes the query once before timing; cold mode rebuilds and reseeds the service per iteration
+
+### Metrics
+
+- `sparse_cross_block/warm`: `89.696 us` median
+- `sparse_cross_block/cold`: `145.04 us` median
+- `same_block_contiguous/warm`: `21.142 us` median
+- `same_block_contiguous/cold`: `26.823 us` median
+- `same_block_non_contiguous/warm`: `18.215 us` median
+- `same_block_non_contiguous/cold`: `28.037 us` median
+- `mixed_page/warm`: `18.780 us` median
+- `mixed_page/cold`: `26.394 us` median
+
+### Bottleneck Evidence
+
+- Sparse cross-block remains far slower than same-block shapes, which is consistent with per-block payload reads dominating when locality is absent.
+- Same-block contiguous is slower than same-block non-contiguous in absolute warm time, but that fixture returns twice as many logs (64 vs 32), so absolute time is not an apples-to-apples comparison.
+- Normalized by returned items, contiguous is the cheapest same-block shape:
+  - contiguous warm: `0.330 us/item`
+  - non-contiguous warm: `0.569 us/item`
+  - sparse cross-block warm: `1.401 us/item`
+
+### Interpretation
+
+- The benchmark looks healthy and matches the intended access model.
+- The main result is that contiguous same-block queries are materially cheaper per returned log than non-contiguous same-block queries, which is what the coalesced `read_range(...)` path was meant to achieve.
+- The cold-path benefit is stronger than the warm-path benefit, which also matches expectations: once the point-payload cache is warm, storage-read savings matter less than the remaining executor and page-assembly work.
+- Sparse cross-block remains the worst case by a wide margin, which is expected because the point-payload cache design preserves point-read economics rather than inventing locality where none exists.
+
+### Methodology Learnings
+
+- For these shapes, per-item normalization is necessary before comparing contiguous and non-contiguous cases because the fixtures return different numbers of logs.
+- Query-level benchmarks are much more informative than `load_by_id(...)` microbenches for this feature because they include grouping, materialization, exact filtering, and page assembly together.
