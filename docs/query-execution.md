@@ -152,7 +152,7 @@ After bitmap intersection identifies candidate `log_id`s, each is materialized:
 
 1. **Directory lookup** — resolve `log_id -> block_num` using the 3-tier directory (bucket → sub-bucket → fragment fallback). See [storage-model.md](storage-model.md) for the lookup flow and worked example.
 2. **Range blob read** — load the byte range from `block_logs/<block_num>` using the block header's offset table
-3. **Coalesced runs** — contiguous same-block log payload reads may be coalesced into one range read
+3. **Coalesced runs** — contiguous same-block log payload reads may be coalesced into bounded prefix range reads, stopping once exact filtering and `limit + 1` pagination have enough items
 
 Materialized logs are checked against the filter for exact match (the bitmap index is an approximation within the page span).
 

@@ -133,7 +133,9 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 continue;
             }
 
-            if observed_upstream_finalized_block <= current.lease_valid_through_block {
+            let same_owner = current.owner_id == self.owner_id;
+            if !same_owner && observed_upstream_finalized_block <= current.lease_valid_through_block
+            {
                 return Err(Error::LeaseStillFresh);
             }
 
@@ -494,6 +496,35 @@ mod tests {
                 .expect("same owner restart after expiry");
 
             assert!(second_token.epoch > first_token.epoch);
+        });
+    }
+
+    #[test]
+    fn same_owner_restart_before_expiry_bumps_epoch_and_session() {
+        block_on(async {
+            let store = InMemoryMetaStore::default();
+            let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
+            let second = LeaseAuthority::with_session(store.clone(), 7, [2u8; 16], 50, 0);
+
+            let first_token = first
+                .acquire(Some(100))
+                .await
+                .expect("first acquire publication");
+            let second_token = second
+                .acquire(Some(120))
+                .await
+                .expect("same owner restart before expiry");
+
+            assert!(second_token.epoch > first_token.epoch);
+
+            let state = store
+                .load()
+                .await
+                .expect("load")
+                .expect("publication state");
+            assert_eq!(state.owner_id, 7);
+            assert_eq!(state.session_id, [2u8; 16]);
+            assert_eq!(state.epoch, second_token.epoch);
         });
     }
 
