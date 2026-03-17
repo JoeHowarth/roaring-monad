@@ -52,6 +52,16 @@ storage-model shift to content-addressed or staged blob keys.
 - if returned bytes equal `B`
 - return: `CreateOutcome::AlreadyExists`
 
+Note:
+
+- this replay check currently assumes a full-object read for byte
+  comparison
+- that is acceptable for the base design if replay is rare enough in
+  practice
+- if replay frequency or blob size makes this too expensive, a cheaper
+  equality signal such as ETag or content-hash comparison can be
+  evaluated as a follow-up optimization
+
 ### Conflict path
 
 - request: same key `K`, different body `B2`
@@ -114,6 +124,12 @@ Return:
 
 The implementation should avoid silently degrading into unconditional
 overwrite or best-effort check-then-put semantics.
+
+This design also assumes that unconditional overwrites from outside this
+system are not part of the supported deployment model for this blob
+keyspace. If some other actor can overwrite semantic blob keys
+unconditionally, the immutable-write contract is already broken at the
+deployment boundary.
 
 ## Capability Validation
 

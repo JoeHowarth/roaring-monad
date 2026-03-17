@@ -128,6 +128,13 @@ Allowed when:
 - the triggering condition clears
 - and no stronger trigger remains
 
+Recommended recovery rule:
+
+- do not clear throttled state on a single backend success
+- require sustained backend success over a bounded configurable window so
+  the service does not oscillate rapidly under intermittent dependency
+  flakiness
+
 ### Degraded → healthy
 
 Not automatic by default.
@@ -158,6 +165,20 @@ Recommended rule:
 
 - must obey write-authority constraints
 - should not proceed when degraded due to correctness or ownership risk
+
+### Lease loss interaction
+
+Lease loss is primarily handled by the write-authority subsystem rather
+than by this runtime state machine.
+
+Recommended rule:
+
+- lease loss should block owner-only work immediately through authority
+  validation
+- repeated lease-loss or ownership-instability events should still be
+  surfaced through the metrics and reason-code model here
+- do not rely on service degraded state as the primary mechanism for
+  enforcing loss of write authority
 
 ## Metrics Contract
 

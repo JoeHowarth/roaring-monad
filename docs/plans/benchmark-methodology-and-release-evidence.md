@@ -144,6 +144,10 @@ Performance evidence should be captured in two places.
 
 Use a concise markdown summary in the review PR for reviewer context.
 
+That summary should compare the result against the most recent accepted
+baseline for the same benchmark class and call out any material
+regression explicitly.
+
 ### Repo evidence log
 
 Use `OPTIMIZATION_LOG.md` for actual profiling and benchmark evidence in
@@ -167,6 +171,8 @@ Record:
 - treat noisy or one-off numbers as exploratory, not release evidence
 - prefer a small number of repeatable benchmark classes over many ad hoc
   runs
+- keep representative workload definitions in benchmark configs or
+  tooling inputs rather than hard-coding them into this methodology doc
 
 ## Open Questions
 

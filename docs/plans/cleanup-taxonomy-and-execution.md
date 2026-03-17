@@ -39,6 +39,11 @@ Owns:
   online
 - work that should not wait for the next restart but is not GC debt
 
+At the moment, no concrete periodic-maintenance task is fully defined
+beyond this boundary. The phase should therefore be treated as a real
+execution hook with intentionally narrow scope, not as proof that a
+specific online housekeeping task already exists.
+
 ### GC
 
 Runs as a background debt-measurement and cleanup pass.
@@ -209,6 +214,9 @@ startup substitute.
 GC listing and deletion work must be designed with large keyspaces in
 mind. Where a class is too expensive for naïve scanning, that should be
 made explicit rather than hidden behind a placeholder implementation.
+
+The default expectation is cursor-based prefix listing with bounded
+per-pass scan budgets rather than unbounded full-prefix scans.
 
 ## Open Questions
 
