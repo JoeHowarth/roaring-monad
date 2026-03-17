@@ -316,6 +316,9 @@ impl LogsQueryEngine {
                         run.last().expect("run must be non-empty").1.local_ordinal,
                     )
                     .await?;
+                if run_items.len() != run.len() {
+                    return Err(Error::NotFound);
+                }
                 for ((run_id, _), item) in run.into_iter().zip(run_items) {
                     if !materializer.exact_match(&item, filter) {
                         continue;
