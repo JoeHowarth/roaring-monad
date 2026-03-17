@@ -57,6 +57,10 @@ If these classes are not handled deliberately, the system risks either:
 
 This workstream exists to define and implement that model.
 
+Concrete implementation notes:
+
+- `docs/plans/cleanup-taxonomy-and-execution.md`
+
 ## Current State
 
 ### Startup recovery exists

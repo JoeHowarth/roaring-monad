@@ -20,6 +20,10 @@ benchmarks into release evidence:
 Without that framing, performance work can produce numbers without
 proving readiness.
 
+Concrete implementation notes:
+
+- `docs/plans/benchmark-methodology-and-release-evidence.md`
+
 ## Scope
 
 - define ingest, query, startup, and recovery SLO targets

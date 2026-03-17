@@ -1,409 +1,264 @@
 # Cleanup Taxonomy And Execution
 
-## Summary
+## Purpose
 
-This document defines the concrete cleanup taxonomy and execution
-boundaries for `crates/finalized-history-query`.
+This document defines the implementation-level cleanup model behind
+startup recovery, periodic maintenance, and GC.
 
-The goal is to make recovery and cleanup behavior implementation-ready by
-answering four questions precisely:
-
-1. what artifact classes exist
-2. which phase owns each class
-3. when deletion is safe
-4. which cleanup is automatic versus operator-driven
-
-This document is a concrete follow-on to
+It is the implementation companion to
 `docs/plans/recovery-gc-and-maintenance.md`.
 
 ## Goal
 
-Define an implementation-ready cleanup model for startup recovery,
-periodic maintenance, and GC that is consistent with the current storage
-model and publication semantics.
+Define:
 
-## Design Constraints
-
-- `publication_state.indexed_finalized_head` is the only reader-visible
-  publication barrier
-- authoritative artifacts for blocks `<= indexed_finalized_head` must
-  never be deleted by automatic cleanup
-- compaction summaries are acceleration artifacts, not the only source of
-  truth for frontier data
-- `open_stream_page/*` is inventory state, not reader-visible data
-- all metadata deletions must remain fence-aware
-- cleanup must be idempotent when retried
+- what cleanup classes exist
+- which phase owns each class
+- what is automatic GC versus operator pruning
+- what is safe to delete and when
 
 ## Cleanup Phases
 
-## 1. Startup Recovery
+### Startup recovery
 
-Purpose:
+Runs under acquired write authority before new ingest proceeds.
 
-- restore a clean write frontier before new ingest begins
+Owns:
 
-Trigger:
+- unpublished suffix cleanup
+- unpublished summary cleanup
+- stale sealed open-page marker repair
 
-- writer acquires or re-authorizes ownership during startup
+### Periodic maintenance
 
-Properties:
+Runs during healthy steady-state writer operation.
 
-- correctness-critical
-- synchronous with writer startup
-- must be safe under replay
+Owns:
 
-Current code already does:
+- bounded inventory and frontier housekeeping that is safe to perform
+  online
+- work that should not wait for the next restart but is not GC debt
 
-- delete unpublished blocks above the published head
-- delete unpublished directory and stream-page summaries for the same
-  unpublished suffix
-- repair stale sealed open-page markers
+### GC
 
-## 2. Periodic Maintenance
+Runs as a background debt-measurement and cleanup pass.
 
-Purpose:
+Owns:
 
-- perform bounded hygiene work during steady-state operation that should
-  not require full startup recovery
+- debris that should not remain indefinitely
+- backlog measurement for guardrails
+- cleanup classes that are safe to enumerate and delete in background
 
-Trigger:
+### Operator pruning
 
-- explicit service maintenance call while a writer lease is valid
+Runs only when a caller supplies an explicit boundary or policy.
 
-Properties:
+Owns:
 
-- not required to establish basic correctness at startup
-- bounded work budget per invocation
-- may be retried or skipped without corrupting visible state
-
-Current code:
-
-- placeholder only
-
-## 3. Garbage Collection
-
-Purpose:
-
-- audit and clean long-lived debris or inventories that should not grow
-  without bound
-
-Trigger:
-
-- explicit GC run while a writer lease is valid
-
-Properties:
-
-- background debt-management and policy enforcement
-- may report-only for some classes before automatic deletion is adopted
-- owns guardrail measurement
-
-Current code:
-
-- placeholder stats plus `prune_block_hash_index_below(...)`
+- policy-driven data removal such as pruning old block-hash index entries
+- any future retention-based cleanup that is not correctness debt
 
 ## Artifact Classes
 
-The cleanup model should classify artifacts into three groups.
-
-## A. Authoritative Data-Path Artifacts
-
-These are required to serve published data correctly.
+### Authoritative published artifacts
 
 Examples:
 
-- `block_logs/<block_num>`
-- `block_log_headers/<block_num>`
-- `block_meta/<block_num>`
-- `block_hash_to_num/<block_hash>`
-- `log_dir_frag/<sub_bucket_start>/<block_num>`
-- `stream_frag_meta/<stream_id>/<page_start>/<block_num>`
-- `stream_frag_blob/<stream_id>/<page_start>/<block_num>`
+- `block_meta/*`
+- `block_logs/*`
+- `block_log_headers/*`
+- `block_hash_to_num/*` while retained
+- `log_dir_frag/*`
+- `stream_frag_meta/*`
+- `stream_frag_blob/*`
 
-Deletion rule:
+Rule:
 
-- may be deleted automatically only when they are above the published
-  head and therefore unpublished
-- must never be deleted automatically once they may contribute to visible
-  published data
+- never delete automatically merely because they are old
+- only delete if they are known to be unpublished, orphaned by explicit
+  correctness rules, or selected by operator pruning policy
 
-Owner:
-
-- startup recovery for unpublished suffix cleanup
-
-## B. Acceleration Artifacts
-
-These improve read performance but are not the only source of truth for
-the frontier zone.
+### Published acceleration artifacts
 
 Examples:
 
-- `log_dir_sub/<sub_bucket_start>`
-- optional `log_dir/<bucket_start>`
-- `stream_page_meta/<stream_id>/<page_start>`
-- `stream_page_blob/<stream_id>/<page_start>`
+- `log_dir_sub/*`
+- `log_dir/*`
+- `stream_page_meta/*`
+- `stream_page_blob/*`
 
-Deletion rule:
+Rule:
 
-- may be deleted automatically if they summarize only unpublished work
-- may be recomputed from retained source fragments if missing or stale
-- should not be deleted automatically once they summarize visible ranges,
-  unless the system has an explicit rebuild strategy and can tolerate the
-  performance cost
+- may be deleted if they are proven unpublished or provably rebuildable
+  debris
+- must not be treated as authoritative sources of truth
 
-Owner:
-
-- startup recovery for unpublished summary cleanup
-- GC only if a future rebuild-and-reclaim policy is adopted explicitly
-
-## C. Inventory And Control-Plane Artifacts
-
-These exist to coordinate writes, compaction, or operations.
+### Inventory and control-plane state
 
 Examples:
 
-- `publication_state`
-- `open_stream_page/<shard>/<page_start>/<stream_id>`
+- `open_stream_page/*`
+- fence state
+- publication state
 
-Deletion rule:
+Rule:
 
-- `publication_state` is never a cleanup target
-- `open_stream_page/*` may be deleted automatically once the page is
-  sealed and compaction has succeeded
-
-Owner:
-
-- startup recovery for stale sealed markers present at startup
-- periodic maintenance for bounded marker cleanup during steady state
+- `publication_state` is never GC-managed
+- `open_stream_page/*` may be repaired or deleted when provably stale
 
 ## Ownership Matrix
 
-| Cleanup class | Startup recovery | Periodic maintenance | GC | Operator-driven |
-|---|---|---|---|---|
-| Unpublished authoritative artifacts above published head | Yes | No | No | No |
-| Unpublished acceleration artifacts for the same suffix | Yes | No | No | No |
-| Stale sealed `open_stream_page/*` markers | Yes | Yes | No | No |
-| Deferred bounded inventory hygiene | No | Yes | No | No |
-| Long-lived cleanup debt / debris measurement | No | No | Yes | No |
-| Old but valid published indexes such as block-hash lookup entries | No | No | Optional reporting | Yes |
+### Startup recovery owns
+
+- blocks above visible head
+- summaries for unpublished ranges above visible head
+- stale open-page markers that now refer to sealed pages
+
+### Periodic maintenance owns
+
+- bounded open-page housekeeping that does not require full restart logic
+- any later online sealing or summary maintenance adopted by the service
+
+### GC owns
+
+- debris classes that should never persist indefinitely and can be
+  safely audited in background
+- guardrail measurement for those classes
+
+### Operator pruning owns
+
+- explicit boundary-based deletion such as
+  `prune_block_hash_index_below(min_block_num)`
 
 ## Safe Deletion Rules
 
-## Rule 1. Publication state is the only visibility boundary
+### Unpublished authoritative artifacts
 
-Automatic cleanup must determine "unpublished" solely from
-`publication_state.indexed_finalized_head`, not from inferred local
-progress.
+Delete when:
 
-## Rule 2. Delete unpublished summaries before unpublished authoritative blocks
+- block number is above `publication_state.indexed_finalized_head`
+- cleanup is running under valid write authority
 
-When cleaning an unpublished suffix:
+Delete order:
 
-1. discover unpublished blocks above the published head
-2. derive the log-id span of that unpublished suffix
-3. delete summaries that cover only that unpublished span
-4. delete unpublished authoritative artifacts in reverse block order
+1. derived summaries for the unpublished range
+2. unpublished blocks in reverse order
 
-This matches the current startup cleanup logic and should remain the
-canonical ordering.
+### Published acceleration artifacts
 
-## Rule 3. Treat source fragments as authoritative for frontier recovery
+Delete when:
 
-Directory and stream-page summaries may be deleted safely for unpublished
-ranges because source fragments remain available for recovery or rebuild.
+- they are provably outside published authoritative state and are
+  rebuildable
+- or they are explicitly classified as debris
 
-## Rule 4. Marker deletion requires completed sealing
+Do not delete merely because they are old.
 
-`open_stream_page/*` markers are only safe to delete after the page is
-sealed and the relevant page compaction has either:
+### Open-page markers
 
-- already been written successfully, or
-- is being written successfully in the same cleanup flow
+Delete when:
 
-## Rule 5. Published authoritative data is retained by default
+- the referenced page is sealed at the current frontier
+- the related compaction/repair action has completed
 
-This design does not introduce automatic TTL-based deletion for
-published authoritative data-path artifacts.
+## Guardrail Model
 
-Any future retention or pruning policy for published data must be an
-explicit operator or product decision, not an incidental GC behavior.
+Guardrails should measure cleanup debt classes that the system can act
+on meaningfully.
 
-## Automatic GC Versus Operator Pruning
+The current config names should be reconciled to current artifact
+classes. A likely future shape is:
 
-The cleanup model should distinguish three cases.
+- unpublished or orphaned acceleration artifacts
+- stale inventory markers
+- operator-prunable metadata backlog
 
-### Automatic cleanup
+If existing names such as "orphan chunk bytes" or "stale tail keys" do
+not correspond to current artifact classes, they should be renamed
+before implementation hardens around them.
 
-Use for:
+## Operator Pruning
 
-- unpublished suffix artifacts
-- unpublished summaries
-- stale sealed open-page markers
-- future clearly-orphaned debris classes that cannot affect visible data
+Some cleanup should remain explicit rather than automatic.
 
-### Operator-driven pruning
+The current example is:
 
-Use for:
+- prune block-hash index entries below an operator-chosen block number
 
-- old but still valid published helper indexes where removal is a policy
-  decision rather than a correctness repair
+This should be modeled as operator pruning, not as GC debt, unless the
+project later decides to add a formal retention policy for that index.
 
-Current example:
+## Execution Rules
 
-- `prune_block_hash_index_below(min_block_num)`
+### Fence awareness
 
-### Retain indefinitely by default
+Any metadata mutation or deletion must use the current fence epoch.
 
-Use for:
+### Visibility awareness
 
-- published authoritative data-path artifacts
-- published acceleration artifacts unless a future rebuild policy is
-  explicitly adopted
+Cleanup must never infer visibility from anything other than
+`publication_state.indexed_finalized_head`.
 
-## Recommended Execution Boundaries
+### Bounded online work
 
-## Startup Recovery Responsibilities
+Periodic maintenance must be bounded so it cannot become an unbounded
+startup substitute.
 
-- discover unpublished suffix from `block_meta`
-- derive unpublished summary coverage from the unpublished log-id span
-- delete unpublished summaries
-- delete unpublished authoritative block artifacts in reverse order
-- seal-and-remove stale open-page markers whose pages are now sealed
+### Background cost awareness
 
-## Periodic Maintenance Responsibilities
-
-- scan a bounded number of open-page markers
-- for markers that now refer to sealed pages:
-  - compact the page if needed
-  - delete the marker
-- report counts of pages sealed and markers removed
-
-Recommendation:
-
-- keep periodic maintenance focused on inventory and bounded frontier
-  hygiene
-- do not make it responsible for wide historical scanning
-
-## GC Responsibilities
-
-- measure cleanup debt classes
-- optionally delete clearly orphaned or stale non-visible classes
-- expose guardrail stats
-- keep operator-pruning tasks separate from automatic GC decisions even
-  if implemented in the same worker type
-
-Recommendation:
-
-- keep `prune_block_hash_index_below(...)` available as an explicit
-  operator path
-- do not treat it as the model for general-purpose automatic GC
-
-## Reporting And Guardrails
-
-The current GC guardrail names do not match the current storage model
-well. Implementation should rename or remap them to current cleanup
-classes before relying on them operationally.
-
-Recommended stats categories:
-
-- unpublished_suffix_blocks
-- unpublished_summary_objects
-- stale_open_page_markers
-- operator_prunable_block_hash_entries
-- orphan_acceleration_objects
-
-Recommended policy split:
-
-- startup recovery reports what it removed
-- maintenance reports bounded work completed
-- GC reports measured debt, automatic deletions, and guardrail breaches
+GC listing and deletion work must be designed with large keyspaces in
+mind. Where a class is too expensive for naïve scanning, that should be
+made explicit rather than hidden behind a placeholder implementation.
 
 ## Open Questions
 
-## 1. Should periodic maintenance compact sealed pages proactively or only repair stale markers?
+### 1. Should old block-hash index entries be automatic or operator-pruned?
 
-Possible answers:
+Options:
 
-- A. Only repair markers that already exist
-- B. Also proactively scan for newly sealed pages without relying on
-  marker presence
-- C. Move all page sealing work to GC
-
-Recommendation:
-
-- A for the first implementation
-
-Why:
-
-- it keeps periodic maintenance bounded
-- it matches the current inventory model
-- it avoids turning maintenance into a wide historical scan
-
-## 2. Should GC automatically delete published acceleration artifacts that can be rebuilt?
-
-Possible answers:
-
-- A. Never; published acceleration artifacts remain until an explicit
-  future retention policy exists
-- B. Yes, once they are older than a TTL
-- C. Yes, when storage-pressure guardrails are exceeded
+- A. always operator-pruned by explicit block boundary
+- B. automatic retention window
+- C. hybrid: explicit for now, automatic later if needed
 
 Recommendation:
 
-- A for now
+- C, with current implementation starting at A
 
-Why:
+Reason:
 
-- the current crate has no rebuild budget model, no TTL model, and no
-  explicit reader-performance fallback policy for such reclamation
+- the code already exposes explicit boundary pruning
+- automatic retention can be added later if there is a real operating
+  need
 
-## 3. Should block-hash index pruning live inside GC or as a distinct operator API?
+### 2. Should published acceleration artifacts ever be GC’d automatically?
 
-Possible answers:
+Options:
 
-- A. Keep it as a GC worker method invoked explicitly by operators
-- B. Move it into periodic maintenance
-- C. Add automatic age-based pruning in GC
+- A. no, only unpublished or clearly orphaned ones
+- B. yes, if rebuildable and older than a retention window
 
 Recommendation:
 
 - A
 
-Why:
+Reason:
 
-- the current API already expresses pruning as an explicit boundary-based
-  action
-- it is policy-driven, not correctness-repair-driven
+- the current plans are about correctness and debt cleanup, not storage
+  minimization through aggressive rebuild-on-demand
 
-## 4. How much startup cleanup should be synchronous before the writer is considered ready?
+### 3. Does periodic maintenance need its own persistent checkpoints?
 
-Possible answers:
+Options:
 
-- A. All unpublished suffix cleanup and stale sealed marker repair
-- B. Only unpublished suffix cleanup; marker repair may defer
-- C. Only detect cleanup debt at startup and defer all deletion
+- A. no, keep it stateless and bounded
+- B. yes, track progress across runs for expensive scans
 
 Recommendation:
 
-- A for correctness-sensitive startup behavior
+- start with A
 
-Why:
+Reason:
 
-- the current model expects a clean write frontier before new ingest
-- stale sealed markers can interfere with later compaction behavior if
-  left behind
-
-## Implementation Order
-
-1. codify the cleanup taxonomy in code and tests
-2. align `GcStats` and config guardrails with real cleanup classes
-3. implement bounded periodic maintenance for stale sealed marker repair
-4. implement real GC discovery/reporting for debt classes
-5. keep operator pruning explicit and separate from automatic GC policy
-
-## Relationship To Other Plans
-
-- aligns with `docs/plans/recovery-gc-and-maintenance.md`
-- should inform the cleanup portions of
-  `docs/plans/correctness-verification-matrix.md`
-- should feed startup-cost and cleanup-budget expectations into
-  `docs/plans/performance-capacity-and-deployment.md`
+- startup recovery already handles correctness-critical repair
+- checkpoints add another state machine before the cleanup model is even
+  settled

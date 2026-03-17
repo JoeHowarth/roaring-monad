@@ -18,6 +18,10 @@ That is useful, but it is not yet a production observability story.
 There is no clear exported metrics model, no alert strategy, and no
 runbook set tied to the failure modes the service can enter.
 
+Concrete implementation notes:
+
+- `docs/plans/runtime-state-and-metrics-contract.md`
+
 ## Scope
 
 - define the metrics surface for ingest, query, publication, fencing,

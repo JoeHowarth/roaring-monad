@@ -1,526 +1,255 @@
 # Runtime State And Metrics Contract
 
-## Summary
+## Purpose
 
-This document defines the implementation-level contract for runtime
-state transitions and the associated observability surface for
-`crates/finalized-history-query`.
+This document defines the concrete service-level runtime state machine
+and the corresponding metrics contract.
 
-The current code already has a minimal runtime-state mechanism:
-
-- `healthy`
-- `throttled`
-- `degraded`
-
-Those states are currently driven by:
-
-- consecutive backend errors
-- explicit service safety transitions such as finality or parent-linkage
-  violations
-- GC guardrail reactions
-
-The current mechanism is intentionally small, but it is still too
-implicit for production-grade operation. The crate needs one explicit
-runtime-state contract that implementation, metrics, and runbooks all
-follow.
-
-This document is the concrete follow-up to
+It is the implementation companion to
 `docs/plans/observability-and-operations.md`.
 
 ## Goal
 
 Define:
 
-- the runtime degradation state machine
-- trigger composition and stickiness rules
-- the metrics contract for those states and their inputs
-- the runbook-facing signals that operators will need
-
-## Non-Goals
-
-- choosing an instrumentation library
-- defining dashboard layouts
-- defining SLO numbers
-- changing the crate's correctness model
-
-## Current State
-
-Today:
-
-- `RuntimeState` stores `degraded`, `throttled`, a consecutive backend
-  error counter, and a single human-readable reason
-- backend successes reset the backend error counter
-- backend errors can move the service from healthy to throttled to
-  degraded
-- `run_gc_once(...)` can set throttled or degraded state depending on
-  `gc_guardrail_action`
-- ingest can set degraded state on finality or parent-linkage failures
-- degraded blocks query, ingest, maintenance, and GC
-- throttled blocks ingest but not query
-
-That is enough for a first local implementation, but not enough as an
-long-term contract because:
-
-- multiple triggers can overlap
-- the current state representation is not compositional
-- there is no explicit sticky/clear policy beyond local method behavior
-- there is no defined metric family for transition causes
+- healthy, throttled, degraded, and fail-closed behavior
+- what inputs can trigger each state
+- how triggers compose
+- what metrics and signals must exist for operators
 
 ## Runtime States
 
-The service-level runtime state should be defined in terms of effect on
-request handling.
-
 ### Healthy
 
-Meaning:
-
-- no active safety restriction is in force
-- query, ingest, maintenance, and GC are allowed subject to their normal
-  per-operation guards
+The service accepts normal read and write work.
 
 ### Throttled
 
-Meaning:
+The service remains available but is intentionally limiting work or
+signaling elevated risk.
 
-- the service is still considered readable
-- the service should reject or delay new write/owner-only mutation paths
-  that would increase pressure
-- query may remain available if correctness is not in doubt
+Use for:
 
-Expected current behavior:
-
-- ingest is blocked
-- query remains allowed
-- maintenance and GC depend on the precise throttle source
+- cleanup debt or guardrail conditions that are concerning but not yet a
+  correctness failure
+- sustained backend trouble that should reduce pressure before a hard
+  fail-closed transition
 
 ### Degraded
 
-Meaning:
+The service is in a fail-closed state for operations that could violate
+correctness.
 
-- correctness confidence is no longer sufficient to continue normal
-  service operation
-- all externally visible service methods that depend on correct state
-  should fail closed
+Use for:
 
-Expected current behavior:
+- finality or parent-linkage violations
+- backend failure thresholds that the service policy treats as
+  correctness-threatening
+- cleanup guardrail conditions configured to fail closed
 
-- query blocked
-- ingest blocked
-- maintenance blocked
-- GC blocked
+### Fail-closed
 
-### Fail-Closed
+For this crate, "fail-closed" is a policy outcome rather than a
+separate implementation state. It normally manifests as degraded mode
+that rejects risky operations.
 
-This document treats fail-closed as a degraded-state policy, not as a
-separate parallel state bit.
+## State Inputs
 
-Meaning:
+The state machine should accept inputs from three sources.
 
-- the triggering condition requires immediate rejection of normal
-  operation
-- the service should present as degraded with an explicit fail-closed
-  reason
+### Backend error policy
 
 Examples:
 
-- finality violation
-- parent-linkage violation
-- backend failure threshold exceeded when configured to fail closed
-- GC guardrail configured as `FailClosed`
-
-## Trigger Classes
-
-The runtime-state machine should classify triggers, not just raw errors.
-
-### 1. Backend availability triggers
-
-Examples:
-
-- repeated backend read or write failures
+- consecutive backend read/write failures
 - retry-budget exhaustion
 
-Default effect:
+### Cleanup guardrail policy
 
-- `healthy -> throttled -> degraded`
+Examples:
 
-### 2. Correctness violation triggers
+- GC debt above configured thresholds
+- stale inventory or orphaned artifact backlog
+
+### Hard correctness violations
 
 Examples:
 
 - finality violation
 - invalid parent linkage
-- stale-state condition proven locally
+- lease or ownership misuse if surfaced as a service-level violation
 
-Default effect:
+## Composition Rules
 
-- immediate fail-closed / degraded
+Recommended precedence:
 
-### 3. Cleanup debt triggers
+1. hard correctness violation
+2. degraded/fail-closed trigger
+3. throttled trigger
+4. healthy
 
-Examples:
+That means:
 
-- GC guardrail exceeded
-- excessive orphan or stale-artifact backlog
+- degraded overrides throttled
+- throttled may be cleared by recovery or backend success only if no
+  stronger trigger remains
+- hard correctness violations should be sticky until an explicit
+  restart/reset path is taken
 
-Default effect:
+## Transition Rules
 
-- policy-driven: either throttled or degraded
+### Healthy → throttled
 
-### 4. Observation/authority triggers
+Trigger when:
 
-Examples:
+- backend errors exceed the configured throttle threshold
+- or cleanup guardrail policy says "throttle"
 
-- upstream finalized-block observation unavailable
-- lease lost
-- publication conflict requiring re-acquire
+### Throttled → degraded
 
-Default effect:
+Trigger when:
 
-- not always a global runtime-state transition
-- often a request-level or writer-cache-level failure instead
+- backend errors exceed the configured degraded threshold
+- or cleanup guardrail policy says "fail closed"
+- or a correctness failure occurs
 
-These should still be counted and exposed, even if they do not always
-flip the global service state.
+### Healthy → degraded
 
-## State-Transition Policy
+Trigger immediately when:
 
-The implementation should follow these rules.
+- finality violation
+- invalid parent linkage
+- any other correctness violation explicitly classified as fail-closed
 
-### Rule 1. Degraded dominates throttled
+### Throttled → healthy
 
-If any active trigger requires degraded, the service is degraded even if
-other triggers would only throttle.
+Allowed when:
 
-### Rule 2. Correctness violations are immediately sticky
+- the triggering condition clears
+- and no stronger trigger remains
 
-Correctness-triggered degraded state should remain until explicit
-operator clear or service restart, unless a future design chooses a more
-targeted recovery mechanism.
+### Degraded → healthy
 
-Rationale:
+Not automatic by default.
 
-- these failures are not just pressure signals
-- silent automatic recovery would hide serious state risk
+Recommended rule:
 
-### Rule 3. Backend-pressure throttling may auto-clear
+- degraded from hard correctness failure requires restart/operator
+  intervention
+- degraded from transient backend conditions may be allowed to clear only
+  if the implementation deliberately supports that policy and it is
+  documented
 
-Backend-failure throttling may clear automatically after sufficient
-successes, provided no degraded trigger is active.
+## Operation Gating
 
-The current code already behaves this way for backend-error throttling.
+### Query path
 
-### Rule 4. GC-triggered throttling depends on policy
+- rejected in degraded mode
+- may be allowed or rate-limited in throttled mode depending on host
+  policy, but this crate should at minimum signal the state clearly
 
-GC guardrail throttling may be:
+### Ingest path
 
-- sticky until next clean GC pass
-- auto-clear on a later successful below-threshold GC pass
+- rejected in degraded mode
+- rejected or slowed in throttled mode depending on whether throttling is
+  implemented as backpressure or explicit errors
 
-The current code already clears throttle when a later GC pass no longer
-exceeds the configured guardrail.
+### Owner-only maintenance and GC
 
-### Rule 5. One reason string is not enough for the long term
-
-The implementation should move toward a model that can preserve:
-
-- effective runtime state
-- primary cause
-- all active trigger classes or at least counters per trigger class
-
-The external human-readable reason can remain singular, but the internal
-representation should be able to explain state composition.
-
-## Recommended Internal Model
-
-The recommended end state is:
-
-- one effective runtime mode
-  - `Healthy`
-  - `Throttled`
-  - `Degraded`
-- one primary reason code
-- per-trigger-class activity/counters
-- sticky bit or policy flag for correctness-triggered degradation
-
-Conceptually:
-
-```rust
-enum RuntimeMode {
-    Healthy,
-    Throttled,
-    Degraded,
-}
-
-enum RuntimeTriggerKind {
-    BackendPressure,
-    CorrectnessViolation,
-    CleanupDebt,
-    ObservationOrAuthority,
-}
-
-struct RuntimeStatus {
-    mode: RuntimeMode,
-    primary_reason: RuntimeReasonCode,
-    active_triggers: BTreeSet<RuntimeTriggerKind>,
-    sticky: bool,
-}
-```
-
-This does not need to land immediately as code, but metrics and
-runbooks should be designed as if this is the target model.
+- must obey write-authority constraints
+- should not proceed when degraded due to correctness or ownership risk
 
 ## Metrics Contract
 
-The metrics contract should expose both state and causes.
+The implementation should expose at least these conceptual metrics.
 
-## 1. Runtime mode metrics
+### State metrics
 
-Required concepts:
+- current service state
+- transitions by source trigger
+- time spent in throttled/degraded state
 
-- current service mode
-  - healthy / throttled / degraded
-- transitions into each mode
-- time spent in each mode
+### Backend reliability metrics
 
-Recommended forms:
+- backend errors by class and operation
+- retry attempts
+- retry exhaustion
+- consecutive backend error streaks
 
-- a single mode gauge encoded as enum/state label
-- transition counters by destination mode
-- duration counters/histograms if a metrics stack supports them
+### Correctness and ownership metrics
 
-## 2. Trigger counters
-
-Required concepts:
-
-- backend-error trigger activations
-- correctness-trigger activations
-- cleanup-debt trigger activations
-- authority/observation failure events
-
-Recommended labels:
-
-- trigger kind
-- reason code
-- operation family where applicable
-
-## 3. Backend health metrics
-
-Required concepts:
-
-- consecutive backend error count
-- backend success resets
-- retry-budget exhaustion count
-- backend error counts by broad class
-
-These metrics explain why a mode transition happened rather than only
-that it happened.
-
-## 4. GC and cleanup metrics
-
-Required concepts:
-
-- latest GC guardrail measurements
-- latest GC decision
-  - ok / throttled / degraded
-- cleanup debt gauges by class
-- startup recovery work performed
-- maintenance work performed
-
-The exact debt classes depend on the final cleanup taxonomy, but the
-contract should already reserve space for them.
-
-## 5. Cache metrics
-
-The crate already exposes per-table cache snapshots.
-
-The metrics contract should treat these as first-class read-path
-observability:
-
-- hits
-- misses
-- inserts
-- evictions
-- resident bytes
-
-per table:
-
-- `BlockLogHeaders`
-- `LogDirectoryBuckets`
-- `LogDirectorySubBuckets`
-- `PointLogPayloads`
-- `StreamPageMeta`
-- `StreamPageBlobs`
-
-## 6. Publication and authority metrics
-
-Required concepts:
-
-- lease acquisition attempts and successes
-- lease-loss events
-- observation-unavailable events
+- lease-lost events
 - publication conflicts
-- startup re-authorization failures
+- fence rejections
+- finality or parent-linkage violations
 
-These are runbook-critical even when they do not all map to a global
-runtime-mode change.
+### Cleanup metrics
 
-## 7. Distributed-backend telemetry pass-through
+- GC debt by tracked class
+- cleanup deletions by class
+- maintenance actions performed
 
-The current Scylla adapter already has useful telemetry concepts:
+### Query and ingest metrics
 
-- CAS attempts
-- CAS conflicts
-- timeout errors
-- per-operation variants
+- ingest request counts/latencies
+- query request counts/latencies
+- cache hits/misses/evictions/bytes by table
 
-The metrics contract should preserve these concepts at the service
-observability layer rather than hiding them behind a generic
-"backend_error_total".
+## Operator-Facing Signals
 
-## Reason Codes
+At minimum, operators should be able to answer:
 
-Human-readable strings are useful, but implementation and runbooks need
-stable reason codes.
-
-Recommended reason-code families:
-
-- `backend_error_threshold`
-- `gc_guardrail_throttle`
-- `gc_guardrail_fail_closed`
-- `finality_violation`
-- `invalid_parent`
-- `lease_observation_unavailable`
-- `lease_lost`
-- `publication_conflict`
-- `operator_cleared`
-
-The service can still expose a human-readable string, but metrics and
-state transitions should key off stable reason codes.
-
-## Runbook-Facing Signals
-
-Operators should be able to answer these questions from the exposed
-signals.
-
-### Why is the service throttled?
-
-Need:
-
-- primary reason code
-- trigger kind
-- recent backend error count or latest GC debt measurement
-
-### Why is the service degraded?
-
-Need:
-
-- primary reason code
-- whether the state is sticky
-- triggering event timestamp or counter bump
-
-### Is this a backend outage or a correctness issue?
-
-Need:
-
-- backend error counters
-- correctness-violation counters
-- authority/lease event counters
-
-### Is the service recovering?
-
-Need:
-
-- mode transition counters
-- time since last healthy state
-- recent success-after-error counters
-- latest GC outcome if cleanup debt was involved
+- is the service healthy, throttled, or degraded
+- why did it enter that state
+- is the cause backend trouble, cleanup debt, or correctness failure
+- did the state clear automatically or require intervention
 
 ## Open Questions
 
-These are real design questions, but none block drafting the contract.
-
-### 1. How sticky should backend-triggered degraded state be?
+### 1. Should degraded-from-backend-failure clear automatically?
 
 Options:
 
-- `A.` auto-clear after enough backend successes
-- `B.` sticky until operator clear or restart
-- `C.` sticky only if degraded was reached through correctness-sensitive
-  paths, auto-clear otherwise
+- A. yes, after sustained backend success
+- B. no, any degraded state requires restart/operator action
+- C. split policy: transient backend degraded may clear, correctness
+  degraded may not
 
 Recommendation:
 
-- `C`
+- C
 
 Reason:
 
-- correctness-triggered degraded state should remain sticky
-- backend-pressure degraded state can be allowed to recover, but only if
-  it is clearly not masking a correctness-triggered condition
+- it preserves fail-closed behavior for correctness violations without
+  forcing needless restarts for purely transient dependency trouble
 
-### 2. Should authority/observation failures affect global runtime mode?
+### 2. Should throttling be explicit errors or internal rate limiting?
 
 Options:
 
-- `A.` never; keep them request-local only
-- `B.` always; any lease or observation failure degrades the service
-- `C.` only for owner-only service paths or repeated observation failure
-  while in writer role
+- A. explicit `Throttled` errors
+- B. silent internal slowing/rate limiting
+- C. host-configurable policy
 
 Recommendation:
 
-- `C`
+- A or C, but not B-only
 
 Reason:
 
-- transient writer-cache issues should not globally degrade a read-only
-  path
-- repeated inability to observe finalized head on a writer-capable node
-  is operationally important and should be visible
+- operators and callers need clear feedback when the service is
+  intentionally reducing work
 
-### 3. Should throttled block maintenance and GC?
+### 3. Should state metrics be exported directly by the crate or via hooks?
 
 Options:
 
-- `A.` yes, always
-- `B.` no, maintenance and GC may still run if they are part of recovery
-- `C.` policy by trigger source
+- A. direct metrics implementation inside the crate
+- B. abstract hooks/callbacks for a host service to export
 
 Recommendation:
 
-- `C`
-
-Reason:
-
-- backend-pressure throttling may warrant reducing maintenance load
-- cleanup-debt throttling may still need GC to run in order to recover
-
-### 4. Should metrics be defined as exact names now or as concept groups?
-
-Options:
-
-- `A.` exact names in this doc now
-- `B.` concept groups here, exact names when the instrumentation stack is
-  chosen
-- `C.` no metrics contract until implementation
-
-Recommendation:
-
-- `B`
-
-Reason:
-
-- the crate still needs a stable observability contract
-- exact metric names should follow the eventual instrumentation style of
-  the host environment
-
-## Implementation Notes
-
-- the first implementation can keep the current `RuntimeState` shape if
-  it also starts emitting the right reason codes and transition metrics
-- the internal state representation can evolve later toward a richer
-  trigger-aware model
-- this doc should be used as the source of truth when expanding
-  `docs/plans/observability-and-operations.md`
-
+- B if monorepo conventions already exist
+- otherwise start with A only if it does not fight the eventual host
+  telemetry stack

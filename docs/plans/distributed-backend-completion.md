@@ -61,6 +61,10 @@ either misleading or blocked.
 This workstream is the bridge between "the design works on in-memory and
 filesystem doubles" and "the design has a real remote execution path."
 
+Concrete implementation notes:
+
+- `docs/plans/distributed-blob-conditional-create.md`
+
 ## Current State
 
 ### Storage contracts
