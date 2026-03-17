@@ -69,6 +69,10 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
         Ok(lease)
     }
 
+    fn lease_valid_through_block(&self, observed_upstream_finalized_block: u64) -> u64 {
+        observed_upstream_finalized_block.saturating_add(self.lease_blocks - 1)
+    }
+
     async fn acquire_publication_with_session(
         &self,
         observed_upstream_finalized_block: Option<u64>,
@@ -83,8 +87,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     session_id: self.session_id,
                     epoch: 1,
                     indexed_finalized_head: 0,
-                    lease_valid_through_block: observed_upstream_finalized_block
-                        .saturating_add(self.lease_blocks - 1),
+                    lease_valid_through_block: self
+                        .lease_valid_through_block(observed_upstream_finalized_block),
                 };
                 match self.publication_store.create_if_absent(&initial).await? {
                     CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
@@ -108,8 +112,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     session_id: self.session_id,
                     epoch: current.epoch,
                     indexed_finalized_head: current.indexed_finalized_head,
-                    lease_valid_through_block: observed_upstream_finalized_block
-                        .saturating_add(self.lease_blocks - 1),
+                    lease_valid_through_block: self
+                        .lease_valid_through_block(observed_upstream_finalized_block),
                 };
                 if next.lease_valid_through_block <= current.lease_valid_through_block {
                     return self.ensure_fence_for(current.into()).await;
@@ -144,8 +148,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 session_id: self.session_id,
                 epoch: current.epoch.saturating_add(1),
                 indexed_finalized_head: current.indexed_finalized_head,
-                lease_valid_through_block: observed_upstream_finalized_block
-                    .saturating_add(self.lease_blocks - 1),
+                lease_valid_through_block: self
+                    .lease_valid_through_block(observed_upstream_finalized_block),
             };
 
             match self
@@ -200,8 +204,8 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 session_id: current.session_id,
                 epoch: current.epoch,
                 indexed_finalized_head: current.indexed_finalized_head,
-                lease_valid_through_block: observed_upstream_finalized_block
-                    .saturating_add(self.lease_blocks - 1),
+                lease_valid_through_block: self
+                    .lease_valid_through_block(observed_upstream_finalized_block),
             };
             if next.lease_valid_through_block <= current.lease_valid_through_block {
                 return Ok(current.into());

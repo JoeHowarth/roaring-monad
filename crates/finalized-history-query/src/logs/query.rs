@@ -350,8 +350,9 @@ async fn collect_contiguous_chunk<I, R: LogLocationResolver>(
 where
     I: Iterator<Item = u32>,
 {
+    let target_len = max_len.max(1);
     let mut run = vec![first];
-    while run.len() < max_len.max(1) {
+    while run.len() < target_len {
         let Some(&next_local_raw) = locals.peek() else {
             break;
         };
