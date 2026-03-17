@@ -678,8 +678,10 @@ impl PublicationStore for ScyllaMetaStore {
 
 impl FenceStore for ScyllaMetaStore {
     async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
-        let next_min_epoch = self.cached_min_epoch.load(Ordering::Relaxed).max(min_epoch);
-        self.set_min_epoch(next_min_epoch).await
+        if min_epoch <= self.cached_min_epoch.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.set_min_epoch(min_epoch).await
     }
 
     async fn current_fence(&self) -> Result<u64> {

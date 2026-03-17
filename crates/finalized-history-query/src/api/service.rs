@@ -206,7 +206,15 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     {
         debug_assert!(self.role.allows_writes());
         if let Some(token) = *writer {
-            return self.recovery_plan_for_token(token).await;
+            match self.recover_and_plan(token).await {
+                Ok(plan) => return Ok(plan),
+                Err(error) => {
+                    if should_clear_writer(&error) {
+                        *writer = None;
+                    }
+                    return Err(error);
+                }
+            }
         }
 
         let token = self
@@ -214,6 +222,12 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             .authority
             .acquire(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
+        let plan = self.recover_and_plan(token).await?;
+        *writer = Some(token);
+        Ok(plan)
+    }
+
+    async fn recover_and_plan(&self, token: WriteToken) -> Result<RecoveryPlan> {
         let fence = self.ingest.authority.fence(&token);
         let _cleaned = cleanup_unpublished_suffix(
             &self.ingest.meta_store,
@@ -231,7 +245,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             fence,
         )
         .await?;
-        *writer = Some(token);
         Ok(build_recovery_plan(
             token.indexed_finalized_head,
             token.epoch,
@@ -400,17 +413,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             *writer = None;
         }
         result
-    }
-
-    async fn recovery_plan_for_token(&self, token: WriteToken) -> Result<RecoveryPlan> {
-        let next_log_id =
-            derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
-        Ok(build_recovery_plan(
-            token.indexed_finalized_head,
-            token.epoch,
-            next_log_id,
-            0,
-        ))
     }
 }
 
