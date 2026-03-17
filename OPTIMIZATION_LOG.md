@@ -1323,3 +1323,69 @@ cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_e
 
 - For these shapes, per-item normalization is necessary before comparing contiguous and non-contiguous cases because the fixtures return different numbers of logs.
 - Query-level benchmarks are much more informative than `load_by_id(...)` microbenches for this feature because they include grouping, materialization, exact filtering, and page assembly together.
+
+## 2026-03-17T14:48:39-07:00 - Re-run full query storage-pattern benchmark matrix
+
+### Change Summary
+
+- Re-ran the same `query_end_to_end_storage_patterns/*` benchmark matrix without code changes to check run-to-run stability.
+
+### Hypothesis
+
+- The storage-pattern ordering should remain the same even if individual timings drift by a few percent between local runs.
+
+### Commands
+
+```bash
+cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_end_to_end_storage_patterns --warm-up-time 0.05 --measurement-time 0.1 --sample-size 10
+```
+
+### Environment
+
+- Local Criterion run on the development machine.
+- Plot output used the plotters backend because `gnuplot` was not installed.
+
+### Workload Shape
+
+- Benchmark group: `query_end_to_end_storage_patterns`
+- Same fixture set as the prior matrix run:
+  - `sparse_cross_block`: 64 blocks, one matching log per block
+  - `same_block_contiguous`: 64 contiguous matching logs in one block
+  - `same_block_non_contiguous`: 32 matches spread across 64 logs in one block
+  - `mixed_page`: one block with a contiguous run plus sparse singleton matches in later blocks
+
+### Metrics
+
+- `sparse_cross_block/warm`: `92.450 us` median
+- `sparse_cross_block/cold`: `145.89 us` median
+- `same_block_contiguous/warm`: `21.468 us` median
+- `same_block_contiguous/cold`: `27.289 us` median
+- `same_block_non_contiguous/warm`: `18.213 us` median
+- `same_block_non_contiguous/cold`: `28.814 us` median
+- `mixed_page/warm`: `19.048 us` median
+- `mixed_page/cold`: `26.782 us` median
+
+### Before / After Metrics
+
+- Relative to the previous matrix run:
+  - `sparse_cross_block/warm`: `+3.1%`
+  - `sparse_cross_block/cold`: `+0.6%`
+  - `same_block_contiguous/warm`: `+1.5%`
+  - `same_block_contiguous/cold`: `+1.7%`
+  - `same_block_non_contiguous/warm`: `~flat`
+  - `same_block_non_contiguous/cold`: `+2.8%`
+  - `mixed_page/warm`: `+1.4%`
+  - `mixed_page/cold`: `+1.5%`
+
+### Interpretation
+
+- The ranking stayed stable across runs:
+  - sparse cross-block is still the worst shape
+  - same-block contiguous is still much cheaper than sparse cross-block
+  - non-contiguous and mixed-page remain in the middle
+- The absolute numbers moved a little, but the movement is small enough that I would treat it as normal local-run noise rather than a meaningful regression.
+- The important conclusion did not change: the benchmark continues to support the intended access model and does not show an inversion of the storage-pattern hierarchy.
+
+### Methodology Learnings
+
+- For this benchmark size, a second local run can move by roughly 1% to 3% without any code changes, so small single-run deltas should not be over-interpreted.
