@@ -96,7 +96,7 @@ This runs before any new ingest, ensuring the write position is clean.
 ## Important Boundaries
 
 - `api/service.rs` startup: re-authorizes cached writer or acquires ownership, then runs cleanup-first recovery
-- `ingest/engine.rs`: validates finalized sequencing, orchestrates publication for `H -> T`
+- `ingest/engine.rs`: validates finalized sequencing, orchestrates publication from current head to new tail
 - `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 

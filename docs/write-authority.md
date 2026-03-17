@@ -64,9 +64,9 @@ All contenders make lease decisions against the same external finalized-block ob
 
 ### Validity rule
 
-A lease is valid while `observed_upstream_finalized_block <= lease_valid_through_block`.
+A lease is valid while `observed_upstream_finalized_block` `<=` `lease_valid_through_block`.
 
-Takeover is allowed once `observed_upstream_finalized_block > lease_valid_through_block`.
+Takeover is allowed once `observed_upstream_finalized_block` `>` `lease_valid_through_block`.
 
 ### Config
 
@@ -189,7 +189,7 @@ Use `SingleWriterAuthority` (`new_single_writer`) when:
 
 - exactly one writer process exists with no standby
 - the deployment guarantees exclusive access (single-node or process-level lock)
-- lease overhead and observation dependency are unwanted
+- lease overhead and observation dependency are not needed
 
 ### Safety properties deliberately absent
 
