@@ -176,6 +176,25 @@ If a backend-native feature is awkward to expose but required for the
 crate's safety model, the plan should prefer correctness over a simpler
 but weaker API.
 
+### Native conditional object create is the chosen direction
+
+The current design choice for the distributed blob path is:
+
+- use native conditional object creation semantics via
+  `If-None-Match: "*"` on object write
+
+This is the required direction for the current plan.
+
+That means the work here is:
+
+- implement that path in `MinioBlobStore`
+- validate that the MinIO deployment used for this project honors the
+  semantics correctly
+
+Fallback protocols such as content-addressed indirection, staged blob
+commit, or best-effort "check then put" are out of scope for the current
+implementation plan unless the native path proves unusable in practice.
+
 ## Work Packages
 
 ## 1. Close The MinIO Immutable-Write Gap
@@ -187,8 +206,10 @@ the blob path.
 
 ### Tasks
 
-- choose the immutable-write protocol the object-store path will use
-- implement that protocol behind `put_blob_if_absent(...)`
+- implement native conditional object creation behind
+  `put_blob_if_absent(...)` using `If-None-Match: "*"`
+- validate that the MinIO deployment used in integration testing honors
+  the expected semantics
 - define how identical replay writes versus conflicting writes are
   detected and reported
 - verify the behavior for:
@@ -196,11 +217,6 @@ the blob path.
   - exact replay
   - conflicting second write
   - concurrent writers
-
-### Notes
-
-The core decision here is not just code. It is the exact object-store
-contract the crate is willing to depend on.
 
 ### Deliverables
 
@@ -279,6 +295,8 @@ just a smoke-check layer.
   - restart and recovery after partial distributed writes
 - separate always-on distributed tests from opt-in chaos or destructive
   tests
+- define the manual distributed validation gate that runs for every
+  review PR, since normal PR CI does not run these suites
 
 ### Notes
 
@@ -291,6 +309,7 @@ validation.
 - a distributed suite whose scenarios map cleanly to the backend
   guarantees the crate depends on
 - clear distinction between smoke, correctness, and chaos layers
+- an explicit per-PR manual distributed validation expectation
 
 ## 5. Clarify Backend Capability Boundaries
 
@@ -410,7 +429,8 @@ to all of the following:
 
 - whether object-store "create if absent" should be implemented with a
   strict backend-native conditional path, a higher-level manifest
-  protocol, or another immutable-write scheme
+  protocol, or another immutable-write scheme if MinIO validation proves
+  the native conditional path unusable in practice
 - whether backend capabilities should be feature-gated or negotiated more
   explicitly at construction time
 - whether some distributed tests should move into a dedicated docker or

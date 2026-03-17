@@ -26,12 +26,16 @@ proving readiness.
 - define representative workloads and benchmark profiles
 - define soak-test duration, pass conditions, and regression thresholds
 - build a storage and cleanup capacity model
+- define startup and recovery time expectations for large-state
+  deployments
 - document deployment prerequisites such as backend topology,
   configuration, secrets, TLS, and rollback expectations
 - document deployment-mode guidance for lease-backed versus
   single-writer operation
 - decide whether optional cache and storage optimizations remain
   necessary after baseline tuning evidence is available
+- attach benchmark evidence to relevant review PRs when performance-
+  sensitive features such as caching are introduced or materially wired
 
 ## Out Of Scope
 
@@ -44,6 +48,7 @@ proving readiness.
 - the crate has explicit SLOs with benchmark and soak evidence attached
 - performance numbers are tied to representative workloads instead of
   ad hoc local runs
+- startup and recovery cost expectations are documented and measured
 - storage growth and cleanup lag have an explicit operating model
 - deployment mode selection and replacement expectations are documented
 - deployment requirements and rollback expectations are documented

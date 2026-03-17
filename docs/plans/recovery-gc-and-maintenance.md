@@ -192,6 +192,20 @@ Some cleanup tasks rely on prefix listing over potentially large key
 spaces. The plan needs to consider cost, batching, and whether a task is
 appropriate for startup, maintenance, or GC.
 
+### Startup cost is part of the design
+
+Recovery correctness comes first, but startup-time cost is not free.
+
+This workstream owns:
+
+- the correctness of startup enumeration and cleanup
+- the decision about which work must happen synchronously before the
+  writer can proceed
+
+The performance and operating-budget consequences of that startup work
+must then feed into
+`docs/plans/performance-capacity-and-deployment.md`.
+
 ## Work Packages
 
 ## 1. Define The Cleanup Taxonomy

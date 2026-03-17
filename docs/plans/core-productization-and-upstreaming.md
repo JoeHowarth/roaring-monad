@@ -59,6 +59,28 @@ This workstream exists to reduce those costs before asking upstream
 reviewers to evaluate distributed backends, GC, operations, or
 performance evidence.
 
+## Review-Stack Constraints
+
+The upstream target is a monorepo landing problem, not a deep
+adaptation-to-existing-abstractions problem.
+
+The constraints for this workstream are:
+
+- the full crate surface is intended to land over the review stack, not
+  a reduced "core only" subset
+- `finalized-history-query` is the main focus, but supporting crates such
+  as `benchmarking` and `log-workload-gen` should land as early as makes
+  sense
+- review-motivated internal restructures should happen in this repo
+  first, before creating the monorepo review commits
+- the review commits should diverge from this repo's eventual end state
+  as little as possible
+- purely mechanical preparatory PRs are acceptable when they materially
+  reduce reviewer load
+- early review PRs may land infrastructure that is not yet fully wired
+  into the final service path, so long as each PR compiles and has
+  meaningful local tests
+
 ## Current State
 
 The crate already has the architectural seams needed for upstreaming.
@@ -262,15 +284,16 @@ connect each suite to one subsystem or invariant family.
 Decide what is part of the first upstream stack and what remains a
 follow-up.
 
-### Decisions To Make
+### Landed Decisions
 
-- whether distributed stores land in the first stack or behind a follow-up
-- whether `log-workload-gen` and `benchmarking` land with the core crate
-  or later
-- whether any internal subsystem should become its own crate before
-  upstreaming
-- whether single-writer mode lands in the first stack or later if the
-  initial host only needs lease-backed mode
+- the review stack should land the full crate surface over time,
+  including distributed backends
+- `log-workload-gen` and `benchmarking` should land early when they help
+  justify performance-sensitive review slices
+- the stack is primarily about reviewability, not about adapting to an
+  unknown upstream abstraction layer
+- no transitional compatibility layer should be introduced unless it is
+  strictly necessary to keep an intermediate PR correct and buildable
 
 ### Deliverables
 
@@ -292,19 +315,23 @@ The exact stack may change, but it should roughly track these slices:
 
 1. public types and method boundary
 2. store and publication abstractions
-3. storage keys, codecs, and state loading
-4. materialization substrate
-5. indexed query execution
-6. write authority
-7. ingest publication and compaction
-8. service startup and orchestration
-9. optional distributed backends and tooling
+3. distributed-capable store backends and local test doubles
+4. storage keys, codecs, and state loading
+5. materialization substrate
+6. indexed query execution
+7. write authority
+8. ingest publication and compaction
+9. service startup and orchestration
+10. benchmarking/workload support where it strengthens nearby review
+    slices
 
 ### Deliverables
 
 - a named upstream PR sequence
 - clear dependency ordering between PRs
 - review notes that tell reviewers what to focus on in each slice
+- a stack shape where each PR is approximately one commit and stays close
+  to this repo's intended end state
 
 ## Milestones
 
@@ -404,7 +431,5 @@ to all of the following:
   follow-up modules
 - whether any internal subsystem should move into a separate crate before
   upstreaming
-- how much of the benchmarking and distributed-store support should land
-  in the initial upstream stack
 - whether the upstream target codebase already provides abstractions that
   should replace some local store or service plumbing

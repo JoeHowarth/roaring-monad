@@ -194,6 +194,20 @@ Examples:
 - GC or cleanup guardrails trigger the configured reaction once
   implemented
 
+## 7. Idempotency And Replay Invariants
+
+These assert that replay of already-attempted work is either harmless or
+rejected in a well-defined way.
+
+Examples:
+
+- replaying an immutable artifact write with identical content is safe
+- replaying a conflicting immutable write is rejected
+- replaying cleanup against already-clean state is safe
+- repeated startup recovery does not corrupt published state
+- publish retry after an earlier failure does not expose duplicate or
+  inconsistent visible state
+
 ## Matrix Structure
 
 Each invariant family should map to one or more verification layers.
@@ -241,6 +255,7 @@ Use for:
 - real MinIO object behavior
 - distributed roundtrip visibility and retry
 - takeover and stale-writer rejection on real backends
+- validation of native conditional object-create semantics on MinIO
 
 ### F. Chaos Or Pre-Prod Gated Tests
 
@@ -263,6 +278,8 @@ Must prove:
 - crash and retry behavior for publication boundaries
 - at least baseline distributed adapter correctness for the core storage
   contract
+- idempotent replay behavior for immutable writes, publish retry, and
+  cleanup retry
 
 Does not yet require:
 
@@ -278,6 +295,8 @@ Must additionally prove:
 - partial publish and restart recovery on real backends
 - outage behavior for metadata and blob dependencies
 - cleanup and guardrail behavior once those features are implemented
+- repeated operational recovery and replay behavior on the real backend
+  path
 
 ## Work Packages
 
@@ -385,9 +404,21 @@ someone remembering to run the right ad hoc commands.
 
 ### Tasks
 
-- define which suites must run on every change
+- define which suites must run on every change in normal PR CI
+- define which suites run as a required manual integration gate for every
+  review PR
 - define which suites run in slower scheduled or gated jobs
 - document how opt-in chaos suites fit into the release process
+
+### Known Baseline
+
+- normal PR CI compiles the full feature surface, including distributed
+  backends
+- distributed integration and docker-backed tests are not part of normal
+  PR CI
+- distributed integration validation still blocks every review PR and
+  therefore belongs in the required manual gate rather than in the
+  optional-chaos bucket
 
 ### Deliverables
 

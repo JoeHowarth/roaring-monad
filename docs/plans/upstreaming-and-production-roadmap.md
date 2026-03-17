@@ -43,6 +43,48 @@ reduce:
 This avoids treating "production readiness" as one undifferentiated
 task.
 
+## Shared Assumptions
+
+The active plans assume the following shared model.
+
+### Review-stack model
+
+- the crate will land into a monorepo as a new code area rather than as
+  a deep integration into an existing subsystem
+- the primary upstreaming problem is reviewer cognitive load, not API
+  adaptation
+- the review stack should land the full crate surface over time,
+  including distributed backends and supporting benchmarking/tooling
+  crates, but not as one monolithic PR
+- each review PR should be approximately one commit
+- the reviewed stack should preserve the intended end state of this repo
+  as closely as possible
+- temporary compatibility layers or transitional abstractions should be
+  avoided unless strictly necessary to keep an intermediate PR compiling
+  and reviewable
+
+### Verification model
+
+- normal PR CI will compile the full feature surface, including the
+  distributed-store feature
+- distributed integration tests are not part of normal PR CI
+- distributed integration validation is still required and will run as a
+  manual merge gate for every PR in the review stack
+- benchmark evidence should be attached to relevant review PRs when they
+  introduce or wire performance-sensitive features such as caching
+
+### Concurrency model
+
+- the intended steady-state model is one active writer at a time
+- lease-backed mode enforces active-writer ownership through
+  `publication_state`, lease validity, and epoch fencing
+- readers use `publication_state.indexed_finalized_head` as the only
+  visibility barrier
+- stale writers must be rejected by epoch fencing before they can mutate
+  authoritative metadata
+- single-writer mode is an explicit deployment choice that relies on the
+  deployment preventing concurrent writers
+
 ## Sequencing
 
 Recommended sequence:
