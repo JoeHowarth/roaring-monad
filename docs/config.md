@@ -60,11 +60,38 @@ See [caching.md](caching.md) for cache design details.
 
 ## GC Guardrails
 
+The GC worker (`src/gc/worker.rs`) periodically cleans orphaned artifacts left behind by failed ingest attempts or compaction. Guardrails cap how much debris is tolerable before the service degrades or fails closed.
+
+After each GC pass, the collected stats are compared against these thresholds via `GcStats::check_guardrails`. If any threshold is exceeded, the service reacts according to `gc_guardrail_action`.
+
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `gc_guardrail_action` | `GuardrailAction` | `FailClosed` | Action when GC guardrails are hit |
-| `max_orphan_chunk_bytes` | `u64` | `32 GiB` | GC guardrail: max orphan chunk bytes before action |
-| `max_orphan_manifest_segments` | `u64` | `500,000` | GC guardrail: max orphan manifest segments |
-| `max_stale_tail_keys` | `u64` | `1,000,000` | GC guardrail: max stale tail keys |
+| `gc_guardrail_action` | `GuardrailAction` | `FailClosed` | Action when any guardrail threshold is exceeded |
+| `max_orphan_chunk_bytes` | `u64` | `32 GiB` | Total bytes of orphaned chunk objects (artifacts written but never published) |
+| `max_orphan_manifest_segments` | `u64` | `500,000` | Count of manifest segment records left by abandoned compaction or ingest |
+| `max_stale_tail_keys` | `u64` | `1,000,000` | Count of stale tail keys (metadata entries above the published head from failed writers) |
 
-`GuardrailAction` is either `Throttle` or `FailClosed`.
+`GuardrailAction` is either `Throttle` (set service to throttled state) or `FailClosed` (set service to degraded state).
+
+## Backend-Specific Config
+
+Backend implementations have their own configuration that is not part of the main `Config` struct. These are set at construction time on each store.
+
+### ScyllaMetaStore
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `max_retries` | `10` | Maximum retry attempts for retryable errors |
+| `base_delay_ms` | `50` | Base delay for exponential backoff |
+| `max_delay_ms` | `5000` | Maximum backoff delay |
+| `fence_check_interval_ms` | `1000` | Minimum interval between remote fence checks (cached locally between checks) |
+
+### MinioBlobStore
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `max_retries` | `4` | Maximum retry attempts for retryable errors |
+| `base_delay_ms` | `25` | Base delay for exponential backoff |
+| `max_delay_ms` | `1000` | Maximum backoff delay |
+
+See [backend-stores.md](backend-stores.md) for full implementation details.
