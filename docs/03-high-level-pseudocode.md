@@ -245,11 +245,15 @@ Queries without at least one indexed address/topic clause are rejected at the bo
 ## Ingest Flow
 
 ```python
-async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
+async def startup_reader_writer(owner_id, observed_upstream_finalized_block, cached_lease=None):
+    if cached_lease is not None:
+        lease = authorize_cached_publication(cached_lease, observed_upstream_finalized_block)
+        return recovery_plan_from(lease)
+
     lease = acquire_publication(owner_id, observed_upstream_finalized_block)
     cleanup_unpublished_suffix(lease.indexed_finalized_head)
     repair_open_stream_page_markers(derive_next_log_id_from_block_meta(lease.indexed_finalized_head))
-    return lease
+    return recovery_plan_from(lease)
 
 async def startup_reader_only():
     return startup_plan()
@@ -281,7 +285,7 @@ async def ingest_finalized_blocks(blocks, lease):
 
 Important boundary:
 
-- `api/service.rs` startup acquires publication ownership, runs cleanup-first recovery, and caches the lease for ingest
+- `api/service.rs` startup re-authorizes any cached writer lease against the current observation or acquires ownership, then runs cleanup-first recovery for newly acquired ownership
 - `ingest/engine.rs` validates finalized sequencing and orchestrates publication for `H -> T`
 - `logs/ingest.rs` owns immutable directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last and is the only reader-visible watermark

@@ -150,14 +150,15 @@ It is responsible for:
 
 `FinalizedHistoryService::startup()` owns active publication lifecycle:
 
-- write-authority acquisition
+- write-authority acquisition or cached-writer re-authorization
 - cleanup-first recovery of unpublished suffix artifacts
 - sealed open-page marker repair
 - deriving the startup `next_log_id` view
 
 Lease-backed reader+writer nodes renew ownership against the configured upstream finalized-block
-observer. Reader-only nodes stay observational: they load `startup_plan(...)` state and never take
-ownership.
+observer. When a writer token is already cached, startup re-authorizes it against the current
+observation before reporting success. Reader-only nodes stay observational: they load
+`startup_plan(...)` state and never take ownership.
 
 `startup_plan(...)` is observational only:
 
