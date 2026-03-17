@@ -219,6 +219,72 @@ perf report --stdio --call-graph none --sort comm,dso,symbol
 - `256/64`: `198.33 blocks/s` (`logs/results/profile-ingest-20260223T200845Z-concurrency-256x64.json`)
 - `512/64`: `196.90 blocks/s` (`logs/results/profile-ingest-20260223T200916Z-concurrency-512x64.json`)
 
+## 2026-03-17T21:27:11Z - Same-owner lease reacquire and bounded grouped-read prefixes
+
+### Hypothesis
+
+- Allowing same-owner/new-session acquisition before expiry will remove restart-only downtime without weakening foreign-owner freshness checks.
+- Bounding contiguous same-block materialization by remaining useful work will keep coalescing benefits while reducing cold-path `read_range` bytes for small pages.
+
+### Commands
+
+```bash
+cargo test -p finalized-history-query same_owner_restart_before_expiry_bumps_epoch_and_session -- --nocapture
+cargo test -p finalized-history-query query_limit_one_does_not_need_full_contiguous_run_bytes -- --nocapture
+cargo test -p finalized-history-query service_coalesces_contiguous_same_block_logs_into_one_range_read -- --nocapture
+```
+
+### Metrics
+
+- Lease reacquire regression:
+  - before: same-owner restart before expiry returned `LeaseStillFresh`
+  - after: same-owner restart before expiry reacquires successfully with `epoch + 1`
+- Grouped-read regression on the `limit = 1` contiguous-match fixture:
+  - before: `read_range_bytes = 420`, `point_log_payloads.inserts = 3`
+  - after: `read_range_bytes = 280`, `point_log_payloads.inserts = 2`
+  - unchanged locality case: `service_coalesces_contiguous_same_block_logs_into_one_range_read` still completes with one `read_range` for a full-page query
+
+### Interpretation
+
+- The lease path now matches the documented ownership model: same-node restart reacquires immediately, while foreign owners still wait for expiry.
+- The query path no longer over-reads the full contiguous run when exact pagination only needs a prefix; it now pays only for the bytes needed to produce `limit + 1` candidates in the tested case.
+
+### Methodology Learnings
+
+- For pagination-sensitive hot paths, counting requested `read_range` bytes in an integration test is a stable way to catch overfetch regressions without relying on noisy wall-clock timing.
+
+## 2026-03-17T22:05:00Z - Bound contiguous-run discovery as well as payload reads
+
+### Hypothesis
+
+- Bounding payload reads alone is not enough; the query path should also stop resolving same-block candidates once the current `limit + 1` prefix is fully described.
+
+### Commands
+
+```bash
+cargo test -p finalized-history-query collect_contiguous_chunk_does_not_resolve_past_requested_prefix -- --nocapture
+cargo test -p finalized-history-query collect_contiguous_chunk_leaves_remaining_run_for_following_iterations -- --nocapture
+cargo test -p finalized-history-query query_limit_one_does_not_need_full_contiguous_run_bytes -- --nocapture
+```
+
+### Metrics
+
+- Prefix-bound run-discovery regression:
+  - before: a `max_len = 2` request still attempted to resolve the third contiguous candidate and failed the test on injected backend access
+  - after: the helper returns the requested prefix and leaves the third candidate untouched for the next iteration
+- Continuation coverage:
+  - after: a four-item contiguous run can be consumed as `2 + 2` prefixes across successive iterations without dropping candidates
+- Public query regression:
+  - after: the existing `limit = 1` contiguous-match fixture still holds at `read_range_bytes = 280`
+
+### Interpretation
+
+- The grouped-read path is now bounded both in payload I/O and in same-block candidate discovery, which closes the remaining eager-work gap from the first fix.
+
+### Methodology Learnings
+
+- Injecting a deterministic failure on the first candidate that should be out of scope is an effective way to prove that a pagination-sensitive path no longer explores beyond its useful prefix.
+
 ## 2026-03-09T18:45:46Z - Query Executor Range-Aware Chunk Loading
 
 ### Change Summary

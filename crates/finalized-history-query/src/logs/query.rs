@@ -32,6 +32,19 @@ use crate::streams::chunk::decode_chunk;
 
 const STREAM_LOAD_CONCURRENCY: usize = 32;
 
+#[allow(async_fn_in_trait)]
+trait LogLocationResolver {
+    async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>>;
+}
+
+impl<M: MetaStore, B: BlobStore, C: BytesCache> LogLocationResolver
+    for LogMaterializer<'_, M, B, C>
+{
+    async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>> {
+        LogMaterializer::resolve_log_id(self, id).await
+    }
+}
+
 #[derive(Debug, Clone)]
 struct IndexedClauseSpec {
     kind: ClauseKind,
@@ -286,14 +299,19 @@ impl LogsQueryEngine {
                     continue;
                 };
 
-                let run =
-                    collect_contiguous_run(&mut locals, shard, (id, location), &mut materializer)
-                        .await?;
+                let run = collect_contiguous_chunk(
+                    &mut locals,
+                    shard,
+                    (id, location),
+                    remaining_needed_for_chunk(take, matched.len()),
+                    &mut materializer,
+                )
+                .await?;
 
                 let run_items = materializer
                     .load_contiguous_run(
                         location.block_num,
-                        location.local_ordinal,
+                        run.first().expect("run must be non-empty").1.local_ordinal,
                         run.last().expect("run must be non-empty").1.local_ordinal,
                     )
                     .await?;
@@ -322,17 +340,19 @@ impl LogsQueryEngine {
     }
 }
 
-async fn collect_contiguous_run<I, M: MetaStore, B: BlobStore, C: BytesCache>(
+async fn collect_contiguous_chunk<I, R: LogLocationResolver>(
     locals: &mut std::iter::Peekable<I>,
     shard: LogShard,
     first: (LogId, ResolvedLogLocation),
-    materializer: &mut LogMaterializer<'_, M, B, C>,
+    max_len: usize,
+    materializer: &mut R,
 ) -> Result<Vec<(LogId, ResolvedLogLocation)>>
 where
     I: Iterator<Item = u32>,
 {
+    let target_len = max_len.max(1);
     let mut run = vec![first];
-    loop {
+    while run.len() < target_len {
         let Some(&next_local_raw) = locals.peek() else {
             break;
         };
@@ -353,6 +373,10 @@ where
         run.push((next_id, next_location));
     }
     Ok(run)
+}
+
+fn remaining_needed_for_chunk(take: usize, matched_len: usize) -> usize {
+    take.saturating_sub(matched_len).max(1)
 }
 
 async fn load_clause_sets<M: MetaStore, B: BlobStore>(
@@ -860,7 +884,9 @@ fn read_u64_suffix(key: &[u8]) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::load_stream_entries;
+    use super::{ResolvedLogLocation, collect_contiguous_chunk, load_stream_entries};
+    use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
+    use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -881,6 +907,21 @@ mod tests {
     use crate::streams::chunk::{ChunkBlob, encode_chunk};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
+
+    struct StubResolver {
+        planned: VecDeque<(LogId, crate::Result<Option<ResolvedLogLocation>>)>,
+    }
+
+    impl super::LogLocationResolver for StubResolver {
+        async fn resolve_log_id(
+            &mut self,
+            id: LogId,
+        ) -> crate::Result<Option<ResolvedLogLocation>> {
+            let (expected_id, outcome) = self.planned.pop_front().expect("planned resolution");
+            assert_eq!(id, expected_id, "unexpected resolve order");
+            outcome
+        }
+    }
 
     struct CountingMetaStore {
         inner: InMemoryMetaStore,
@@ -1177,6 +1218,107 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
             assert_eq!(blob_gets.load(Ordering::Relaxed), 2);
+        });
+    }
+
+    #[test]
+    fn collect_contiguous_chunk_does_not_resolve_past_requested_prefix() {
+        block_on(async {
+            let shard = LogShard::new(0).expect("shard");
+            let mut locals = vec![1u32, 2u32].into_iter().peekable();
+            let first = (
+                compose_log_id(shard, LogLocalId::new(0).expect("local")),
+                ResolvedLogLocation {
+                    block_num: 7,
+                    local_ordinal: 0,
+                },
+            );
+            let second_id = compose_log_id(shard, LogLocalId::new(1).expect("local"));
+            let third_id = compose_log_id(shard, LogLocalId::new(2).expect("local"));
+            let mut resolver = StubResolver {
+                planned: VecDeque::from([
+                    (
+                        second_id,
+                        Ok(Some(ResolvedLogLocation {
+                            block_num: 7,
+                            local_ordinal: 1,
+                        })),
+                    ),
+                    (
+                        third_id,
+                        Err(crate::Error::Backend(
+                            "should not resolve third".to_string(),
+                        )),
+                    ),
+                ]),
+            };
+
+            let chunk = collect_contiguous_chunk(&mut locals, shard, first, 2, &mut resolver)
+                .await
+                .expect("collect chunk");
+
+            assert_eq!(chunk.len(), 2);
+            assert_eq!(locals.next(), Some(2));
+        });
+    }
+
+    #[test]
+    fn collect_contiguous_chunk_leaves_remaining_run_for_following_iterations() {
+        block_on(async {
+            let shard = LogShard::new(0).expect("shard");
+            let mut locals = vec![1u32, 2u32, 3u32].into_iter().peekable();
+            let first = (
+                compose_log_id(shard, LogLocalId::new(0).expect("local")),
+                ResolvedLogLocation {
+                    block_num: 7,
+                    local_ordinal: 0,
+                },
+            );
+            let second_id = compose_log_id(shard, LogLocalId::new(1).expect("local"));
+            let fourth_id = compose_log_id(shard, LogLocalId::new(3).expect("local"));
+            let mut resolver = StubResolver {
+                planned: VecDeque::from([
+                    (
+                        second_id,
+                        Ok(Some(ResolvedLogLocation {
+                            block_num: 7,
+                            local_ordinal: 1,
+                        })),
+                    ),
+                    (
+                        fourth_id,
+                        Ok(Some(ResolvedLogLocation {
+                            block_num: 7,
+                            local_ordinal: 3,
+                        })),
+                    ),
+                ]),
+            };
+
+            let first_chunk = collect_contiguous_chunk(&mut locals, shard, first, 2, &mut resolver)
+                .await
+                .expect("first chunk");
+            let next_local =
+                LogLocalId::new(locals.next().expect("remaining local")).expect("local");
+            let second_chunk = collect_contiguous_chunk(
+                &mut locals,
+                shard,
+                (
+                    compose_log_id(shard, next_local),
+                    ResolvedLogLocation {
+                        block_num: 7,
+                        local_ordinal: 2,
+                    },
+                ),
+                2,
+                &mut resolver,
+            )
+            .await
+            .expect("second chunk");
+
+            assert_eq!(first_chunk.len(), 2);
+            assert_eq!(second_chunk.len(), 2);
+            assert!(locals.next().is_none());
         });
     }
 }
