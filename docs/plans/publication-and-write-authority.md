@@ -121,6 +121,10 @@ Writer startup is explicit and authoritative:
 4. repair sealed open-page markers
 5. derive the next local write position
 
+Steps 3-5 run on both paths. A cached writer re-authorization still runs cleanup and repair
+before returning a recovery plan, so partial artifacts left by a failed ingest are always cleaned
+up on the next startup regardless of whether the writer token was cached.
+
 `startup_plan(...)` is observational only.
 
 `FinalizedHistoryService::new_reader_only(...)` keeps startup observational and never attempts
@@ -229,12 +233,24 @@ The intended steady-state behavior is:
 - standby writers may observe and remain ready
 - standby writers must not seize ownership while the current lease is still valid
 
+### Expiry is a hard cutoff
+
+Once a lease has expired, ownership must be reacquired with an epoch bump — even if the same
+session attempts to renew. There is no silent same-session renewal after expiry. This ensures
+any gap in liveness is always visible in the epoch sequence and that `advance_fence` invalidates
+stale-epoch writes from before the gap.
+
+This applies to both `acquire` (same-session path falls through to the takeover path after
+expiry) and `authorize`/`renew_if_needed` (returns `LeaseLost` after expiry, forcing
+re-acquisition through the service layer).
+
 ### Same-node restart
 
 Reacquiring with the same node identity must still bump `epoch`.
 
 Node identity is not process identity, so a restarted process must not silently inherit an old
-lease.
+lease. A restarted process generates a new `session_id`, so it always takes the foreign-session
+takeover path which bumps epoch.
 
 ### Maintenance and GC
 
@@ -260,25 +276,34 @@ The system should continue to prefer:
 - healthy primary retention
 - standby readiness without opportunistic ownership theft
 
-### 2. Clarify single-writer vs lease-backed mode guidance
+The v1 operational story is: stop the writer process and wait for the lease to expire (at most
+`publication_lease_blocks` finalized blocks). A standby will take over once expiry is observed.
+An explicit force-takeover mechanism is deferred until there is a deployment where the expiry
+wait is unacceptable.
 
-`SingleWriterAuthority` is intentionally fail-closed and only safe under exclusive access.
+### 2. Single-writer vs lease-backed mode guidance
 
-The remaining work is to make deployment guidance unambiguous:
+Use `LeaseAuthority` (`new_reader_writer`) when:
 
-- when to use `LeaseAuthority`
-- when `SingleWriterAuthority` is acceptable
-- what safety properties are deliberately absent in single-writer mode
+- multiple writer-capable nodes exist (active/standby)
+- automatic failover on writer stall is required
+- the upstream finalized-block observation is available
 
-### 3. Keep publication state out of general caching
+Use `SingleWriterAuthority` (`new_single_writer`) when:
 
-`publication_state` is mutable and correctness-critical.
+- exactly one writer process exists with no standby
+- the deployment guarantees exclusive access (e.g., single-node or process-level lock)
+- lease overhead and observation dependency are unwanted
 
-It should continue to be treated as direct control-plane state, not as part of the immutable
-artifact cache.
+Safety properties deliberately absent in single-writer mode:
 
-If it is ever memoized, that should be done as a narrow freshness-aware optimization, not as part
-of the main cache architecture.
+- no lease-based expiry or takeover — a second writer is not fenced by lease freshness
+- `publish` uses `PutCond::Any` rather than `compare_and_set` — concurrent writers would
+  silently overwrite each other's heads
+- the backend fence is the only protection against stale-epoch writes; there is no lease-level
+  guard against a split-brain scenario
+
+Single-writer mode relies entirely on the deployment preventing concurrent writers.
 
 ## Non-Goals
 
