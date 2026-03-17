@@ -164,15 +164,6 @@ struct IngestDistributedArgs {
     #[command(flatten)]
     distributed: DistributedArgs,
 
-    #[arg(long, default_value_t = 1950)]
-    target_entries_per_chunk: u32,
-
-    #[arg(long, default_value_t = 32 * 1024)]
-    target_chunk_bytes: usize,
-
-    #[arg(long, default_value_t = 600)]
-    maintenance_seal_seconds: u64,
-
     #[arg(long, default_value_t = 500)]
     run_maintenance_every_blocks: u64,
 
@@ -620,9 +611,6 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
     })?;
 
     let config = IndexConfig {
-        target_entries_per_chunk: args.target_entries_per_chunk,
-        target_chunk_bytes: args.target_chunk_bytes,
-        maintenance_seal_seconds: args.maintenance_seal_seconds,
         ingest_mode: args.ingest_mode.into(),
         assume_empty_streams: args.assume_empty_streams,
         stream_append_concurrency: args.stream_append_concurrency.max(1),
@@ -867,9 +855,6 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         range: args.range.clone(),
         mapping: args.mapping.clone(),
         distributed: args.distributed.clone(),
-        target_entries_per_chunk: 1950,
-        target_chunk_bytes: 32 * 1024,
-        maintenance_seal_seconds: 600,
         run_maintenance_every_blocks: 500,
         ingest_mode: IngestModeArg::StrictCas,
         assume_empty_streams: false,

@@ -217,7 +217,6 @@ fn main() {
     let blocks = parse_arg("--blocks", 20_000u64);
     let logs_per_block = parse_arg("--logs-per-block", 120u32);
     let queries = parse_arg("--queries", 2_000usize);
-    let chunk_size = parse_arg("--chunk-size", 512u32);
     let max_results = parse_arg("--max-results", 10_000usize);
     let backend = parse_string_arg("--backend", "memory");
     let fs_root = parse_string_arg("--fs-root", "/tmp/finalized-history-query-stress");
@@ -226,7 +225,6 @@ fn main() {
     block_on(async move {
         let config = Config {
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
-            target_entries_per_chunk: chunk_size,
             planner_max_or_terms: 512,
             ..Config::default()
         };
@@ -291,7 +289,7 @@ fn main() {
         };
 
         println!(
-            "stress_config backend={backend} blocks={blocks} logs_per_block={logs_per_block} queries={queries} chunk_size={chunk_size} max_results={max_results} restart_before_query={restart_before_query}"
+            "stress_config backend={backend} blocks={blocks} logs_per_block={logs_per_block} queries={queries} max_results={max_results} restart_before_query={restart_before_query}"
         );
         if backend == "fs" {
             println!("fs_root={fs_root}");

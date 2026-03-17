@@ -59,7 +59,6 @@ async fn scylla_minio_roundtrip_query() {
     let svc = FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
-            target_entries_per_chunk: 2,
             ..Config::default()
         },
         meta,

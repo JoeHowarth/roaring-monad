@@ -209,11 +209,10 @@ impl PrimaryMaterializer for PassThroughMaterializer {
     }
 }
 
-pub fn build_service(target_entries_per_chunk: u32) -> BenchService {
+pub fn build_service() -> BenchService {
     FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
-            target_entries_per_chunk,
             planner_max_or_terms: 256,
             ..Config::default()
         },
@@ -223,15 +222,12 @@ pub fn build_service(target_entries_per_chunk: u32) -> BenchService {
     )
 }
 
-pub fn build_counting_service(
-    target_entries_per_chunk: u32,
-) -> (CountingBenchService, Arc<BlobAccessCounters>) {
+pub fn build_counting_service() -> (CountingBenchService, Arc<BlobAccessCounters>) {
     let blob_store = CountingBlobStore::default();
     let counters = blob_store.counters();
     let svc = FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
-            target_entries_per_chunk,
             planner_max_or_terms: 256,
             bytes_cache: BytesCacheConfig {
                 block_log_headers: TableCacheConfig { max_bytes: 1 << 20 },
@@ -250,14 +246,12 @@ pub fn build_counting_service(
 }
 
 pub fn build_service_with_stores(
-    target_entries_per_chunk: u32,
     meta_store: InMemoryMetaStore,
     blob_store: InMemoryBlobStore,
 ) -> BenchService {
     FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
-            target_entries_per_chunk,
             planner_max_or_terms: 256,
             ..Config::default()
         },

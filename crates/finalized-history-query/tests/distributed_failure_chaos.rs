@@ -78,7 +78,6 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
             observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
             backend_error_throttle_after: 1,
             backend_error_degraded_after: 2,
-            target_entries_per_chunk: 2,
             ..Config::default()
         },
         meta,

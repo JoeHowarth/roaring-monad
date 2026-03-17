@@ -126,7 +126,6 @@ fn differential_query_matches_naive() {
         let svc = FinalizedHistoryService::new_reader_writer(
             Config {
                 observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
-                target_entries_per_chunk: 2,
                 planner_max_or_terms: 10,
                 ..Config::default()
             },

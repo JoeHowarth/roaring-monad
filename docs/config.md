@@ -68,14 +68,3 @@ See [caching.md](caching.md) for cache design details.
 | `max_stale_tail_keys` | `u64` | `1,000,000` | GC guardrail: max stale tail keys |
 
 `GuardrailAction` is either `Throttle` or `FailClosed`.
-
-## Vestigial Fields
-
-These fields are vestigial from prior designs and are not used by any current code path:
-
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| `target_entries_per_chunk` | `u32` | `1,950` | From chunk-based storage model |
-| `target_chunk_bytes` | `usize` | `32 KiB` | From chunk-based storage model |
-| `maintenance_seal_seconds` | `u64` | `600` | From time-based sealing model |
-| `tail_flush_seconds` | `u64` | `5` | From tail-flush model |

@@ -20,10 +20,6 @@ pub struct Config {
     pub observe_upstream_finalized_block: Arc<dyn Fn() -> Option<u64> + Send + Sync>,
     pub publication_lease_blocks: u64,
     pub publication_lease_renew_threshold_blocks: u64,
-    pub target_entries_per_chunk: u32,
-    pub target_chunk_bytes: usize,
-    pub maintenance_seal_seconds: u64,
-    pub tail_flush_seconds: u64,
     pub planner_max_or_terms: usize,
     pub gc_guardrail_action: GuardrailAction,
     pub max_orphan_chunk_bytes: u64,
@@ -46,10 +42,6 @@ impl fmt::Debug for Config {
                 "publication_lease_renew_threshold_blocks",
                 &self.publication_lease_renew_threshold_blocks,
             )
-            .field("target_entries_per_chunk", &self.target_entries_per_chunk)
-            .field("target_chunk_bytes", &self.target_chunk_bytes)
-            .field("maintenance_seal_seconds", &self.maintenance_seal_seconds)
-            .field("tail_flush_seconds", &self.tail_flush_seconds)
             .field("planner_max_or_terms", &self.planner_max_or_terms)
             .field("gc_guardrail_action", &self.gc_guardrail_action)
             .field("max_orphan_chunk_bytes", &self.max_orphan_chunk_bytes)
@@ -80,10 +72,6 @@ impl Default for Config {
             observe_upstream_finalized_block: Arc::new(|| None),
             publication_lease_blocks: 10,
             publication_lease_renew_threshold_blocks: 2,
-            target_entries_per_chunk: 1950,
-            target_chunk_bytes: 32 * 1024,
-            maintenance_seal_seconds: 600,
-            tail_flush_seconds: 5,
             planner_max_or_terms: 128,
             gc_guardrail_action: GuardrailAction::FailClosed,
             max_orphan_chunk_bytes: 32 * 1024 * 1024 * 1024,
