@@ -16,9 +16,14 @@ The core lease and role model is now in place:
 
 - lease freshness is measured against the observed upstream finalized block
 - `reader-only`, lease-backed `reader+writer`, and fail-closed `single-writer` roles are explicit
-  at the service constructor layer
+  at the service constructor layer via `new_reader_only(...)`, `new_reader_writer(...)`, and
+  `new_single_writer(...)`
 - lease-backed writer startup, ingest, maintenance, and GC all fail closed when the upstream
   finalized-block observation is unavailable
+- cached lease-backed startup re-authorizes the cached writer token against the current upstream
+  finalized-block observation before reporting success
+- successful lease acquisition re-arms backend fence state even when retrying the same session
+  after a partial acquisition failure
 
 The remaining work is now mostly about operational replacement and deployment guidance.
 
@@ -109,10 +114,12 @@ The ingest engine owns:
 
 Writer startup is explicit and authoritative:
 
-1. acquire write authority
-2. clean any unpublished suffix above the published head
-3. repair sealed open-page markers
-4. derive the next local write position
+1. if a cached writer token exists, re-authorize it against the current observed upstream
+   finalized block and fail closed if that check fails
+2. otherwise acquire write authority
+3. clean any unpublished suffix above the published head
+4. repair sealed open-page markers
+5. derive the next local write position
 
 `startup_plan(...)` is observational only.
 
@@ -205,6 +212,9 @@ The expected standby-writer takeover path is:
    - cleans any unpublished suffix above the published head
    - repairs stale open-page markers
    - derives next local sequencing state
+
+If the ownership CAS succeeds but fence advancement fails, retrying the same session must still
+re-arm the backend fence before acquisition succeeds.
 
 If the takeover CAS fails, the standby must reload `publication_state` and re-evaluate against the
 latest observed upstream finalized block rather than retrying blindly.
