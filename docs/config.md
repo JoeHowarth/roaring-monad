@@ -71,7 +71,7 @@ See [caching.md](caching.md) for cache design details.
 
 ## Vestigial Fields
 
-These fields exist from prior designs and are carry-forward. They can be removed:
+These fields are vestigial from prior designs and are not used by any current code path:
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|

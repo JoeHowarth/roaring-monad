@@ -16,7 +16,7 @@ pub trait BytesCache: Send + Sync {
 }
 ```
 
-The cache sits below the query API — the executor and service do not expose cache-specific behavior.
+The cache sits below the query API — the executor and service do not expose cache-specific behavior. See [config.md](config.md) for `BytesCacheConfig`.
 
 ## Per-Table Byte Budgets
 
@@ -31,7 +31,7 @@ Each table has an independent byte budget configured via `BytesCacheConfig`:
 | `StreamPageMeta` | Sealed `stream_page_meta/<stream_id>/<page_start>` |
 | `StreamPageBlobs` | Sealed `stream_page_blob/<stream_id>/<page_start>` |
 
-A `max_bytes = 0` budget disables the table entirely — the cache is bypassed with no lookup/insert overhead.
+A `max_bytes = 0` budget disables the table entirely — the cache is bypassed with no lookup/insert overhead. See [storage-model.md](storage-model.md) for the artifact key layout.
 
 ## Zero-Copy Ref Types
 
@@ -57,7 +57,7 @@ Write/recovery inventory only. The query path does not read these markers.
 
 LRU eviction within each enabled table. Per-table metrics track hits, misses, inserts, evictions, and resident bytes.
 
-## Not Yet Implemented
+## Deferred Scope
 
 - miss deduplication (concurrent fetches for the same key)
 - eager cache population on ingest writes

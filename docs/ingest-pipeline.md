@@ -43,7 +43,7 @@ For each block in the batch:
 5. **Directory fragments** — one immutable `log_dir_frag/<sub_bucket_start>/<block_num>` per covered sub-bucket
 6. **Stream fragments** — `stream_frag_meta/...` and `stream_frag_blob/...` per stream per page touched
 
-All artifacts must be durable before the head advance. See [storage-model.md](storage-model.md) for the publication ordering invariant.
+All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md).
 
 ## Directory Compaction
 
@@ -56,9 +56,7 @@ See [storage-model.md](storage-model.md) for directory layout details.
 
 ## Stream Page Compaction
 
-Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs within a shard.
-
-When `next_log_id` crosses a page boundary, the sealed page's fragments are compacted:
+When `next_log_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
 
 1. load all `stream_frag_meta` and `stream_frag_blob` entries for the page
 2. merge the roaring bitmaps
@@ -94,10 +92,6 @@ When a writer acquires ownership (fresh or after takeover), it cleans any artifa
 - deletes stream fragments (`stream_frag_meta/...`, `stream_frag_blob/...`) for those blocks
 
 This runs before any new ingest, ensuring the write position is clean.
-
-## Publication Ordering Invariant
-
-All authoritative artifacts for a block must be durable before `publication_state.indexed_finalized_head` is advanced. This is the only reader-visible watermark — readers never see a head that references artifacts that don't yet exist.
 
 ## Important Boundaries
 

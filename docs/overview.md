@@ -51,6 +51,8 @@ The crate is organized in three layers.
 
 The RPC crate stays outside this boundary. It owns transport concerns such as JSON-RPC parsing, tag policy, field selection, envelope formatting, and error mapping.
 
+For details on each subsystem, see: [storage-model.md](storage-model.md), [write-authority.md](write-authority.md), [query-execution.md](query-execution.md), [ingest-pipeline.md](ingest-pipeline.md), [caching.md](caching.md), [backend-stores.md](backend-stores.md), [config.md](config.md).
+
 ## Current Responsibilities
 
 ### Method boundary
@@ -72,9 +74,9 @@ The shared layer owns:
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
-- immutable-bytes cache policy for immutable read artifacts
+- immutable-bytes cache policy for immutable read artifacts (see [caching.md](caching.md))
 - runtime degraded / throttled state
-- write-authority policy and fencing
+- write-authority policy and fencing (see [write-authority.md](write-authority.md))
 - publication-state reads
 - shared finalized-state and block-identity reads
 
@@ -142,15 +144,17 @@ class BlockIdentity:
 
 
 class LogSequencingState:
-    next_log_id: int
+    next_log_id: LogId
 
 
 class LogBlockWindow:
-    first_log_id: int
-    count: int
+    first_log_id: LogId
+    count: u32
 ```
 
 ## Persisted Key Schema
+
+This is the canonical key reference. See [storage-model.md](storage-model.md) for the data model and lookup flow, and [backend-stores.md](backend-stores.md) for the store traits.
 
 Shared metadata:
 
@@ -177,7 +181,7 @@ Payload blobs:
 
 - `block_logs/<block_num> -> concatenated encoded logs`
 
-All meta-store keys use big-endian encoded u64 components. Blob-store keys follow the same convention.
+Numeric key components use big-endian encoded u64. The exception is `block_hash_to_num/<block_hash>` which uses the raw 32-byte hash. Blob-store keys follow the same conventions.
 
 ## Top-Level Service Boundary
 

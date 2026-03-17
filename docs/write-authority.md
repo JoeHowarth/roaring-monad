@@ -70,8 +70,7 @@ Takeover is allowed once `observed_upstream_finalized_block > lease_valid_throug
 
 ### Config
 
-- `publication_lease_blocks` (default: 10) — lease duration in upstream finalized blocks
-- `publication_lease_renew_threshold_blocks` (default: 2) — renew when the gap between `lease_valid_through_block` and the observed block enters this window
+See [config.md](config.md) for field defaults. The key fields are `publication_lease_blocks` and `publication_lease_renew_threshold_blocks`.
 
 Required invariant: `publication_lease_renew_threshold_blocks < publication_lease_blocks`.
 
@@ -140,7 +139,7 @@ async def startup_reader_writer(owner_id, observed_upstream_finalized_block, cac
     return recovery_plan_from(lease)
 ```
 
-Steps 3-5 (cleanup, marker repair, derive next position) run on both the cached and fresh paths. A cached writer re-authorization still cleans partial artifacts left by a failed ingest.
+Cleanup, marker repair, and next-position derivation run on both the cached and fresh paths. A cached writer re-authorization still cleans partial artifacts left by a failed ingest.
 
 ### Reader-only
 
@@ -204,4 +203,4 @@ Single-writer mode relies entirely on the deployment preventing concurrent write
 
 - a healthy primary keeps ownership
 - standby writers may observe and remain ready but must not seize ownership while the current lease is valid
-- the v1 operational story for forced replacement: stop the writer process and wait for the lease to expire (at most `publication_lease_blocks` finalized blocks)
+- to force replacement: stop the writer process and wait for the lease to expire (at most `publication_lease_blocks` finalized blocks); a standby takes over once expiry is observed

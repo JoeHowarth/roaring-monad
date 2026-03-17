@@ -27,7 +27,7 @@ Composition: `global_log_id = (shard << 24) | local_id`
 
 The shard determines which stream pages and bitmaps are relevant. The local ID is the position within a shard's bitmap space.
 
-Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs within a shard.
+Stream pages span 4,096 local IDs within a shard (see [storage-model.md](storage-model.md) for the stream layout).
 
 ## Query Flow
 

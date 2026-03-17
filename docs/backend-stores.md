@@ -18,7 +18,7 @@ pub trait MetaStore: Send + Sync {
 - `Record { value: Bytes, version: u64 }` — every stored value carries a monotonic version
 - `PutCond` — `Any`, `IfAbsent`, or `IfVersion(u64)` for conditional writes
 - `DelCond` — `Any` or `IfVersion(u64)` for conditional deletes
-- `FenceToken(u64)` — epoch-based fencing; operations with a token below the stored minimum epoch return `LeaseLost`
+- `FenceToken(u64)` — epoch-based fencing; operations with a token below the stored minimum epoch return `LeaseLost`. See [write-authority.md](write-authority.md) for the fencing model.
 
 ## BlobStore
 
@@ -74,7 +74,7 @@ File-system backed stores for local development and testing.
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
 - `PublicationStore` CAS operations are serialized via a per-path mutex to prevent races
-- Atomic writes use temp-file + rename for crash safety
+- `PublicationStore` CAS writes use temp-file + rename for crash safety; regular `MetaStore::put` writes directly (non-atomic)
 
 Implements `MetaStore` + `PublicationStore` + `FenceStore` (meta) and `BlobStore` (blob).
 
@@ -108,7 +108,7 @@ The fence is checked against a cached `min_epoch` value. The cached value is ref
 
 ### Retry policy
 
-Retryable errors (timeout, connection, unavailable, overloaded) use exponential backoff with configurable `max_retries`, `base_delay_ms`, and `max_delay_ms`.
+Retryable errors (timeout, temporary, connection, reset, refused, unavailable, overloaded, connection-setup failure) use exponential backoff with configurable `max_retries`, `base_delay_ms`, and `max_delay_ms`.
 
 ## MinioBlobStore
 
