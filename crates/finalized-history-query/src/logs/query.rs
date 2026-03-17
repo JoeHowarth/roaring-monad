@@ -299,15 +299,14 @@ impl LogsQueryEngine {
                     continue;
                 };
 
-                let run =
-                    collect_contiguous_chunk(
-                        &mut locals,
-                        shard,
-                        (id, location),
-                        remaining_needed_for_chunk(take, matched.len()),
-                        &mut materializer,
-                    )
-                    .await?;
+                let run = collect_contiguous_chunk(
+                    &mut locals,
+                    shard,
+                    (id, location),
+                    remaining_needed_for_chunk(take, matched.len()),
+                    &mut materializer,
+                )
+                .await?;
 
                 let mut run_offset = 0usize;
                 while run_offset < run.len() {
@@ -901,9 +900,9 @@ fn read_u64_suffix(key: &[u8]) -> Result<u64> {
 mod tests {
     use super::{ResolvedLogLocation, collect_contiguous_chunk, load_stream_entries};
     use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
+    use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::collections::VecDeque;
 
     use bytes::Bytes;
 
@@ -928,7 +927,10 @@ mod tests {
     }
 
     impl super::LogLocationResolver for StubResolver {
-        async fn resolve_log_id(&mut self, id: LogId) -> crate::Result<Option<ResolvedLogLocation>> {
+        async fn resolve_log_id(
+            &mut self,
+            id: LogId,
+        ) -> crate::Result<Option<ResolvedLogLocation>> {
             let (expected_id, outcome) = self.planned.pop_front().expect("planned resolution");
             assert_eq!(id, expected_id, "unexpected resolve order");
             outcome
@@ -1256,7 +1258,12 @@ mod tests {
                             local_ordinal: 1,
                         })),
                     ),
-                    (third_id, Err(crate::Error::Backend("should not resolve third".to_string()))),
+                    (
+                        third_id,
+                        Err(crate::Error::Backend(
+                            "should not resolve third".to_string(),
+                        )),
+                    ),
                 ]),
             };
 
@@ -1305,7 +1312,8 @@ mod tests {
             let first_chunk = collect_contiguous_chunk(&mut locals, shard, first, 2, &mut resolver)
                 .await
                 .expect("first chunk");
-            let next_local = LogLocalId::new(locals.next().expect("remaining local")).expect("local");
+            let next_local =
+                LogLocalId::new(locals.next().expect("remaining local")).expect("local");
             let second_chunk = collect_contiguous_chunk(
                 &mut locals,
                 shard,
