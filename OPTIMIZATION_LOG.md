@@ -253,6 +253,38 @@ cargo test -p finalized-history-query service_coalesces_contiguous_same_block_lo
 
 - For pagination-sensitive hot paths, counting requested `read_range` bytes in an integration test is a stable way to catch overfetch regressions without relying on noisy wall-clock timing.
 
+## 2026-03-17T22:05:00Z - Bound contiguous-run discovery as well as payload reads
+
+### Hypothesis
+
+- Bounding payload reads alone is not enough; the query path should also stop resolving same-block candidates once the current `limit + 1` prefix is fully described.
+
+### Commands
+
+```bash
+cargo test -p finalized-history-query collect_contiguous_chunk_does_not_resolve_past_requested_prefix -- --nocapture
+cargo test -p finalized-history-query collect_contiguous_chunk_leaves_remaining_run_for_following_iterations -- --nocapture
+cargo test -p finalized-history-query query_limit_one_does_not_need_full_contiguous_run_bytes -- --nocapture
+```
+
+### Metrics
+
+- Prefix-bound run-discovery regression:
+  - before: a `max_len = 2` request still attempted to resolve the third contiguous candidate and failed the test on injected backend access
+  - after: the helper returns the requested prefix and leaves the third candidate untouched for the next iteration
+- Continuation coverage:
+  - after: a four-item contiguous run can be consumed as `2 + 2` prefixes across successive iterations without dropping candidates
+- Public query regression:
+  - after: the existing `limit = 1` contiguous-match fixture still holds at `read_range_bytes = 280`
+
+### Interpretation
+
+- The grouped-read path is now bounded both in payload I/O and in same-block candidate discovery, which closes the remaining eager-work gap from the first fix.
+
+### Methodology Learnings
+
+- Injecting a deterministic failure on the first candidate that should be out of scope is an effective way to prove that a pagination-sensitive path no longer explores beyond its useful prefix.
+
 ## 2026-03-09T18:45:46Z - Query Executor Range-Aware Chunk Loading
 
 ### Change Summary
