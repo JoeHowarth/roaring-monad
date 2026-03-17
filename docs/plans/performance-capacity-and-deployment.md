@@ -30,6 +30,8 @@ proving readiness.
   deployments
 - document deployment prerequisites such as backend topology,
   configuration, secrets, TLS, and rollback expectations
+- document schema and key-layout coordination expectations for distributed
+  backend changes
 - document deployment-mode guidance for lease-backed versus
   single-writer operation
 - decide whether optional cache and storage optimizations remain
@@ -50,6 +52,8 @@ proving readiness.
   ad hoc local runs
 - startup and recovery cost expectations are documented and measured
 - storage growth and cleanup lag have an explicit operating model
+- distributed schema and key-layout coordination expectations are
+  documented
 - deployment mode selection and replacement expectations are documented
 - deployment requirements and rollback expectations are documented
 
@@ -67,6 +71,9 @@ proving readiness.
   pipelines
 - how much deployment configuration should live in this repo versus the
   eventual host/service repo
+- how Scylla schema changes and MinIO key-layout changes should be
+  coordinated, validated, and rolled out once the crate is running in a
+  shared monorepo environment
 - whether optional optimizations such as miss deduplication, ingest-time
   cache population, compression, alternate cache backing allocation, or
   payload-only stored log encoding are justified by measured evidence

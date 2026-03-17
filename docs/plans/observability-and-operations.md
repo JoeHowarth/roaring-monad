@@ -27,6 +27,8 @@ runbook set tied to the failure modes the service can enter.
 - make degraded and throttled transitions observable and explainable
 - define operator guidance for writer replacement, restart, and failover
   procedures in lease-backed versus single-writer deployments
+- define the runtime degradation state machine and make its transitions
+  observable
 
 ## Out Of Scope
 
@@ -38,6 +40,8 @@ runbook set tied to the failure modes the service can enter.
 
 - the crate has a clear metrics contract for the critical correctness and
   reliability paths
+- the runtime policy for healthy, throttled, degraded, and fail-closed
+  behavior is defined in one place
 - degraded and throttled states can be correlated with backend and
   workload behavior
 - there is a documented alert and runbook path for the major failure
@@ -56,6 +60,23 @@ runbook set tied to the failure modes the service can enter.
   `performance-capacity-and-deployment`, because benchmarks without
   observability are hard to trust
 
+## Runtime State Policy
+
+This workstream owns the definition of the service-level degradation
+policy.
+
+That includes:
+
+- which conditions trigger throttled state
+- which conditions trigger degraded or fail-closed state
+- how backend failures, cleanup guardrails, and correctness violations
+  compose
+- whether some transitions are automatic, sticky, or operator-cleared
+
+Other plans may define the inputs to this state machine, but this plan
+should define the service-level policy in one place so implementation and
+runbooks stay consistent.
+
 ## Follow-Up Questions
 
 - whether the crate should export metrics directly or surface hooks for a
@@ -64,3 +85,5 @@ runbook set tied to the failure modes the service can enter.
   upstreaming versus real production rollout
 - how much forced replacement behavior needs explicit runbook support
   before a dedicated administrative takeover mechanism exists
+- how the healthy → throttled → degraded → fail-closed state machine
+  should compose when multiple triggers are active at once

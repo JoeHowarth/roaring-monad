@@ -167,6 +167,30 @@ These categories must not be conflated. Startup recovery is correctness
 critical. Periodic maintenance is service hygiene. GC is background debt
 management and policy enforcement.
 
+## Retention And Pruning Policy
+
+This workstream also needs to distinguish between three different
+policies that are easy to blur together:
+
+- garbage collection of debris that should never have remained
+- retention of valid but old data that may still be intentionally kept
+- operator-driven pruning of data that is safe to remove below an
+  explicitly chosen boundary
+
+Not every deletion policy should be expressed as TTL-based GC.
+
+For example, `prune_block_hash_index_below(...)` already implies an
+explicit caller-supplied boundary rather than an automatic age-based
+policy.
+
+This plan should therefore avoid assuming one global retention mechanism
+for all cleanup classes. Part of the work here is deciding which classes
+are:
+
+- always safe to clean automatically
+- retained until an operator chooses a boundary
+- retained indefinitely unless a future product requirement changes that
+
 ## Design Constraints
 
 ### Authoritative versus acceleration artifacts must stay distinct
@@ -296,6 +320,8 @@ pass.
 - define which artifact classes GC owns
 - implement discovery for those classes
 - implement deletion where appropriate
+- define which cleanup classes require explicit operator-supplied
+  pruning boundaries rather than automatic GC
 - report meaningful stats rather than placeholder values
 - decide which findings should:
   - only report
@@ -448,3 +474,5 @@ to all of the following:
   stateless between runs
 - whether block-hash index pruning should remain a GC concern or become a
   distinct operator maintenance path
+- which cleanup or pruning classes should use explicit operator-supplied
+  boundaries versus retention windows or automatic GC

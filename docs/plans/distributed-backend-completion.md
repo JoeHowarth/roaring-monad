@@ -195,6 +195,19 @@ Fallback protocols such as content-addressed indirection, staged blob
 commit, or best-effort "check then put" are out of scope for the current
 implementation plan unless the native path proves unusable in practice.
 
+### Backend capability validation must include version compatibility
+
+Native conditional object creation is not just an API-shape choice. It
+is also a deployment-capability requirement.
+
+This plan therefore assumes:
+
+- the MinIO version used in integration and production environments must
+  actually honor the required `If-None-Match: "*"` semantics
+
+Validation must not stop at "works on one local environment." It must
+establish the effective capability floor the project depends on.
+
 ## Work Packages
 
 ## 1. Close The MinIO Immutable-Write Gap
@@ -223,6 +236,7 @@ the blob path.
 - working `MinioBlobStore::put_blob_if_absent(...)`
 - tests proving the intended immutable-write semantics
 - docs that describe the chosen behavior explicitly
+- an explicit statement of the validated MinIO capability/version floor
 
 ## 2. Tighten The Scylla Correctness Story
 
@@ -392,6 +406,13 @@ Complete when:
 If the MinIO immutable-write answer is convenient but not actually
 strong enough, later correctness work will rest on a false assumption.
 
+### Validating only one MinIO version
+
+If native conditional object create is validated only against one local
+or CI MinIO version, the project can still fail later in another
+deployment that lacks the same behavior. The plan needs an explicit
+capability floor, not just one successful test environment.
+
 ### Over-fitting to local Docker success
 
 A distributed test that only passes on the developer docker-compose path
@@ -433,5 +454,7 @@ to all of the following:
   the native conditional path unusable in practice
 - whether backend capabilities should be feature-gated or negotiated more
   explicitly at construction time
+- what MinIO version floor or capability statement should be documented
+  as a deployment requirement for native conditional object create
 - whether some distributed tests should move into a dedicated docker or
   pre-prod pipeline rather than ordinary CI
