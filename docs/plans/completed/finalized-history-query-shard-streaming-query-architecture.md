@@ -21,7 +21,7 @@ Unless stated otherwise, the indexed-path discussion in this document applies to
 
 Cross-request metadata caching is a separate architectural concern and is covered only as an assumption and dependency here. A separate plan exists at:
 
-- `docs/plans/metadata-caching-architecture.md`
+- `docs/plans/completed/metadata-caching-architecture.md`
 
 ## Problem Statement
 

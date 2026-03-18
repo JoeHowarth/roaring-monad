@@ -9,7 +9,7 @@ trivial cloning (Arc refcount bump), transparent compression, and a future path
 to arena-backed allocation.
 
 This plan supersedes the caching strategy described in
-`docs/plans/metadata-caching-architecture.md`. The cache is a simple get/put
+`docs/plans/completed/metadata-caching-architecture.md`. The cache is a simple get/put
 `BytesCache` with no miss deduplication in the first pass — concurrent misses
 may redundantly fetch, but caching is still strictly better than no cache.
 
@@ -584,7 +584,7 @@ replacements.
 
 ## Relationship to Other Plans
 
-This plan supersedes `docs/plans/metadata-caching-architecture.md`. The key
+This plan supersedes `docs/plans/completed/metadata-caching-architecture.md`. The key
 simplification is a plain get/put `BytesCache` with no miss deduplication,
 typed facades, or eager population in the first pass. Those can be layered on
 later (Phase 3) if profiling justifies the complexity.

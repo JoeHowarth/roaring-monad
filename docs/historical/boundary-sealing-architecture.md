@@ -372,6 +372,6 @@ It should not be the mechanism that finally seals an already completed shard.
 
 This document is a prerequisite for:
 
-- `docs/plans/metadata-caching-architecture.md`
+- `docs/plans/completed/metadata-caching-architecture.md`
 
 The cache plan should treat shard-local manifests and `log_dir` buckets as promotable to immutable caching based on the sealing rules defined here.
