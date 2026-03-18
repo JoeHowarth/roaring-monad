@@ -50,22 +50,10 @@ Replace broad integration files with themed suites:
 
 Extract shared test helpers where repetition obscures intent.
 
-### 3. Define initial upstream surface
-
-Decide what lands in the first review stack vs follow-up. Already
-decided: full crate surface lands over time including distributed
-backends; `benchmarking` and `log-workload-gen` land early where they
-help justify performance-sensitive slices; no transitional compatibility
-layers unless strictly needed.
-
-Deliverable: explicit first-wave scope and follow-up list.
-
 ## Exit Criteria
 
 - large files split into clearly owned subsystem modules
 - themed test suites replace monolithic integration files
-- upstream scope and follow-up scope both explicit
-- unfinished production work isolated from the core review path
 
 ## Risks
 
@@ -73,5 +61,3 @@ Deliverable: explicit first-wave scope and follow-up list.
   delays the merge path instead of enabling it.
 - **Under-refactoring:** if big files stay mostly intact, the PR stack
   is mechanically split but mentally monolithic.
-- **Scope confusion:** if upstream surface isn't defined clearly,
-  production-only work leaks into every review.
