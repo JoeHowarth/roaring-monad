@@ -5,7 +5,6 @@ pub mod config;
 pub mod core;
 pub mod domain;
 pub mod error;
-pub mod gc;
 pub mod ingest;
 pub mod logs;
 pub mod metrics;

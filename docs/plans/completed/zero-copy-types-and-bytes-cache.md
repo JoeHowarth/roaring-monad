@@ -279,7 +279,7 @@ They should not be cache targets for the query cache.
 Remaining optional optimization follow-ups now live in:
 
 - `docs/caching.md`
-- `docs/plans/performance-capacity-and-deployment.md`
+- `docs/plans/06-performance-capacity-and-deployment.md`
 
 ## Non-Goals
 

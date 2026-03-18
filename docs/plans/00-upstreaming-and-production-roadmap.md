@@ -7,25 +7,25 @@ This document defines the active workstream structure for getting
 closing the remaining production-readiness gaps.
 
 The current crate is coherent and has strong single-process correctness
-coverage, but it is not yet production-ready. The remaining work falls
-into six workstreams:
+coverage, but it is not yet production-ready. The remaining work falls into these workstreams:
 
 1. core productization and upstreaming
 2. distributed backend completion
-3. recovery, GC, and maintenance
-4. correctness verification matrix
-5. observability and operations
-6. performance, capacity, and deployment
+3. correctness verification matrix
+4. observability and operations
+5. performance, capacity, and deployment
+6. upstream PR stack
 
-Each workstream has its own plan stub under `docs/plans/`.
+Each workstream has its own plan under `docs/plans/`.
 
 ## Workstream Docs
 
-- [(01-core-productization-and-upstreaming.md)]((01-core-productization-and-upstreaming.md))
-- [(02-distributed-backend-completion.md)]((02-distributed-backend-completion.md))
-- [(04-correctness-verification-matrix.md)]((04-correctness-verification-matrix.md))
-- [(05-observability-and-operations.md)]((05-observability-and-operations.md))
-- [(06-performance-capacity-and-deployment.md)]((06-performance-capacity-and-deployment.md))
+- [01-core-productization-and-upstreaming.md](01-core-productization-and-upstreaming.md)
+- [02-distributed-backend-completion.md](02-distributed-backend-completion.md)
+- [04-correctness-verification-matrix.md](04-correctness-verification-matrix.md)
+- [05-observability-and-operations.md](05-observability-and-operations.md)
+- [06-performance-capacity-and-deployment.md](06-performance-capacity-and-deployment.md)
+- [07-upstream-pr-stack.md](07-upstream-pr-stack.md)
 
 ## Why This Grouping
 
@@ -34,10 +34,10 @@ reduce:
 
 - productization reduces review and integration risk
 - backend completion reduces distributed correctness risk
-- recovery and maintenance reduce long-lived state drift risk
 - the verification matrix reduces unknown-behavior risk
 - observability and operations reduce operator blind-spot risk
 - performance and deployment reduce rollout and steady-state risk
+- the PR stack translates the finished crate into reviewable landing commits
 
 This avoids treating "production readiness" as one undifferentiated
 task.
@@ -97,13 +97,15 @@ Recommended sequence:
 
 1. core productization and upstreaming
 2. distributed backend completion
-3. recovery, GC, and maintenance
-4. correctness verification matrix
-5. observability and operations
-6. performance, capacity, and deployment
+3. correctness verification matrix
+4. observability and operations
+5. performance, capacity, and deployment
+6. upstream PR stack
 
 This order keeps the early work focused on code shape and correctness
-blocking issues before moving into heavier operational work.
+blocking issues before moving into heavier operational work. The PR
+stack is last because the crate should be in its intended end state
+before review commits are cut.
 
 ## Exit Model
 
@@ -129,7 +131,6 @@ explicit operational confidence.
 Expected properties:
 
 - distributed write/read semantics are complete
-- recovery and cleanup are implemented and proven
 - metrics, alerts, and runbooks exist
 - SLO and soak evidence exist
 
@@ -144,3 +145,5 @@ Expected properties:
 - `06-performance-capacity-and-deployment` depends on all earlier
   workstreams, because benchmarking incomplete or weakly observable
   behavior gives misleading evidence.
+- `07-upstream-pr-stack` depends on all earlier workstreams being
+  complete.

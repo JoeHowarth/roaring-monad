@@ -29,8 +29,8 @@ The core lease and role model is now in place:
 The remaining operational replacement and deployment guidance now lives
 in:
 
-- `docs/plans/observability-and-operations.md`
-- `docs/plans/performance-capacity-and-deployment.md`
+- `docs/plans/05-observability-and-operations.md`
+- `docs/plans/06-performance-capacity-and-deployment.md`
 
 This document replaces the older overlapping plan set now kept under `docs/plans/superceded/`.
 

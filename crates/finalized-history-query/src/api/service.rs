@@ -8,7 +8,6 @@ use crate::config::Config;
 use crate::core::runtime::RuntimeState;
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::{Error, Result};
-use crate::gc::worker::GcWorker;
 use crate::ingest::authority::{
     LeaseAuthority, ReadOnlyAuthority, SingleWriterAuthority, WriteAuthority, WriteToken,
 };
@@ -129,18 +128,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         self.cache.metrics_snapshot()
     }
 
-    pub async fn prune_block_hash_index_below(&self, min_block_num: u64) -> Result<u64> {
-        if self.state.degraded.load(Ordering::Relaxed) {
-            return Err(Error::Degraded(self.state.reason()));
-        }
-
-        let result = self
-            .prune_block_hash_index_below_with_writer(min_block_num)
-            .await;
-        self.update_backend_state(&result);
-        result
-    }
-
     fn update_backend_state<T>(&self, result: &Result<T>) {
         match result {
             Ok(_) => self.state.on_backend_success(),
@@ -250,51 +237,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
                 Err(error)
             }
         }
-    }
-
-    async fn prune_block_hash_index_below_with_writer(&self, min_block_num: u64) -> Result<u64>
-    where
-        M: PublicationStore,
-    {
-        if !self.role.allows_writes() {
-            return Err(reader_only_mode_error());
-        }
-
-        let mut writer = self.writer.lock().await;
-        if writer.is_none() {
-            let _ = self.startup_locked(&mut writer).await?;
-        }
-
-        let token = (*writer).ok_or(Error::PublicationConflict)?;
-        let result = self
-            .ingest
-            .authority
-            .authorize(
-                &token,
-                self.config.observe_upstream_finalized_block.as_ref()(),
-            )
-            .await;
-        let token = match result {
-            Ok(token) => token,
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    *writer = None;
-                }
-                return Err(error);
-            }
-        };
-        *writer = Some(token);
-
-        let worker = GcWorker::new(&self.ingest.meta_store);
-        let result = worker
-            .prune_block_hash_index_below(min_block_num, self.ingest.authority.fence(&token))
-            .await;
-        if let Err(error) = &result
-            && should_clear_writer(error)
-        {
-            *writer = None;
-        }
-        result
     }
 }
 

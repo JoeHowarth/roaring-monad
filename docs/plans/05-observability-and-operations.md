@@ -1,93 +1,101 @@
 # Observability And Operations
 
-## Goal
+## Summary
 
-Make the crate operable as a service by giving operators enough signal to
-detect, understand, and respond to correctness, dependency, and backlog
-issues.
+The crate exposes some internal state (degraded/throttled flags, cache
+metrics, Scylla telemetry) but has no coherent metrics model, alert
+strategy, or runbooks. This plan defines those.
 
-## Why This Matters
+## Runtime State Machine
 
-The crate already exposes some internal state:
+### States
 
-- degraded and throttled service state
-- cache metrics snapshots
-- Scylla telemetry snapshots
+- **Healthy:** normal read and write work accepted.
+- **Throttled:** available but limiting work or signaling elevated risk.
+  Triggered by sustained backend trouble or concerning-but-not-critical
+  conditions.
+- **Degraded:** fail-closed for operations that could violate
+  correctness. Triggered by finality/parent-linkage violations, backend
+  failure past the degraded threshold, or hard correctness failures.
 
-That is useful, but it is not yet a production observability story.
-There is no clear exported metrics model, no alert strategy, and no
-runbook set tied to the failure modes the service can enter.
+Fail-closed is a policy outcome, not a separate state — it manifests as
+degraded mode rejecting risky operations.
 
-Concrete implementation notes:
+### Inputs
 
-- `docs/plans/runtime-state-and-metrics-contract.md`
+- **Backend errors:** consecutive failures, retry-budget exhaustion.
+- **Hard correctness violations:** finality violation, invalid parent
+  linkage, lease/ownership misuse.
 
-## Scope
+### Composition
 
-- define the metrics surface for ingest, query, publication, fencing,
-  retries, cache behavior, GC backlog, and health-state transitions
-- decide how those metrics are exported and consumed by a host service
-- define the initial alert set and operator-facing runbooks
-- make degraded and throttled transitions observable and explainable
-- define operator guidance for writer replacement, restart, and failover
-  procedures in lease-backed versus single-writer deployments
-- define the runtime degradation state machine and make its transitions
-  observable
+Precedence: hard correctness violation > degraded > throttled > healthy.
+Degraded overrides throttled. Hard correctness violations are sticky
+until restart.
 
-## Out Of Scope
+### Transitions
 
-- distributed backend semantics implementation
-- benchmark target definition and soak execution
-- deployment security configuration in detail
+- **Healthy → throttled:** backend errors exceed throttle threshold.
+- **Throttled → degraded:** backend errors exceed degraded threshold, or
+  correctness failure.
+- **Healthy → degraded:** immediate on finality/parent-linkage
+  violation.
+- **Throttled → healthy:** requires sustained backend success over a
+  configurable window (not a single success), and no stronger trigger
+  remaining.
+- **Degraded → healthy:** correctness-triggered degraded requires
+  restart. Backend-triggered degraded may auto-clear if deliberately
+  supported and documented.
+
+### Operation gating
+
+- **Query:** rejected when degraded, signaled when throttled.
+- **Ingest:** rejected when degraded, rejected or slowed when throttled.
+- **Lease loss:** handled by the write-authority subsystem, not this
+  state machine. Repeated lease-loss events surface through metrics but
+  don't drive state transitions here.
+
+## Metrics Contract
+
+### State
+
+- current service state
+- transitions by trigger source
+- time in throttled/degraded
+
+### Backend reliability
+
+- errors by class and operation
+- retry attempts and exhaustion
+- consecutive error streaks
+
+### Correctness and ownership
+
+- lease-lost events
+- publication conflicts
+- fence rejections
+- finality/parent-linkage violations
+
+### Query and ingest
+
+- request counts and latencies
+- cache hits/misses/evictions/bytes by table
+
+## Open Questions
+
+- **Throttling mechanism:** explicit `Throttled` errors vs internal rate
+  limiting vs host-configurable policy. Recommendation: explicit errors
+  or host-configurable, not silent-only.
+- **Metrics export:** direct implementation vs abstract hooks for host
+  telemetry. Recommendation: hooks if monorepo conventions exist.
+- **Degraded auto-clear:** split policy — transient backend degraded may
+  clear, correctness degraded may not.
 
 ## Exit Criteria
 
-- the crate has a clear metrics contract for the critical correctness and
-  reliability paths
-- the runtime policy for healthy, throttled, degraded, and fail-closed
-  behavior is defined in one place
-- degraded and throttled states can be correlated with backend and
-  workload behavior
-- there is a documented alert and runbook path for the major failure
-  classes
-- operator guidance exists for healthy-writer replacement, restart, and
-  failover expectations
-- operators would be able to tell the difference between transient
-  backend trouble, lease loss, backlog growth, and correctness-triggered
-  fail-closed behavior
-
-## Dependencies
-
-- depends on stable behavior from `02-distributed-backend-completion`
-  and `04-correctness-verification-matrix`
-- should be substantially complete before
-  `06-performance-capacity-and-deployment`, because benchmarks without
-  observability are hard to trust
-
-## Runtime State Policy
-
-This workstream owns the definition of the service-level degradation
-policy.
-
-That includes:
-
-- which conditions trigger throttled state
-- which conditions trigger degraded or fail-closed state
-- how backend failures, cleanup guardrails, and correctness violations
-  compose
-- whether some transitions are automatic, sticky, or operator-cleared
-
-Other plans may define the inputs to this state machine, but this plan
-should define the service-level policy in one place so implementation and
-runbooks stay consistent.
-
-## Follow-Up Questions
-
-- whether the crate should export metrics directly or surface hooks for a
-  host service to bind into its own telemetry stack
-- what the minimum required operational footprint is for initial
-  upstreaming versus real production rollout
-- how much forced replacement behavior needs explicit runbook support
-  before a dedicated administrative takeover mechanism exists
-- how the healthy → throttled → degraded → fail-closed state machine
-  should compose when multiple triggers are active at once
+- runtime degradation policy defined in one place
+- metrics contract covers correctness, backend reliability, and
+  request paths
+- operators can distinguish transient backend trouble from lease loss
+  from correctness-triggered fail-closed
+- alert and runbook path exists for major failure classes
