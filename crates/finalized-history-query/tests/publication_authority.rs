@@ -1,0 +1,395 @@
+#[allow(dead_code, unused_imports)]
+mod helpers;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use finalized_history_query::api::FinalizedHistoryService;
+use finalized_history_query::codec::finalized_state::{
+    decode_publication_state, encode_block_meta,
+};
+use finalized_history_query::config::Config;
+use finalized_history_query::core::state::load_finalized_head_state;
+use finalized_history_query::domain::keys::{
+    PUBLICATION_STATE_KEY, block_logs_blob_key, block_meta_key, log_directory_fragment_key,
+    stream_fragment_blob_key, stream_fragment_meta_key, stream_id, stream_page_start_local,
+};
+use finalized_history_query::domain::types::BlockMeta;
+use finalized_history_query::ingest::authority::lease::LeaseAuthority;
+use finalized_history_query::ingest::engine::IngestEngine;
+use finalized_history_query::store::blob::InMemoryBlobStore;
+use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::{FenceStore, PublicationStore};
+use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::{Error, WriteAuthority};
+use futures::executor::block_on;
+
+use helpers::*;
+
+#[test]
+fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let config = lease_writer_config();
+        let expected_lease_valid_through_block = static_observed_finalized_block()
+            .expect("static observed finalized block")
+            .saturating_add(config.publication_lease_blocks - 1);
+        let svc = FinalizedHistoryService::new_reader_writer(config, meta, blob, 1);
+        let block = mk_block(
+            1,
+            [0; 32],
+            vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(1, 10, 21, 1, 0, 1)],
+        );
+
+        svc.ingest_finalized_block(block.clone())
+            .await
+            .expect("ingest");
+
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
+        let publication_state = svc
+            .ingest
+            .meta_store
+            .get(PUBLICATION_STATE_KEY)
+            .await
+            .expect("publication state get")
+            .expect("publication state");
+        let publication_state =
+            decode_publication_state(&publication_state.value).expect("decode publication state");
+        assert_eq!(publication_state.owner_id, 1);
+        assert_eq!(publication_state.epoch, 1);
+        assert_eq!(publication_state.indexed_finalized_head, 1);
+        assert_eq!(
+            publication_state.lease_valid_through_block,
+            expected_lease_valid_through_block
+        );
+        assert!(
+            svc.ingest
+                .meta_store
+                .get(&log_directory_fragment_key(0, 1))
+                .await
+                .expect("directory fragment get")
+                .is_some()
+        );
+
+        let sid = stream_id(
+            "addr",
+            &[1; 20],
+            finalized_history_query::core::ids::LogShard::new(0).unwrap(),
+        );
+        let page_start = stream_page_start_local(0);
+        assert!(
+            svc.ingest
+                .meta_store
+                .get(&stream_fragment_meta_key(&sid, page_start, 1))
+                .await
+                .expect("stream fragment meta get")
+                .is_some()
+        );
+        assert!(
+            svc.ingest
+                .blob_store
+                .get_blob(&stream_fragment_blob_key(&sid, page_start, 1))
+                .await
+                .expect("stream fragment blob get")
+                .is_some()
+        );
+    });
+}
+
+#[test]
+fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+
+        let first = acquire_lease_token(meta.clone(), 7, 100, 50)
+            .await
+            .expect("bootstrap");
+        let first_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        assert_eq!(first_state.owner_id, 7);
+        assert_eq!(first.epoch, 1);
+        assert_eq!(first.indexed_finalized_head, 0);
+
+        let second = acquire_lease_token(meta.clone(), 9, 151, 50)
+            .await
+            .expect("takeover after expiry");
+        let second_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        assert_eq!(second_state.owner_id, 9);
+        assert_eq!(second.epoch, 2);
+        assert_eq!(second.indexed_finalized_head, 0);
+    });
+}
+
+#[test]
+fn retrying_same_session_takeover_rearms_the_backend_fence() {
+    block_on(async {
+        let inner = Arc::new(InMemoryMetaStore::with_min_epoch(1));
+        assert!(matches!(
+            inner
+                .create_if_absent(&seeded_publication_state_with_valid_through(
+                    7, [1u8; 16], 1, 0, 150,
+                ))
+                .await
+                .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        let meta = FailAdvanceFenceOnceMetaStore {
+            inner: inner.clone(),
+            failed: Arc::new(AtomicBool::new(false)),
+        };
+        let authority = LeaseAuthority::new(meta.clone(), 9, 50, 0);
+
+        let err = authority
+            .acquire(Some(151))
+            .await
+            .expect_err("first takeover should surface injected fence failure");
+        assert!(matches!(err, Error::Backend(_)));
+
+        let token = authority
+            .acquire(Some(151))
+            .await
+            .expect("retry should succeed after re-arming fence");
+
+        assert_eq!(token.epoch, 2);
+        assert_eq!(meta.current_fence().await.expect("current fence"), 2);
+    });
+}
+
+#[test]
+fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+
+        let _first = acquire_lease_token(meta.clone(), 7, 100, 50)
+            .await
+            .expect("bootstrap");
+        let first_state = meta
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+        let err = acquire_lease_token(meta.clone(), 9, 120, 50)
+            .await
+            .expect_err("fresh lease should reject standby takeover");
+        assert!(matches!(err, Error::LeaseStillFresh));
+
+        let publication_state = meta.load().await.expect("load publication state");
+        let publication_state = publication_state.expect("publication state");
+        assert_eq!(publication_state.owner_id, first_state.owner_id);
+        assert_eq!(publication_state.session_id, first_state.session_id);
+        assert_eq!(publication_state.epoch, first_state.epoch);
+    });
+}
+
+#[test]
+fn readers_use_only_publication_state() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        assert!(matches!(
+            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 4, 3))
+                .await
+                .expect("create publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        meta.put(
+            &block_meta_key(3),
+            encode_block_meta(&BlockMeta {
+                block_hash: [3; 32],
+                parent_hash: [2; 32],
+                first_log_id: 9,
+                count: 1,
+            }),
+            PutCond::Any,
+            FenceToken(0),
+        )
+        .await
+        .expect("seed block meta");
+
+        let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta, blob);
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 3);
+        let state = load_finalized_head_state(&svc.ingest.meta_store)
+            .await
+            .expect("load finalized head state");
+        assert_eq!(state.indexed_finalized_head, 3);
+        assert_eq!(state.publication_epoch, 4);
+    });
+}
+
+#[test]
+fn publication_state_key_is_encoded_at_the_canonical_location() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        meta.put(
+            PUBLICATION_STATE_KEY,
+            finalized_history_query::codec::finalized_state::encode_publication_state(
+                &seeded_publication_state(1, [1u8; 16], 2, 3),
+            ),
+            PutCond::Any,
+            FenceToken(0),
+        )
+        .await
+        .expect("write publication state");
+
+        let record = meta
+            .get(PUBLICATION_STATE_KEY)
+            .await
+            .expect("get publication state")
+            .expect("publication state");
+        let decoded = decode_publication_state(&record.value).expect("decode");
+        assert_eq!(decoded.indexed_finalized_head, 3);
+    });
+}
+
+#[test]
+fn ingest_uses_publication_epoch_for_fenced_writes() {
+    block_on(async {
+        let meta = InMemoryMetaStore::with_min_epoch(5);
+        let blob = InMemoryBlobStore::default();
+        assert!(matches!(
+            meta.create_if_absent(&seeded_publication_state_with_valid_through(
+                1, [1u8; 16], 5, 0, 0,
+            ))
+            .await
+            .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+
+        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
+        svc.startup().await.expect("startup");
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest should use publication epoch as fence token");
+    });
+}
+
+#[test]
+fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
+    block_on(async {
+        CONTROLLED_OBSERVED_FINALIZED_BLOCK.store(1_000, Ordering::Relaxed);
+
+        let config = Config {
+            observe_upstream_finalized_block: Arc::new(controlled_observed_finalized_block),
+            publication_lease_blocks: 50,
+            publication_lease_renew_threshold_blocks: 0,
+            ..Config::default()
+        };
+        let meta = ExpireBeforePublishMetaStore {
+            inner: Arc::new(InMemoryMetaStore::default()),
+            advanced: Arc::new(AtomicBool::new(false)),
+        };
+        let blob = InMemoryBlobStore::default();
+        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let engine = IngestEngine::new(config, authority, meta, blob);
+
+        let lease = engine
+            .authority
+            .acquire(controlled_observed_finalized_block())
+            .await
+            .expect("bootstrap");
+
+        let err = engine
+            .ingest_finalized_block(
+                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+                lease,
+            )
+            .await
+            .expect_err("mid-batch lease expiry should fail with LeaseLost");
+        assert!(matches!(err, Error::LeaseLost));
+    });
+}
+
+#[test]
+fn takeover_should_fence_stale_writer_before_artifact_writes() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let engine = IngestEngine::new(lease_writer_config(), authority, meta.clone(), blob);
+
+        let stale_lease = engine
+            .authority
+            .acquire(Some(100))
+            .await
+            .expect("writer 1 acquires publication");
+        let takeover = LeaseAuthority::new(meta.clone(), 2, 50, 0);
+        let _takeover_lease = takeover
+            .acquire(Some(151))
+            .await
+            .expect("writer 2 takes over publication");
+
+        let err = engine
+            .ingest_finalized_block(
+                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+                stale_lease,
+            )
+            .await
+            .expect_err("stale writer ingest should fail");
+        assert!(matches!(err, Error::LeaseLost));
+
+        assert!(
+            engine
+                .meta_store
+                .get(&block_meta_key(1))
+                .await
+                .expect("read block meta")
+                .is_none(),
+            "stale writer should be fenced before writing block metadata"
+        );
+        assert!(
+            engine
+                .blob_store
+                .get_blob(&block_logs_blob_key(1))
+                .await
+                .expect("read block blob")
+                .is_none(),
+            "stale writer should be fenced before writing block blobs"
+        );
+    });
+}
+
+#[test]
+fn service_clears_cached_writer_after_publication_conflict() {
+    block_on(async {
+        let meta = PublishConflictOnceMetaStore {
+            inner: Arc::new(InMemoryMetaStore::default()),
+            conflicted: Arc::new(AtomicBool::new(false)),
+        };
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            meta.clone(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let err = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect_err("first publish should surface publication conflict");
+        assert!(matches!(err, Error::PublicationConflict));
+        assert_eq!(
+            svc.indexed_finalized_head()
+                .await
+                .expect("head after conflict"),
+            1
+        );
+
+        svc.ingest_finalized_block(mk_block(2, [1; 32], vec![mk_log(1, 10, 21, 2, 0, 0)]))
+            .await
+            .expect("service should reacquire after publication conflict");
+        assert_eq!(
+            svc.indexed_finalized_head()
+                .await
+                .expect("head after retry"),
+            2
+        );
+    });
+}
