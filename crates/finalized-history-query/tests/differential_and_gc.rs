@@ -6,11 +6,9 @@ use finalized_history_query::api::{
 use finalized_history_query::config::Config;
 use finalized_history_query::core::ids::LogId;
 use finalized_history_query::domain::types::{Block, Log};
-use finalized_history_query::gc::worker::GcWorker;
 use finalized_history_query::recovery::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::traits::FenceToken;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
 use futures::executor::block_on;
 
@@ -201,18 +199,10 @@ fn differential_query_matches_naive() {
 }
 
 #[test]
-fn recovery_and_maintenance_smoke_checks() {
+fn recovery_startup_smoke_check() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-        let cfg = Config::default();
-        let worker = GcWorker::new(&meta, &cfg);
-        let stats = worker
-            .run_once_with_fence(FenceToken(0))
-            .await
-            .expect("gc run");
-
-        assert!(!stats.exceeded_guardrail);
 
         let rec = startup_plan(&meta, &blob, 0).await.expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);

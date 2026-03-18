@@ -396,11 +396,10 @@ Complete when:
 
 ## Dependencies
 
-- depends on [core-productization-and-upstreaming.md](core-productization-and-upstreaming.md)
+- depends on [(01-core-productization-and-upstreaming.md)]((01-core-productization-and-upstreaming.md))
   for a stable code and docs surface
 - unblocks
-  [correctness-verification-matrix.md](correctness-verification-matrix.md),
-  [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md),
+  [(04-correctness-verification-matrix.md)]((04-correctness-verification-matrix.md))
   and later production work
 
 ## Risks
@@ -443,11 +442,9 @@ to all of the following:
 
 ## Dependencies On Other Plans
 
-- [correctness-verification-matrix.md](correctness-verification-matrix.md)
+- [(04-correctness-verification-matrix.md)]((04-correctness-verification-matrix.md))
   builds on the scenarios and guarantees clarified here
-- [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md)
-  depends on real distributed listing and deletion behavior
-- [observability-and-operations.md](observability-and-operations.md)
+- [(05-observability-and-operations.md)]((05-observability-and-operations.md))
   depends on stable backend error and retry semantics
 
 ## Follow-Up Questions

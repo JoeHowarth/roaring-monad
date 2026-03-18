@@ -403,9 +403,8 @@ Complete when:
 - should happen before all other workstreams, because it reduces review
   cost everywhere else
 - should inform the final shape of
-  `distributed-backend-completion`,
-  `recovery-gc-and-maintenance`, and
-  `correctness-verification-matrix`
+  `02-distributed-backend-completion` and
+  `04-correctness-verification-matrix`
 
 ## Risks
 
@@ -437,12 +436,10 @@ to all of the following:
 
 ## Dependencies On Other Plans
 
-- [distributed-backend-completion.md](distributed-backend-completion.md)
+- [(02-distributed-backend-completion.md)]((02-distributed-backend-completion.md))
   assumes this plan has already reduced the review surface around backend
   adapters
-- [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md)
-  benefits from the service and ingest surfaces being split first
-- [correctness-verification-matrix.md](correctness-verification-matrix.md)
+- [(04-correctness-verification-matrix.md)]((04-correctness-verification-matrix.md))
   depends on clearer test-family boundaries established here
 
 ## Follow-Up Questions

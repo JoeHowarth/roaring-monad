@@ -164,9 +164,6 @@ struct IngestDistributedArgs {
     #[command(flatten)]
     distributed: DistributedArgs,
 
-    #[arg(long, default_value_t = 500)]
-    run_maintenance_every_blocks: u64,
-
     #[arg(long, value_enum, default_value = "strict-cas")]
     ingest_mode: IngestModeArg,
 
@@ -181,9 +178,6 @@ struct IngestDistributedArgs {
 
     #[arg(long, default_value_t = 250)]
     log_every: u64,
-
-    #[arg(long, default_value_t = false)]
-    skip_final_maintenance: bool,
 
     #[arg(long)]
     output_json: Option<PathBuf>,
@@ -650,12 +644,6 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
         blocks_ingested = blocks_ingested.saturating_add(1);
         logs_ingested = logs_ingested.saturating_add(outcome.written_logs as u64);
 
-        if args.run_maintenance_every_blocks > 0
-            && blocks_ingested.is_multiple_of(args.run_maintenance_every_blocks)
-        {
-            let _ = svc.run_maintenance().await;
-        }
-
         if raw_block_num == args.range.start_block
             || raw_block_num == args.range.end_block
             || raw_block_num % args.log_every == 0
@@ -679,10 +667,6 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
                 logs_ingested
             );
         }
-    }
-
-    if !args.skip_final_maintenance {
-        let _ = svc.run_maintenance().await;
     }
 
     let elapsed_seconds = started.elapsed().as_secs_f64();
@@ -855,13 +839,11 @@ async fn cmd_run_all(args: RunAllArgs) -> Result<()> {
         range: args.range.clone(),
         mapping: args.mapping.clone(),
         distributed: args.distributed.clone(),
-        run_maintenance_every_blocks: 500,
         ingest_mode: IngestModeArg::StrictCas,
         assume_empty_streams: false,
         log_locator_write_concurrency: 256,
         stream_append_concurrency: 96,
         log_every: 250,
-        skip_final_maintenance: false,
         output_json: None,
     })
     .await?;

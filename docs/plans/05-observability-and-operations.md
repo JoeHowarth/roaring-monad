@@ -58,10 +58,10 @@ Concrete implementation notes:
 
 ## Dependencies
 
-- depends on stable behavior from `distributed-backend-completion`,
-  `recovery-gc-and-maintenance`, and `correctness-verification-matrix`
+- depends on stable behavior from `02-distributed-backend-completion`
+  and `04-correctness-verification-matrix`
 - should be substantially complete before
-  `performance-capacity-and-deployment`, because benchmarks without
+  `06-performance-capacity-and-deployment`, because benchmarks without
   observability are hard to trust
 
 ## Runtime State Policy

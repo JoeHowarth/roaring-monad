@@ -58,21 +58,6 @@ See [caching.md](caching.md) for cache design details.
 | `backend_error_throttle_after` | `u64` | `3` | Consecutive backend errors before throttling |
 | `backend_error_degraded_after` | `u64` | `10` | Consecutive backend errors before degraded state |
 
-## GC Guardrails
-
-The GC worker (`src/gc/worker.rs`) periodically cleans orphaned artifacts left behind by failed ingest attempts or compaction. Guardrails cap how much debris is tolerable before the service degrades or fails closed.
-
-After each GC pass, the collected stats are compared against these thresholds via `GcStats::check_guardrails`. If any threshold is exceeded, the service reacts according to `gc_guardrail_action`.
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `gc_guardrail_action` | `GuardrailAction` | `FailClosed` | Action when any guardrail threshold is exceeded |
-| `max_orphan_chunk_bytes` | `u64` | `32 GiB` | Total bytes of orphaned chunk objects (artifacts written but never published) |
-| `max_orphan_manifest_segments` | `u64` | `500,000` | Count of manifest segment records left by abandoned compaction or ingest |
-| `max_stale_tail_keys` | `u64` | `1,000,000` | Count of stale tail keys (metadata entries above the published head from failed writers) |
-
-`GuardrailAction` is either `Throttle` (set service to throttled state) or `FailClosed` (set service to degraded state).
-
 ## Backend-Specific Config
 
 Backend implementations have their own configuration that is not part of the main `Config` struct. These are set at construction time on each store.

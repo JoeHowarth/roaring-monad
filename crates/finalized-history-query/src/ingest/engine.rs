@@ -11,7 +11,7 @@ use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
 };
-use crate::store::traits::{BlobStore, FenceToken, MetaStore};
+use crate::store::traits::{BlobStore, MetaStore};
 
 pub struct IngestEngine<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub config: Config,
@@ -157,10 +157,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             next_token,
         ))
     }
-
-    pub async fn run_periodic_maintenance(&self, _fence: FenceToken) -> Result<MaintenanceStats> {
-        Ok(MaintenanceStats::default())
-    }
 }
 
 async fn validate_block_sequence<M: MetaStore>(
@@ -204,10 +200,4 @@ async fn validate_block_sequence<M: MetaStore>(
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MaintenanceStats {
-    pub flushed_streams: u64,
-    pub sealed_streams: u64,
 }

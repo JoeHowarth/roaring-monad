@@ -21,12 +21,11 @@ Each workstream has its own plan stub under `docs/plans/`.
 
 ## Workstream Docs
 
-- [core-productization-and-upstreaming.md](core-productization-and-upstreaming.md)
-- [distributed-backend-completion.md](distributed-backend-completion.md)
-- [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md)
-- [correctness-verification-matrix.md](correctness-verification-matrix.md)
-- [observability-and-operations.md](observability-and-operations.md)
-- [performance-capacity-and-deployment.md](performance-capacity-and-deployment.md)
+- [(01-core-productization-and-upstreaming.md)]((01-core-productization-and-upstreaming.md))
+- [(02-distributed-backend-completion.md)]((02-distributed-backend-completion.md))
+- [(04-correctness-verification-matrix.md)]((04-correctness-verification-matrix.md))
+- [(05-observability-and-operations.md)]((05-observability-and-operations.md))
+- [(06-performance-capacity-and-deployment.md)]((06-performance-capacity-and-deployment.md))
 
 ## Why This Grouping
 
@@ -136,15 +135,12 @@ Expected properties:
 
 ## Dependency Summary
 
-- `distributed-backend-completion` depends on `core-productization-and-upstreaming`
+- `02-distributed-backend-completion` depends on `01-core-productization-and-upstreaming`
   for a stable review surface.
-- `recovery-gc-and-maintenance` depends on `distributed-backend-completion`
-  where cleanup semantics must match the real backend behavior.
-- `correctness-verification-matrix` depends on
-  `distributed-backend-completion` and should grow alongside
-  `recovery-gc-and-maintenance`.
-- `observability-and-operations` depends on stable service and backend
+- `04-correctness-verification-matrix` depends on
+  `02-distributed-backend-completion`.
+- `05-observability-and-operations` depends on stable service and backend
   behavior from the earlier workstreams.
-- `performance-capacity-and-deployment` depends on all earlier
+- `06-performance-capacity-and-deployment` depends on all earlier
   workstreams, because benchmarking incomplete or weakly observable
   behavior gives misleading evidence.

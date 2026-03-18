@@ -467,12 +467,10 @@ Complete when:
 
 ## Dependencies
 
-- depends on [distributed-backend-completion.md](distributed-backend-completion.md)
+- depends on [(02-distributed-backend-completion.md)]((02-distributed-backend-completion.md))
   for full distributed-path coverage
-- should advance together with
-  [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md)
 - informs
-  [observability-and-operations.md](observability-and-operations.md)
+  [(05-observability-and-operations.md)]((05-observability-and-operations.md))
   by identifying which failure modes must be observable
 
 ## Risks
@@ -506,11 +504,9 @@ to all of the following:
 
 ## Dependencies On Other Plans
 
-- [distributed-backend-completion.md](distributed-backend-completion.md)
+- [(02-distributed-backend-completion.md)]((02-distributed-backend-completion.md))
   defines the real backend contract this matrix must verify
-- [recovery-gc-and-maintenance.md](recovery-gc-and-maintenance.md)
-  adds new cleanup invariants that must enter the matrix
-- [observability-and-operations.md](observability-and-operations.md)
+- [(05-observability-and-operations.md)]((05-observability-and-operations.md))
   depends on this plan to identify the failure classes that must be
   surfaced operationally
 

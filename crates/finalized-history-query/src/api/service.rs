@@ -4,15 +4,15 @@ use std::sync::atomic::Ordering;
 use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
 use crate::api::write::FinalizedHistoryWriter;
 use crate::cache::{BytesCacheMetrics, HashMapBytesCache};
-use crate::config::{Config, GuardrailAction};
+use crate::config::Config;
 use crate::core::runtime::RuntimeState;
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::{Error, Result};
-use crate::gc::worker::{GcStats, GcWorker};
+use crate::gc::worker::GcWorker;
 use crate::ingest::authority::{
     LeaseAuthority, ReadOnlyAuthority, SingleWriterAuthority, WriteAuthority, WriteToken,
 };
-use crate::ingest::engine::{IngestEngine, MaintenanceStats};
+use crate::ingest::engine::IngestEngine;
 use crate::ingest::open_pages::repair_open_stream_page_markers;
 use crate::ingest::recovery::cleanup_unpublished_suffix;
 use crate::logs::query::LogsQueryEngine;
@@ -127,53 +127,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
         self.cache.metrics_snapshot()
-    }
-
-    pub async fn run_maintenance(&self) -> Result<MaintenanceStats> {
-        if self.state.degraded.load(Ordering::Relaxed) {
-            return Err(Error::Degraded(self.state.reason()));
-        }
-
-        let result = self.run_maintenance_with_writer().await;
-        self.update_backend_state(&result);
-        result
-    }
-
-    pub async fn run_gc_once(&self) -> Result<GcStats> {
-        if self.state.degraded.load(Ordering::Relaxed) {
-            return Err(Error::Degraded(self.state.reason()));
-        }
-
-        let stats = match self.run_gc_once_with_writer().await {
-            Ok(value) => value,
-            Err(error) => {
-                if let Error::Backend(message) = &error {
-                    self.state.on_backend_error(
-                        message.clone(),
-                        self.config.backend_error_throttle_after,
-                        self.config.backend_error_degraded_after,
-                    );
-                }
-                return Err(error);
-            }
-        };
-
-        if stats.exceeded_guardrail {
-            match self.config.gc_guardrail_action {
-                GuardrailAction::FailClosed => {
-                    self.state
-                        .set_degraded("gc guardrail exceeded; fail-closed".to_string());
-                }
-                GuardrailAction::Throttle => {
-                    self.state
-                        .set_throttled("gc guardrail exceeded; throttled".to_string());
-                }
-            }
-        } else {
-            self.state.clear_throttle();
-        }
-
-        Ok(stats)
     }
 
     pub async fn prune_block_hash_index_below(&self, min_block_num: u64) -> Result<u64> {
@@ -299,50 +252,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         }
     }
 
-    async fn run_maintenance_with_writer(&self) -> Result<MaintenanceStats>
-    where
-        M: PublicationStore,
-    {
-        if !self.role.allows_writes() {
-            return Err(reader_only_mode_error());
-        }
-
-        let mut writer = self.writer.lock().await;
-        if writer.is_none() {
-            let _ = self.startup_locked(&mut writer).await?;
-        }
-
-        let token = (*writer).ok_or(Error::PublicationConflict)?;
-        let result = self
-            .ingest
-            .authority
-            .authorize(
-                &token,
-                self.config.observe_upstream_finalized_block.as_ref()(),
-            )
-            .await;
-        let token = match result {
-            Ok(token) => token,
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    *writer = None;
-                }
-                return Err(error);
-            }
-        };
-        *writer = Some(token);
-        let result = self
-            .ingest
-            .run_periodic_maintenance(self.ingest.authority.fence(&token))
-            .await;
-        if let Err(error) = &result
-            && should_clear_writer(error)
-        {
-            *writer = None;
-        }
-        result
-    }
-
     async fn prune_block_hash_index_below_with_writer(&self, min_block_num: u64) -> Result<u64>
     where
         M: PublicationStore,
@@ -376,54 +285,9 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         };
         *writer = Some(token);
 
-        let worker = GcWorker::new(&self.ingest.meta_store, &self.config);
+        let worker = GcWorker::new(&self.ingest.meta_store);
         let result = worker
             .prune_block_hash_index_below(min_block_num, self.ingest.authority.fence(&token))
-            .await;
-        if let Err(error) = &result
-            && should_clear_writer(error)
-        {
-            *writer = None;
-        }
-        result
-    }
-
-    async fn run_gc_once_with_writer(&self) -> Result<GcStats>
-    where
-        M: PublicationStore,
-    {
-        if !self.role.allows_writes() {
-            return Err(reader_only_mode_error());
-        }
-
-        let mut writer = self.writer.lock().await;
-        if writer.is_none() {
-            let _ = self.startup_locked(&mut writer).await?;
-        }
-
-        let token = (*writer).ok_or(Error::PublicationConflict)?;
-        let result = self
-            .ingest
-            .authority
-            .authorize(
-                &token,
-                self.config.observe_upstream_finalized_block.as_ref()(),
-            )
-            .await;
-        let token = match result {
-            Ok(token) => token,
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    *writer = None;
-                }
-                return Err(error);
-            }
-        };
-        *writer = Some(token);
-
-        let worker = GcWorker::new(&self.ingest.meta_store, &self.config);
-        let result = worker
-            .run_once_with_fence(self.ingest.authority.fence(&token))
             .await;
         if let Err(error) = &result
             && should_clear_writer(error)
