@@ -252,7 +252,7 @@ The crate intentionally does not implement:
 
 26. `src/ingest/engine.rs` — ingest orchestrator
 27. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
-28. `src/ingest/authority/lease.rs` — lease-backed multi-writer authority
+28. `src/ingest/authority/lease/` — lease-backed multi-writer authority
 29. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
 30. `src/recovery/startup.rs` — startup view, cleanup, marker repair
 
