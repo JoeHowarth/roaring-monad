@@ -35,7 +35,7 @@ The crate is organized in three layers.
 
 - `src/api/query_logs.rs`
 - `src/api/write.rs`
-- `src/api/service.rs`
+- `src/api/service/*`
 
 ### Shared finalized-history substrate
 
@@ -216,7 +216,7 @@ The crate intentionally does not implement:
 1. `src/lib.rs` — crate boundary, re-exports
 2. `src/api/query_logs.rs` — transport-free query surface
 3. `src/api/write.rs` — write-side public boundary
-4. `src/api/service.rs` — service behavior: query, ingest, health
+4. `src/api/service/` — service behavior: query, ingest, health
 
 ### Pass 2: Shared substrate
 
@@ -237,9 +237,9 @@ The crate intentionally does not implement:
 16. `src/logs/types.rs` — logs-family aliases and projections
 17. `src/logs/state.rs` — `BlockMeta` helpers, log-window fields
 18. `src/logs/window.rs` — block range to primary-ID range bridge
-19. `src/logs/materialize.rs` — `log_id -> block_num -> byte-range` resolution
-20. `src/logs/query.rs` — main query engine
-21. `src/logs/ingest.rs` — log-family ingest: artifacts, fragments, compaction
+19. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
+20. `src/logs/query/` — main query engine
+21. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
 ### Pass 4: Storage and codecs
 
@@ -252,14 +252,18 @@ The crate intentionally does not implement:
 
 26. `src/ingest/engine.rs` — ingest orchestrator
 27. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
-28. `src/ingest/authority/lease.rs` — lease-backed multi-writer authority
+28. `src/ingest/authority/lease/` — lease-backed multi-writer authority
 29. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
 30. `src/recovery/startup.rs` — startup view, cleanup, marker repair
 
 ### Pass 6: End-to-end behavior
 
-31. `tests/finalized_index.rs` — main contract tests
-32. `tests/crash_injection_matrix.rs` — crash-retry behavior
-33. `tests/differential_and_gc.rs` — differential correctness, recovery
+31. `tests/publication_authority.rs` — publication state, lease authority, fencing
+32. `tests/startup_recovery.rs` — startup, recovery, session reuse, roles
+33. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+34. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+35. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+36. `tests/crash_injection_matrix.rs` — crash-retry behavior
+37. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

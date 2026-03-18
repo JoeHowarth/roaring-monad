@@ -1,0 +1,635 @@
+use bytes::Bytes;
+use futures::stream::{FuturesUnordered, StreamExt};
+use roaring::RoaringBitmap;
+
+use crate::cache::{BytesCache, TableId};
+use crate::codec::log::decode_stream_bitmap_meta;
+use crate::domain::keys::{
+    STREAM_PAGE_LOCAL_ID_SPAN, stream_fragment_blob_key, stream_fragment_meta_prefix,
+    stream_page_blob_key, stream_page_meta_key, stream_page_start_local,
+};
+use crate::error::{Error, Result};
+use crate::logs::index_spec::is_full_shard_range;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::streams::chunk::decode_chunk;
+
+use super::clause::PreparedShardClause;
+
+pub(in crate::logs) const STREAM_LOAD_CONCURRENCY: usize = 32;
+
+pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    cache: &impl BytesCache,
+    prepared_clause: &PreparedShardClause,
+    local_from: u32,
+    local_to: u32,
+) -> Result<RoaringBitmap> {
+    let mut out = RoaringBitmap::new();
+    let mut in_flight = FuturesUnordered::new();
+
+    for stream_id in &prepared_clause.stream_ids {
+        in_flight.push(async move {
+            load_stream_entries(
+                meta_store, blob_store, cache, stream_id, local_from, local_to,
+            )
+            .await
+        });
+        if in_flight.len() >= STREAM_LOAD_CONCURRENCY
+            && let Some(result) = in_flight.next().await
+        {
+            out |= &result?;
+        }
+    }
+
+    while let Some(result) = in_flight.next().await {
+        out |= &result?;
+    }
+
+    Ok(out)
+}
+
+pub(in crate::logs) async fn fetch_union_log_level_with_cache<
+    M: MetaStore,
+    B: BlobStore,
+    C: BytesCache,
+>(
+    meta_store: &M,
+    blob_store: &B,
+    cache: &C,
+    kind: &str,
+    values: &[Vec<u8>],
+    from_log_id: crate::core::ids::LogId,
+    to_log_id_inclusive: crate::core::ids::LogId,
+) -> Result<crate::core::execution::ShardBitmapSet> {
+    use std::collections::BTreeMap;
+
+    use crate::core::ids::LogShard;
+    use crate::domain::keys::{local_range_for_shard, log_shard, stream_id};
+
+    let mut out = BTreeMap::new();
+    let from_shard = log_shard(from_log_id);
+    let to_shard = log_shard(to_log_id_inclusive);
+    let mut in_flight = FuturesUnordered::new();
+
+    for value in values {
+        for shard_raw in from_shard.get()..=to_shard.get() {
+            let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
+            let stream = stream_id(kind, value, shard);
+            let (local_from, local_to) =
+                local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
+            in_flight.push(async move {
+                let entries = load_stream_entries(
+                    meta_store,
+                    blob_store,
+                    cache,
+                    &stream,
+                    local_from.get(),
+                    local_to.get(),
+                )
+                .await?;
+                Ok::<(LogShard, RoaringBitmap), Error>((shard, entries))
+            });
+            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
+                && let Some(result) = in_flight.next().await
+            {
+                merge_union_entries(&mut out, result?);
+            }
+        }
+    }
+
+    while let Some(result) = in_flight.next().await {
+        merge_union_entries(&mut out, result?);
+    }
+
+    Ok(out)
+}
+
+fn merge_union_entries(
+    out: &mut crate::core::execution::ShardBitmapSet,
+    (shard, entries): (crate::core::ids::LogShard, RoaringBitmap),
+) {
+    if entries.is_empty() {
+        return;
+    }
+    out.entry(shard)
+        .and_modify(|existing| *existing |= &entries)
+        .or_insert(entries);
+}
+
+pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    cache: &impl BytesCache,
+    stream: &str,
+    local_from: u32,
+    local_to: u32,
+) -> Result<RoaringBitmap> {
+    let mut out = RoaringBitmap::new();
+    let mut page_start = stream_page_start_local(local_from);
+    let last_page_start = stream_page_start_local(local_to);
+
+    loop {
+        if let Some(meta) = load_stream_page_meta(meta_store, cache, stream, page_start).await? {
+            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                let loaded_page_blob = maybe_merge_cached_bitmap_blob(
+                    blob_store,
+                    cache,
+                    &stream_page_blob_key(stream, page_start),
+                    &mut out,
+                    local_from,
+                    local_to,
+                )
+                .await?;
+                if !loaded_page_blob {
+                    load_stream_fragment_entries_for_page(
+                        meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            load_stream_fragment_entries_for_page(
+                meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
+            )
+            .await?;
+        }
+
+        if page_start == last_page_start {
+            break;
+        }
+        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
+    }
+
+    Ok(out)
+}
+
+async fn load_stream_fragment_entries_for_page<M: MetaStore, B: BlobStore>(
+    meta_store: &M,
+    blob_store: &B,
+    stream: &str,
+    page_start: u32,
+    local_from: u32,
+    local_to: u32,
+    out: &mut RoaringBitmap,
+) -> Result<()> {
+    let page = meta_store
+        .list_prefix(
+            &stream_fragment_meta_prefix(stream, page_start),
+            None,
+            usize::MAX,
+        )
+        .await?;
+    for key in page.keys {
+        let Some(record) = meta_store.get(&key).await? else {
+            continue;
+        };
+        let meta = decode_stream_bitmap_meta(&record.value)?;
+        if !overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+            continue;
+        }
+        let block_num = read_u64_suffix(&key)?;
+        let _ = maybe_merge_bitmap_blob(
+            blob_store,
+            &stream_fragment_blob_key(stream, page_start, block_num),
+            out,
+            local_from,
+            local_to,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn maybe_merge_bitmap_blob<B: BlobStore>(
+    blob_store: &B,
+    key: &[u8],
+    out: &mut RoaringBitmap,
+    local_from: u32,
+    local_to: u32,
+) -> Result<bool> {
+    let Some(bytes) = blob_store.get_blob(key).await? else {
+        return Ok(false);
+    };
+    let chunk = decode_chunk(&bytes)?;
+    if is_full_shard_range(local_from, local_to)
+        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+    {
+        *out |= &chunk.bitmap;
+        return Ok(true);
+    }
+
+    for value in chunk.bitmap {
+        if value >= local_from && value <= local_to {
+            out.insert(value);
+        }
+    }
+    Ok(true)
+}
+
+pub(in crate::logs) async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
+    meta_store: &M,
+    cache: &C,
+    stream: &str,
+    page_start: u32,
+) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
+    let key = stream_page_meta_key(stream, page_start);
+    if let Some(bytes) = cache.get(TableId::StreamPageMeta, &key) {
+        return Ok(Some(decode_stream_bitmap_meta(&bytes)?));
+    }
+
+    let Some(record) = meta_store.get(&key).await? else {
+        return Ok(None);
+    };
+    cache.put(
+        TableId::StreamPageMeta,
+        &key,
+        record.value.clone(),
+        record.value.len(),
+    );
+    Ok(Some(decode_stream_bitmap_meta(&record.value)?))
+}
+
+async fn load_stream_page_blob<B: BlobStore, C: BytesCache>(
+    blob_store: &B,
+    cache: &C,
+    key: &[u8],
+) -> Result<Option<Bytes>> {
+    if let Some(bytes) = cache.get(TableId::StreamPageBlobs, key) {
+        return Ok(Some(bytes));
+    }
+
+    let Some(bytes) = blob_store.get_blob(key).await? else {
+        return Ok(None);
+    };
+    cache.put(TableId::StreamPageBlobs, key, bytes.clone(), bytes.len());
+    Ok(Some(bytes))
+}
+
+async fn maybe_merge_cached_bitmap_blob<B: BlobStore, C: BytesCache>(
+    blob_store: &B,
+    cache: &C,
+    key: &[u8],
+    out: &mut RoaringBitmap,
+    local_from: u32,
+    local_to: u32,
+) -> Result<bool> {
+    let Some(bytes) = load_stream_page_blob(blob_store, cache, key).await? else {
+        return Ok(false);
+    };
+    let chunk = decode_chunk(&bytes)?;
+    if is_full_shard_range(local_from, local_to)
+        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+    {
+        *out |= &chunk.bitmap;
+        return Ok(true);
+    }
+
+    for value in chunk.bitmap {
+        if value >= local_from && value <= local_to {
+            out.insert(value);
+        }
+    }
+    Ok(true)
+}
+
+pub(in crate::logs) fn overlaps(
+    min_local: u32,
+    max_local: u32,
+    local_from: u32,
+    local_to: u32,
+) -> bool {
+    min_local <= local_to && max_local >= local_from
+}
+
+fn read_u64_suffix(key: &[u8]) -> Result<u64> {
+    if key.len() < 8 {
+        return Err(Error::Decode("short key suffix"));
+    }
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&key[key.len() - 8..]);
+    Ok(u64::from_be_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_stream_entries;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use bytes::Bytes;
+
+    use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
+    use crate::codec::log::encode_stream_bitmap_meta;
+    use crate::domain::keys::{
+        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
+        stream_page_meta_key,
+    };
+    use crate::domain::types::StreamBitmapMeta;
+    use crate::store::blob::InMemoryBlobStore;
+    use crate::store::meta::InMemoryMetaStore;
+    use crate::store::traits::{
+        BlobStore, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    };
+    use crate::streams::chunk::{ChunkBlob, encode_chunk};
+    use futures::executor::block_on;
+    use roaring::RoaringBitmap;
+
+    struct CountingMetaStore {
+        inner: InMemoryMetaStore,
+        target_key: Vec<u8>,
+        get_count: Arc<AtomicU64>,
+    }
+
+    impl MetaStore for CountingMetaStore {
+        async fn get(&self, key: &[u8]) -> crate::Result<Option<Record>> {
+            if key == self.target_key.as_slice() {
+                self.get_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get(key).await
+        }
+
+        async fn put(
+            &self,
+            key: &[u8],
+            value: Bytes,
+            cond: PutCond,
+            fence: FenceToken,
+        ) -> crate::Result<PutResult> {
+            self.inner.put(key, value, cond, fence).await
+        }
+
+        async fn delete(
+            &self,
+            key: &[u8],
+            cond: crate::store::traits::DelCond,
+            fence: FenceToken,
+        ) -> crate::Result<()> {
+            self.inner.delete(key, cond, fence).await
+        }
+
+        async fn list_prefix(
+            &self,
+            prefix: &[u8],
+            cursor: Option<Vec<u8>>,
+            limit: usize,
+        ) -> crate::Result<Page> {
+            self.inner.list_prefix(prefix, cursor, limit).await
+        }
+    }
+
+    struct CountingBlobStore {
+        inner: InMemoryBlobStore,
+        target_key: Vec<u8>,
+        get_blob_count: Arc<AtomicU64>,
+    }
+
+    impl BlobStore for CountingBlobStore {
+        async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
+            self.inner.put_blob(key, value).await
+        }
+
+        async fn put_blob_if_absent(
+            &self,
+            key: &[u8],
+            value: Bytes,
+        ) -> crate::Result<crate::store::traits::CreateOutcome> {
+            self.inner.put_blob_if_absent(key, value).await
+        }
+
+        async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
+            if key == self.target_key.as_slice() {
+                self.get_blob_count.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.get_blob(key).await
+        }
+
+        async fn delete_blob(&self, key: &[u8]) -> crate::Result<()> {
+            self.inner.delete_blob(key).await
+        }
+
+        async fn list_prefix(
+            &self,
+            prefix: &[u8],
+            cursor: Option<Vec<u8>>,
+            limit: usize,
+        ) -> crate::Result<Page> {
+            self.inner.list_prefix(prefix, cursor, limit).await
+        }
+    }
+
+    #[test]
+    fn load_stream_entries_falls_back_to_fragments_when_page_blob_is_missing() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let block_num = 7u64;
+
+            let mut fragment_bitmap = RoaringBitmap::new();
+            fragment_bitmap.insert(11);
+            let fragment_chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap: fragment_bitmap,
+            };
+
+            meta.put(
+                &stream_fragment_meta_key(stream, page_start, block_num),
+                encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    block_num,
+                    count: 1,
+                    min_local: 11,
+                    max_local: 11,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write stream fragment meta");
+            blob.put_blob(
+                &stream_fragment_blob_key(stream, page_start, block_num),
+                encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
+            )
+            .await
+            .expect("write stream fragment blob");
+
+            meta.put(
+                &stream_page_meta_key(stream, page_start),
+                encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    block_num: 0,
+                    count: 1,
+                    min_local: 11,
+                    max_local: 11,
+                }),
+                PutCond::Any,
+                FenceToken(1),
+            )
+            .await
+            .expect("write stream page meta");
+
+            let entries = load_stream_entries(&meta, &blob, &NoopBytesCache, stream, 0, 20)
+                .await
+                .expect("load stream entries");
+
+            assert!(entries.contains(11));
+            assert_eq!(entries.len(), 1);
+        });
+    }
+
+    #[test]
+    fn load_stream_entries_reuses_cached_stream_page_meta_and_blob() {
+        block_on(async {
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let meta_key = stream_page_meta_key(stream, page_start);
+            let blob_key = stream_page_blob_key(stream, page_start);
+
+            let inner_meta = InMemoryMetaStore::default();
+            let inner_blob = InMemoryBlobStore::default();
+            let meta_gets = Arc::new(AtomicU64::new(0));
+            let blob_gets = Arc::new(AtomicU64::new(0));
+
+            let mut bitmap = RoaringBitmap::new();
+            bitmap.insert(11);
+            let chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap,
+            };
+
+            inner_meta
+                .put(
+                    &meta_key,
+                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                        block_num: 7,
+                        count: 1,
+                        min_local: 11,
+                        max_local: 11,
+                    }),
+                    PutCond::Any,
+                    FenceToken(1),
+                )
+                .await
+                .expect("write stream page meta");
+            inner_blob
+                .put_blob(
+                    &blob_key,
+                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                )
+                .await
+                .expect("write stream page blob");
+
+            let meta = CountingMetaStore {
+                inner: inner_meta,
+                target_key: meta_key.clone(),
+                get_count: meta_gets.clone(),
+            };
+            let blob = CountingBlobStore {
+                inner: inner_blob,
+                target_key: blob_key.clone(),
+                get_blob_count: blob_gets.clone(),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                stream_page_meta: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                stream_page_blobs: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+
+            let first = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("first load");
+            let second = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("second load");
+
+            assert_eq!(first, second);
+            assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
+            assert_eq!(blob_gets.load(Ordering::Relaxed), 1);
+        });
+    }
+
+    #[test]
+    fn load_stream_entries_can_cache_meta_without_caching_blobs() {
+        block_on(async {
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+            let meta_key = stream_page_meta_key(stream, page_start);
+            let blob_key = stream_page_blob_key(stream, page_start);
+
+            let inner_meta = InMemoryMetaStore::default();
+            let inner_blob = InMemoryBlobStore::default();
+            let meta_gets = Arc::new(AtomicU64::new(0));
+            let blob_gets = Arc::new(AtomicU64::new(0));
+
+            let mut bitmap = RoaringBitmap::new();
+            bitmap.insert(11);
+            let chunk = ChunkBlob {
+                min_local: 11,
+                max_local: 11,
+                count: 1,
+                crc32: 0,
+                bitmap,
+            };
+
+            inner_meta
+                .put(
+                    &meta_key,
+                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                        block_num: 7,
+                        count: 1,
+                        min_local: 11,
+                        max_local: 11,
+                    }),
+                    PutCond::Any,
+                    FenceToken(1),
+                )
+                .await
+                .expect("write stream page meta");
+            inner_blob
+                .put_blob(
+                    &blob_key,
+                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                )
+                .await
+                .expect("write stream page blob");
+
+            let meta = CountingMetaStore {
+                inner: inner_meta,
+                target_key: meta_key.clone(),
+                get_count: meta_gets.clone(),
+            };
+            let blob = CountingBlobStore {
+                inner: inner_blob,
+                target_key: blob_key.clone(),
+                get_blob_count: blob_gets.clone(),
+            };
+            let cache = HashMapBytesCache::new(BytesCacheConfig {
+                stream_page_meta: TableCacheConfig {
+                    max_bytes: 4 * 1024,
+                },
+                ..BytesCacheConfig::disabled()
+            });
+
+            let first = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("first load");
+            let second = load_stream_entries(&meta, &blob, &cache, stream, 0, 20)
+                .await
+                .expect("second load");
+
+            assert_eq!(first, second);
+            assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
+            assert_eq!(blob_gets.load(Ordering::Relaxed), 2);
+        });
+    }
+}
