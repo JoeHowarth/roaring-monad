@@ -19,16 +19,7 @@ Oversized files:
 
 ## Work Packages
 
-### 1. Normalize active docs
-
-Remove or supersede docs that conflict with the current
-`publication_state` and `WriteAuthority` model. Ensure the topic docs
-agree on publication/visibility, lease/fencing, ingest ordering, query
-execution, and backend expectations.
-
-End state: one coherent doc set, no contradictory narratives.
-
-### 2. Split large implementation surfaces
+### 1. Split large implementation surfaces
 
 Decompose by subsystem responsibility, not arbitrary file size:
 
@@ -45,7 +36,7 @@ Decompose by subsystem responsibility, not arbitrary file size:
 
 The exact tree can change but must map to the architecture docs.
 
-### 3. Split large test surfaces
+### 2. Split large test surfaces
 
 Replace broad integration files with themed suites:
 
@@ -59,7 +50,7 @@ Replace broad integration files with themed suites:
 
 Extract shared test helpers where repetition obscures intent.
 
-### 4. Define initial upstream surface
+### 3. Define initial upstream surface
 
 Decide what lands in the first review stack vs follow-up. Already
 decided: full crate surface lands over time including distributed
@@ -71,7 +62,6 @@ Deliverable: explicit first-wave scope and follow-up list.
 
 ## Exit Criteria
 
-- active docs tell one consistent story
 - large files split into clearly owned subsystem modules
 - themed test suites replace monolithic integration files
 - upstream scope and follow-up scope both explicit

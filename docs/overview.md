@@ -216,7 +216,7 @@ The crate intentionally does not implement:
 1. `src/lib.rs` — crate boundary, re-exports
 2. `src/api/query_logs.rs` — transport-free query surface
 3. `src/api/write.rs` — write-side public boundary
-4. `src/api/service.rs` — service behavior: query, ingest, health, maintenance, GC
+4. `src/api/service.rs` — service behavior: query, ingest, health
 
 ### Pass 2: Shared substrate
 
@@ -260,6 +260,6 @@ The crate intentionally does not implement:
 
 31. `tests/finalized_index.rs` — main contract tests
 32. `tests/crash_injection_matrix.rs` — crash-retry behavior
-33. `tests/differential_and_gc.rs` — differential correctness, recovery, maintenance
+33. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

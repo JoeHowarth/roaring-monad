@@ -175,7 +175,7 @@ If a node does not have a current observed upstream finalized block number, it f
 - acquire ownership
 - renew ownership
 - publish a new head
-- continue owner-only maintenance or GC work
+- continue owner-only work
 
 Using the last observed block number after observation has been lost is not allowed.
 
