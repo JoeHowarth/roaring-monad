@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
 
-use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::store::publication::{CasOutcome, PublicationStore};
@@ -81,7 +80,7 @@ impl PublicationStore for FsMetaStore {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::Backend(format!("create fs publication dir: {e}")))?;
         }
-        match write_file_bytes_create_new(&path, &encode_publication_state(initial)) {
+        match write_file_bytes_create_new(&path, &initial.encode()) {
             Ok(()) => {
                 write_file_bytes_atomic(&version_path, &1u64.to_be_bytes())?;
                 Ok(CasOutcome::Applied(initial.clone()))
@@ -106,14 +105,14 @@ impl PublicationStore for FsMetaStore {
         if !path.exists() {
             return Ok(CasOutcome::Failed { current: None });
         }
-        let current = decode_publication_state(&read_file_bytes(&path)?)?;
+        let current = PublicationState::decode(&read_file_bytes(&path)?)?;
         if current != *expected {
             return Ok(CasOutcome::Failed {
                 current: Some(current),
             });
         }
 
-        write_file_bytes_atomic(&path, &encode_publication_state(next))?;
+        write_file_bytes_atomic(&path, &next.encode())?;
         let version_path = self.publication_state_version_path();
         let next_version = if version_path.exists() {
             let mut bytes = [0u8; 8];
@@ -131,7 +130,7 @@ fn load_publication_state_from_path(path: &Path) -> Result<Option<PublicationSta
     if !path.exists() {
         return Ok(None);
     }
-    Ok(Some(decode_publication_state(&read_file_bytes(path)?)?))
+    Ok(Some(PublicationState::decode(&read_file_bytes(path)?)?))
 }
 
 impl MetaStore for FsMetaStore {

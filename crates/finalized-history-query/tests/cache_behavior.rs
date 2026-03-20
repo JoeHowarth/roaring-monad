@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::cache::{BytesCacheConfig, TableCacheConfig};
-use finalized_history_query::codec::log::encode_log;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::block_log_blob_key;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -158,7 +157,7 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
             mk_log(7, 10, 21, 1, 0, 1),
             mk_log(7, 10, 22, 1, 0, 2),
         ];
-        let needed_log_bytes = (encode_log(&logs[0]).len() + encode_log(&logs[1]).len()) as u64;
+        let needed_log_bytes = (logs[0].encode().len() + logs[1].encode().len()) as u64;
 
         svc.ingest_finalized_block(mk_block(1, [0; 32], logs))
             .await

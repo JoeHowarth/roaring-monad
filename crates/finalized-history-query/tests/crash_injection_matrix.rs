@@ -7,7 +7,6 @@ use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::codec::finalized_state::encode_block_record;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
     LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_KEY, bitmap_page_meta_key, block_record_key,
@@ -387,12 +386,13 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         ));
         meta.put(
             &block_record_key(1),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: seed_first_log_id,
                 count: 0,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await

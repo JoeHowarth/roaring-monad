@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use crate::codec::log::{decode_dir_by_block, encode_log_dir_bucket};
 use crate::core::ids::LogId;
 use crate::domain::keys::{
     LOG_DIRECTORY_SUB_BUCKET_SIZE, log_dir_bucket_key, log_dir_bucket_start,
     log_dir_by_block_prefix, log_dir_sub_bucket_key, log_dir_sub_bucket_start,
 };
-use crate::domain::types::DirBucket;
+use crate::domain::types::{DirBucket, DirByBlock};
 use crate::error::{Error, Result};
 use crate::store::traits::MetaStore;
 
@@ -111,7 +110,7 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
         let Some(record) = meta_store.get(&key).await? else {
             continue;
         };
-        fragments.push(decode_dir_by_block(&record.value)?);
+        fragments.push(DirByBlock::decode(&record.value)?);
     }
     if fragments.is_empty() {
         return Ok(());
@@ -135,7 +134,7 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
     put_artifact_meta(
         meta_store,
         &log_dir_sub_bucket_key(sub_bucket_start),
-        encode_log_dir_bucket(&bucket),
+        bucket.encode(),
         epoch,
     )
     .await?;
@@ -160,7 +159,7 @@ async fn compact_directory_bucket<M: MetaStore>(
             sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
             continue;
         };
-        let sub_bucket = crate::codec::log::decode_log_dir_bucket(&record.value)?;
+        let sub_bucket = DirBucket::decode(&record.value)?;
         for (index, first_log_id) in sub_bucket
             .first_log_ids
             .iter()
@@ -207,10 +206,11 @@ async fn compact_directory_bucket<M: MetaStore>(
     put_artifact_meta(
         meta_store,
         &log_dir_bucket_key(bucket_start),
-        encode_log_dir_bucket(&DirBucket {
+        DirBucket {
             start_block,
             first_log_ids,
-        }),
+        }
+        .encode(),
         epoch,
     )
     .await?;

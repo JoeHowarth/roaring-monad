@@ -1,10 +1,10 @@
-use crate::codec::log::decode_stream_bitmap_meta;
 use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
     MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, bitmap_page_meta_key,
     local_range_for_shard, log_shard, stream_id, stream_page_start_local,
 };
+use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::store::traits::MetaStore;
@@ -164,7 +164,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
             .get(&bitmap_page_meta_key(stream_id, page_start))
             .await?
         {
-            let meta = decode_stream_bitmap_meta(&record.value)?;
+            let meta = StreamBitmapMeta::decode(&record.value)?;
             if is_full_page_range(page_start, local_from.get(), local_to.get())
                 || ranges_overlap(
                     meta.min_local,

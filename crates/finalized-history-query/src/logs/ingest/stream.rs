@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roaring::RoaringBitmap;
 
-use crate::codec::log::encode_stream_bitmap_meta;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
     bitmap_by_block_key, bitmap_by_block_prefix, bitmap_page_blob_key, bitmap_page_meta_key,
@@ -163,7 +162,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     put_artifact_meta(
         meta_store,
         &bitmap_page_meta_key(stream_id, page_start),
-        encode_stream_bitmap_meta(&meta),
+        meta.encode(),
         epoch,
     )
     .await?;

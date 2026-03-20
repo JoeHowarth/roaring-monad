@@ -1,7 +1,6 @@
 use bytes::Bytes;
 
-use crate::codec::finalized_state::{encode_block_record, encode_u64};
-use crate::codec::log::{encode_block_log_header, encode_dir_by_block, encode_log};
+use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
@@ -50,7 +49,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     put_artifact_meta(
         meta_store,
         &block_log_header_key(block_num),
-        encode_block_log_header(&header),
+        header.encode(),
         epoch,
     )
     .await?;
@@ -73,7 +72,7 @@ pub async fn persist_log_block_record<M: MetaStore>(
     put_artifact_meta(
         meta_store,
         &block_record_key(block.block_num),
-        encode_block_record(&block_record),
+        block_record.encode(),
         epoch,
     )
     .await?;
@@ -108,7 +107,7 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     } else {
         log_dir_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
     };
-    let encoded_fragment = encode_dir_by_block(&fragment);
+    let encoded_fragment = fragment.encode();
 
     loop {
         put_artifact_meta(
@@ -134,7 +133,7 @@ fn encode_block_log_blob(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
         offsets.push(
             u32::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
         );
-        out.extend_from_slice(&encode_log(log));
+        out.extend_from_slice(&log.encode());
     }
     offsets.push(u32::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?);
     Ok((Bytes::from(out), BlockLogHeader { offsets }))

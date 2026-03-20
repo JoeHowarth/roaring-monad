@@ -1,5 +1,4 @@
 use crate::cache::{BytesCache, TableId};
-use crate::codec::log::decode_dir_by_block;
 use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
@@ -93,7 +92,7 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
                 let Some(record) = self.meta_store.get(&key).await? else {
                     continue;
                 };
-                fragments.push(decode_dir_by_block(&record.value)?);
+                fragments.push(DirByBlock::decode(&record.value)?);
             }
             fragments.sort_by_key(|fragment| fragment.block_num);
             entry.insert(fragments);

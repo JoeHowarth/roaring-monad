@@ -1,4 +1,3 @@
-use crate::codec::finalized_state::decode_block_record;
 use crate::domain::keys::block_record_key;
 use crate::domain::types::BlockRecord;
 use crate::error::Result;
@@ -12,7 +11,7 @@ pub async fn load_log_block_record<M: MetaStore>(
     let Some(record) = meta_store.get(&block_record_key(block_num)).await? else {
         return Ok(None);
     };
-    Ok(Some(decode_block_record(&record.value)?))
+    Ok(Some(BlockRecord::decode(&record.value)?))
 }
 
 pub async fn load_log_block_window<M: MetaStore>(
@@ -28,7 +27,6 @@ pub async fn load_log_block_window<M: MetaStore>(
 #[cfg(test)]
 mod tests {
     use super::{load_log_block_record, load_log_block_window};
-    use crate::codec::finalized_state::encode_block_record;
     use crate::core::ids::LogId;
     use crate::domain::keys::block_record_key;
     use crate::domain::types::BlockRecord;
@@ -42,12 +40,13 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             meta.put(
                 &block_record_key(14),
-                encode_block_record(&BlockRecord {
+                BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [2; 32],
                     first_log_id: 42,
                     count: 3,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await

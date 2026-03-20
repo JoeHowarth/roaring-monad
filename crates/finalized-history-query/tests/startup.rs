@@ -6,9 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::finalized_state::{
-    decode_publication_state, encode_block_record,
-};
 use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
@@ -135,12 +132,13 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         ));
         meta.put(
             &block_record_key(3),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
                 first_log_id: 9,
                 count: 1,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await
@@ -182,8 +180,10 @@ fn startup_plan_should_not_take_publication_ownership() {
             .await
             .expect("read publication state")
             .expect("publication state present");
-        let publication_state =
-            decode_publication_state(&publication_state.value).expect("decode publication state");
+        let publication_state = finalized_history_query::domain::types::PublicationState::decode(
+            &publication_state.value,
+        )
+        .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 7);
         assert_eq!(publication_state.epoch, 3);
     });
@@ -196,12 +196,13 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         inner
             .put(
                 &block_record_key(1),
-                encode_block_record(&BlockRecord {
+                BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [0; 32],
                     first_log_id: 0,
                     count: 0,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await

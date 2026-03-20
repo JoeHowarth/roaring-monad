@@ -3,11 +3,11 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use crate::cache::{BytesCache, TableId};
-use crate::codec::log::decode_stream_bitmap_meta;
 use crate::domain::keys::{
     STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, bitmap_page_blob_key, bitmap_page_meta_key,
     stream_page_start_local,
 };
+use crate::domain::types::StreamBitmapMeta;
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -217,7 +217,7 @@ pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, C: BytesCache>(
 ) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
     let key = bitmap_page_meta_key(stream, page_start);
     if let Some(bytes) = cache.get(TableId::BitmapPageMeta, &key) {
-        return Ok(Some(decode_stream_bitmap_meta(&bytes)?));
+        return Ok(Some(StreamBitmapMeta::decode(&bytes)?));
     }
 
     let Some(record) = meta_store.get(&key).await? else {
@@ -229,7 +229,7 @@ pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, C: BytesCache>(
         record.value.clone(),
         record.value.len(),
     );
-    Ok(Some(decode_stream_bitmap_meta(&record.value)?))
+    Ok(Some(StreamBitmapMeta::decode(&record.value)?))
 }
 
 async fn load_bitmap_page_blob<B: BlobStore, C: BytesCache>(
@@ -302,7 +302,6 @@ mod tests {
     use bytes::Bytes;
 
     use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
-    use crate::codec::log::encode_stream_bitmap_meta;
     use crate::domain::keys::{bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key};
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
@@ -409,12 +408,13 @@ mod tests {
 
             meta.put(
                 &bitmap_page_meta_key(stream, page_start),
-                encode_stream_bitmap_meta(&StreamBitmapMeta {
+                StreamBitmapMeta {
                     block_num: 0,
                     count: 1,
                     min_local: 11,
                     max_local: 11,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
@@ -455,12 +455,13 @@ mod tests {
             inner_meta
                 .put(
                     &meta_key,
-                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    StreamBitmapMeta {
                         block_num: 7,
                         count: 1,
                         min_local: 11,
                         max_local: 11,
-                    }),
+                    }
+                    .encode(),
                     PutCond::Any,
                 )
                 .await
@@ -532,12 +533,13 @@ mod tests {
             inner_meta
                 .put(
                     &meta_key,
-                    encode_stream_bitmap_meta(&StreamBitmapMeta {
+                    StreamBitmapMeta {
                         block_num: 7,
                         count: 1,
                         min_local: 11,
                         max_local: 11,
-                    }),
+                    }
+                    .encode(),
                     PutCond::Any,
                 )
                 .await

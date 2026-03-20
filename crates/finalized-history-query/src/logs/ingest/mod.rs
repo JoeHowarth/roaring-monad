@@ -16,10 +16,7 @@ pub use stream::{
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::log::{
-        decode_block_log_header, decode_dir_by_block, decode_log, decode_log_dir_bucket,
-        decode_stream_bitmap_meta, encode_log,
-    };
+    use crate::codec::log::validate_log;
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
@@ -40,7 +37,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::collect_stream_appends;
-    use crate::domain::types::Log;
+    use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {
         Log {
@@ -85,21 +82,18 @@ mod tests {
                 .await
                 .expect("read block header")
                 .expect("block header present");
-            let header = decode_block_log_header(&header.value).expect("decode header");
+            let header = BlockLogHeader::decode(&header.value).expect("decode header");
 
             assert_eq!(
                 header.offsets,
-                vec![
-                    0,
-                    encode_log(&logs[0]).len() as u32,
-                    block_blob.len() as u32
-                ]
+                vec![0, logs[0].encode().len() as u32, block_blob.len() as u32]
             );
             assert_eq!(
-                decode_log(&block_blob[header.offsets[0] as usize..header.offsets[1] as usize])
+                Log::decode(&block_blob[header.offsets[0] as usize..header.offsets[1] as usize])
                     .expect("decode first"),
                 logs[0]
             );
+            assert!(validate_log(&logs[0]));
         });
     }
 
@@ -137,19 +131,19 @@ mod tests {
                 .expect("sub bucket");
 
             assert_eq!(
-                decode_dir_by_block(&fragment0.value)
+                DirByBlock::decode(&fragment0.value)
                     .expect("decode fragment0")
                     .block_num,
                 700
             );
             assert_eq!(
-                decode_dir_by_block(&fragment1.value)
+                DirByBlock::decode(&fragment1.value)
                     .expect("decode fragment1")
                     .end_log_id_exclusive,
                 first_log_id + count as u64
             );
             assert_eq!(
-                decode_log_dir_bucket(&sub_bucket.value)
+                DirBucket::decode(&sub_bucket.value)
                     .expect("decode sub bucket")
                     .first_log_ids,
                 vec![first_log_id, first_log_id + count as u64]
@@ -219,7 +213,7 @@ mod tests {
                     > 0
             );
             assert!(
-                decode_stream_bitmap_meta(&page_meta.value)
+                StreamBitmapMeta::decode(&page_meta.value)
                     .expect("decode stream page meta")
                     .count
                     > 0
@@ -277,7 +271,7 @@ mod tests {
                 .await
                 .expect("directory bucket")
                 .expect("directory bucket present");
-            let bucket = decode_log_dir_bucket(&bucket.value).expect("decode directory bucket");
+            let bucket = DirBucket::decode(&bucket.value).expect("decode directory bucket");
             assert_eq!(bucket.start_block, 700);
             assert_eq!(
                 bucket.first_log_ids,

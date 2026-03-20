@@ -51,9 +51,6 @@ mod tests {
     use bytes::Bytes;
 
     use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
-    use crate::codec::log::{
-        encode_block_log_header, encode_dir_by_block, encode_log, encode_log_dir_bucket,
-    };
     use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
@@ -120,10 +117,11 @@ mod tests {
 
             meta.put(
                 &log_dir_bucket_key(0),
-                encode_log_dir_bucket(&DirBucket {
+                DirBucket {
                     start_block: 700,
                     first_log_ids: vec![11, 13],
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
@@ -154,11 +152,12 @@ mod tests {
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.put(
                 &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), 700),
-                encode_dir_by_block(&DirByBlock {
+                DirByBlock {
                     block_num: 700,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
@@ -191,13 +190,14 @@ mod tests {
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
                 &log_dir_bucket_key(log_dir_bucket_start(log_id)),
-                encode_log_dir_bucket(&DirBucket {
+                DirBucket {
                     start_block: 700,
                     first_log_ids: vec![
                         first_log_id,
                         first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 10,
                     ],
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
@@ -245,24 +245,26 @@ mod tests {
                 log_idx: 2,
                 block_hash: [9u8; 32],
             };
-            let encoded = encode_log(&log);
+            let encoded = log.encode();
 
             meta.put(
                 &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), block_num),
-                encode_dir_by_block(&DirByBlock {
+                DirByBlock {
                     block_num,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
             .expect("write directory fragment");
             meta.put(
                 &block_log_header_key(block_num),
-                encode_block_log_header(&BlockLogHeader {
+                BlockLogHeader {
                     offsets: vec![0, encoded.len() as u32],
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await
@@ -337,7 +339,7 @@ mod tests {
                     block_hash: [9u8; 32],
                 },
             ];
-            let encoded_logs = logs.iter().map(encode_log).collect::<Vec<_>>();
+            let encoded_logs = logs.iter().map(Log::encode).collect::<Vec<_>>();
             let mut blob_bytes = Vec::new();
             let mut offsets = Vec::with_capacity(encoded_logs.len() + 1);
             offsets.push(0);
@@ -348,7 +350,7 @@ mod tests {
 
             meta.put(
                 &block_log_header_key(block_num),
-                encode_block_log_header(&BlockLogHeader { offsets }),
+                BlockLogHeader { offsets }.encode(),
                 PutCond::Any,
             )
             .await

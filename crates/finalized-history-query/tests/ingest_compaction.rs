@@ -2,7 +2,6 @@
 mod helpers;
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::finalized_state::encode_block_record;
 use finalized_history_query::domain::keys::{
     LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_page_blob_key,
     bitmap_page_meta_key, block_record_key, log_dir_by_block_key, stream_id,
@@ -32,12 +31,13 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         ));
         meta.put(
             &block_record_key(1),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: u64::from(MAX_LOCAL_ID),
                 count: 0,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await
@@ -75,12 +75,13 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         ));
         meta.put(
             &block_record_key(1),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id,
                 count: 0,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await
@@ -134,12 +135,13 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         ));
         meta.put(
             &block_record_key(1),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE - 2,
                 count: 0,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await

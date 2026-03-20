@@ -3,7 +3,6 @@ use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 
-use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
@@ -139,7 +138,7 @@ impl PublicationStore for InMemoryMetaStore {
         let Some(record) = guard.get(PUBLICATION_STATE_KEY) else {
             return Ok(None);
         };
-        Ok(Some(decode_publication_state(&record.value)?))
+        Ok(Some(PublicationState::decode(&record.value)?))
     }
 
     async fn create_if_absent(
@@ -152,14 +151,14 @@ impl PublicationStore for InMemoryMetaStore {
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
         if let Some(record) = guard.get(PUBLICATION_STATE_KEY) {
             return Ok(CasOutcome::Failed {
-                current: Some(decode_publication_state(&record.value)?),
+                current: Some(PublicationState::decode(&record.value)?),
             });
         }
 
         guard.insert(
             PUBLICATION_STATE_KEY.to_vec(),
             Record {
-                value: encode_publication_state(initial),
+                value: initial.encode(),
                 version: 1,
             },
         );
@@ -178,7 +177,7 @@ impl PublicationStore for InMemoryMetaStore {
         let Some(record) = guard.get(PUBLICATION_STATE_KEY).cloned() else {
             return Ok(CasOutcome::Failed { current: None });
         };
-        let current = decode_publication_state(&record.value)?;
+        let current = PublicationState::decode(&record.value)?;
         if current != *expected {
             return Ok(CasOutcome::Failed {
                 current: Some(current),
@@ -188,7 +187,7 @@ impl PublicationStore for InMemoryMetaStore {
         guard.insert(
             PUBLICATION_STATE_KEY.to_vec(),
             Record {
-                value: encode_publication_state(next),
+                value: next.encode(),
                 version: record.version.saturating_add(1),
             },
         );

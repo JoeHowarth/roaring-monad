@@ -1,4 +1,3 @@
-use crate::codec::finalized_state::decode_block_record;
 use crate::core::refs::BlockRef;
 use crate::domain::keys::block_record_key;
 use crate::domain::types::{BlockRecord, PublicationState};
@@ -67,7 +66,7 @@ pub async fn load_block_identity<M: MetaStore>(
     let Some(record) = meta_store.get(&block_record_key(block_num)).await? else {
         return Ok(None);
     };
-    let block_record = decode_block_record(&record.value)?;
+    let block_record = BlockRecord::decode(&record.value)?;
     Ok(Some(BlockIdentity::from((block_num, &block_record))))
 }
 
@@ -85,7 +84,7 @@ pub async fn derive_next_log_id<M: MetaStore>(
     else {
         return Err(Error::NotFound);
     };
-    let block_record = decode_block_record(&record.value)?;
+    let block_record = BlockRecord::decode(&record.value)?;
     Ok(block_record
         .first_log_id
         .saturating_add(u64::from(block_record.count)))
@@ -94,7 +93,6 @@ pub async fn derive_next_log_id<M: MetaStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
-    use crate::codec::finalized_state::encode_block_record;
     use crate::domain::keys::block_record_key;
     use crate::domain::types::{BlockRecord, PublicationState};
     use crate::store::meta::InMemoryMetaStore;
@@ -132,12 +130,13 @@ mod tests {
             ));
             meta.put(
                 &block_record_key(7),
-                encode_block_record(&BlockRecord {
+                BlockRecord {
                     block_hash: [3; 32],
                     parent_hash: [4; 32],
                     first_log_id: 90,
                     count: 2,
-                }),
+                }
+                .encode(),
                 PutCond::Any,
             )
             .await

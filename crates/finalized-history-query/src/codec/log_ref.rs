@@ -351,7 +351,6 @@ impl LogView for Log {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::log::encode_log;
 
     fn test_log() -> Log {
         Log {
@@ -368,7 +367,7 @@ mod tests {
     #[test]
     fn log_ref_roundtrip() {
         let log = test_log();
-        let encoded = encode_log(&log);
+        let encoded = log.encode();
         let log_ref = LogRef::new(encoded).expect("construct LogRef");
         assert_eq!(log_ref.to_owned_log(), log);
     }
@@ -376,7 +375,7 @@ mod tests {
     #[test]
     fn log_ref_accessors() {
         let log = test_log();
-        let encoded = encode_log(&log);
+        let encoded = log.encode();
         let log_ref = LogRef::new(encoded).expect("construct LogRef");
 
         assert_eq!(log_ref.address(), &log.address);
@@ -393,7 +392,7 @@ mod tests {
     #[test]
     fn log_view_trait_consistency() {
         let log = test_log();
-        let encoded = encode_log(&log);
+        let encoded = log.encode();
         let log_ref = LogRef::new(encoded).expect("construct LogRef");
 
         fn check_view(view: &impl LogView, expected: &Log) {
@@ -424,20 +423,19 @@ mod tests {
             log_idx: 0,
             block_hash: [0u8; 32],
         };
-        let encoded = encode_log(&log);
+        let encoded = log.encode();
         let log_ref = LogRef::new(encoded).expect("construct LogRef");
         assert_eq!(log_ref.to_owned_log(), log);
     }
 
     #[test]
     fn block_log_header_ref_roundtrip() {
-        use crate::codec::log::encode_block_log_header;
         use crate::domain::types::BlockLogHeader;
 
         let header = BlockLogHeader {
             offsets: vec![0, 41, 97, 124],
         };
-        let encoded = encode_block_log_header(&header);
+        let encoded = header.encode();
         let header_ref = BlockLogHeaderRef::new(encoded).expect("construct BlockLogHeaderRef");
         assert_eq!(header_ref.count(), 4);
         for (i, &expected) in header.offsets.iter().enumerate() {
@@ -447,14 +445,13 @@ mod tests {
 
     #[test]
     fn log_dir_bucket_ref_roundtrip() {
-        use crate::codec::log::encode_log_dir_bucket;
         use crate::domain::types::DirBucket;
 
         let bucket = DirBucket {
             start_block: 5001,
             first_log_ids: vec![120_000_000, 120_000_003, 120_000_003, 120_000_008],
         };
-        let encoded = encode_log_dir_bucket(&bucket);
+        let encoded = bucket.encode();
         let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");
         assert_eq!(bucket_ref.start_block(), bucket.start_block);
         assert_eq!(bucket_ref.count(), bucket.first_log_ids.len());
@@ -465,14 +462,13 @@ mod tests {
 
     #[test]
     fn log_dir_bucket_ref_partition_point() {
-        use crate::codec::log::encode_log_dir_bucket;
         use crate::domain::types::DirBucket;
 
         let bucket = DirBucket {
             start_block: 0,
             first_log_ids: vec![10, 20, 30, 40],
         };
-        let encoded = encode_log_dir_bucket(&bucket);
+        let encoded = bucket.encode();
         let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");
 
         // partition_point with <= 25 should return 2 (ids 10, 20 satisfy <= 25)

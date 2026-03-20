@@ -9,13 +9,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::cache::{BytesCacheConfig, NoopBytesCache, TableCacheConfig};
-use finalized_history_query::codec::finalized_state::{
-    encode_block_record, encode_publication_state,
-};
 use finalized_history_query::codec::log::validate_log;
-use finalized_history_query::codec::log::{
-    encode_block_log_header, encode_log, encode_log_dir_bucket,
-};
 use finalized_history_query::config::Config;
 use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::core::ids::{
@@ -613,7 +607,7 @@ pub fn seed_materialized_blocks(
 
             for log in &block.logs {
                 assert!(validate_log(log), "synthetic log must be valid");
-                let encoded = encode_log(log);
+                let encoded = log.encode();
                 payload.extend_from_slice(encoded.as_ref());
                 offsets.push(u32::try_from(payload.len()).expect("payload length fits in u32"));
             }
@@ -621,12 +615,13 @@ pub fn seed_materialized_blocks(
             put_meta_record(
                 meta_store,
                 &block_record_key(block.block_num),
-                encode_block_record(&BlockRecord {
+                BlockRecord {
                     block_hash,
                     parent_hash,
                     first_log_id: block.first_log_id,
                     count: u32::try_from(block.logs.len()).expect("block log count fits in u32"),
-                }),
+                }
+                .encode(),
             )
             .await;
 
@@ -634,9 +629,7 @@ pub fn seed_materialized_blocks(
                 put_meta_record(
                     meta_store,
                     &block_log_header_key(block.block_num),
-                    encode_block_log_header(
-                        &finalized_history_query::domain::types::BlockLogHeader { offsets },
-                    ),
+                    finalized_history_query::domain::types::BlockLogHeader { offsets }.encode(),
                 )
                 .await;
                 blob_store
@@ -683,10 +676,11 @@ pub fn seed_materialized_blocks(
             put_meta_record(
                 meta_store,
                 &log_dir_bucket_key(bucket_start),
-                encode_log_dir_bucket(&DirBucket {
+                DirBucket {
                     start_block,
                     first_log_ids,
-                }),
+                }
+                .encode(),
             )
             .await;
         }
@@ -702,13 +696,14 @@ pub fn seed_publication_state(
         put_meta_record(
             meta_store,
             PUBLICATION_STATE_KEY,
-            encode_publication_state(&PublicationState {
+            PublicationState {
                 owner_id: DEFAULT_WRITER_EPOCH,
                 session_id: [0u8; 16],
                 epoch: DEFAULT_WRITER_EPOCH,
                 indexed_finalized_head,
                 lease_valid_through_block: u64::MAX,
-            }),
+            }
+            .encode(),
         )
         .await;
     });

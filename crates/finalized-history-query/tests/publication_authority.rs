@@ -5,9 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::finalized_state::{
-    decode_publication_state, encode_block_record,
-};
 use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{
@@ -54,8 +51,10 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             .await
             .expect("publication state get")
             .expect("publication state");
-        let publication_state =
-            decode_publication_state(&publication_state.value).expect("decode publication state");
+        let publication_state = finalized_history_query::domain::types::PublicationState::decode(
+            &publication_state.value,
+        )
+        .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 1);
         assert_eq!(publication_state.epoch, 1);
         assert_eq!(publication_state.indexed_finalized_head, 1);
@@ -159,12 +158,13 @@ fn readers_use_only_publication_state() {
         ));
         meta.put(
             &block_record_key(3),
-            encode_block_record(&BlockRecord {
+            BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
                 first_log_id: 9,
                 count: 1,
-            }),
+            }
+            .encode(),
             PutCond::Any,
         )
         .await
@@ -186,9 +186,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
         let meta = InMemoryMetaStore::default();
         meta.put(
             PUBLICATION_STATE_KEY,
-            finalized_history_query::codec::finalized_state::encode_publication_state(
-                &seeded_publication_state(1, [1u8; 16], 2, 3),
-            ),
+            seeded_publication_state(1, [1u8; 16], 2, 3).encode(),
             PutCond::Any,
         )
         .await
@@ -199,7 +197,9 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
             .await
             .expect("get publication state")
             .expect("publication state");
-        let decoded = decode_publication_state(&record.value).expect("decode");
+        let decoded =
+            finalized_history_query::domain::types::PublicationState::decode(&record.value)
+                .expect("decode");
         assert_eq!(decoded.indexed_finalized_head, 3);
     });
 }

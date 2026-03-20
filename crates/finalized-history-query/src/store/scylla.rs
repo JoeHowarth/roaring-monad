@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
-use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
@@ -559,7 +558,7 @@ impl PublicationStore for ScyllaMetaStore {
         let Some(record) = self.get(PUBLICATION_STATE_KEY).await? else {
             return Ok(None);
         };
-        Ok(Some(decode_publication_state(&record.value)?))
+        Ok(Some(PublicationState::decode(&record.value)?))
     }
 
     async fn create_if_absent(
@@ -567,11 +566,7 @@ impl PublicationStore for ScyllaMetaStore {
         initial: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>> {
         let result = self
-            .put(
-                PUBLICATION_STATE_KEY,
-                encode_publication_state(initial),
-                PutCond::IfAbsent,
-            )
+            .put(PUBLICATION_STATE_KEY, initial.encode(), PutCond::IfAbsent)
             .await?;
         if result.applied {
             return Ok(CasOutcome::Applied(initial.clone()));
@@ -589,7 +584,7 @@ impl PublicationStore for ScyllaMetaStore {
         let Some(current) = self.get(PUBLICATION_STATE_KEY).await? else {
             return Ok(CasOutcome::Failed { current: None });
         };
-        let current_state = decode_publication_state(&current.value)?;
+        let current_state = PublicationState::decode(&current.value)?;
         if current_state != *expected {
             return Ok(CasOutcome::Failed {
                 current: Some(current_state),
@@ -599,7 +594,7 @@ impl PublicationStore for ScyllaMetaStore {
         let result = self
             .put(
                 PUBLICATION_STATE_KEY,
-                encode_publication_state(next),
+                next.encode(),
                 PutCond::IfVersion(current.version),
             )
             .await?;
