@@ -1,4 +1,4 @@
-use crate::cache::{BytesCache, NoopBytesCache};
+use crate::cache::HashMapBytesCache;
 use crate::core::execution::ShardBitmapSet;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
 use crate::domain::keys::{
@@ -9,6 +9,7 @@ use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::decode_bitmap_blob;
+use crate::tables::Tables;
 
 use super::stream_bitmap::{fetch_union_log_level_with_cache, load_bitmap_page_meta, overlaps};
 
@@ -87,9 +88,8 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
     clauses
 }
 
-pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore>(
-    meta_store: &M,
-    cache: &impl BytesCache,
+pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
+    tables: Tables<'_, M, B>,
     clause_specs: &[IndexedClauseSpec],
     shard: LogShard,
     local_from: LogLocalId,
@@ -98,9 +98,7 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore>(
     let mut prepared = Vec::with_capacity(clause_specs.len());
 
     for clause_spec in clause_specs {
-        let clause =
-            prepare_shard_clause(meta_store, cache, clause_spec, shard, local_from, local_to)
-                .await?;
+        let clause = prepare_shard_clause(tables, clause_spec, shard, local_from, local_to).await?;
         prepared.push(clause);
     }
 
@@ -108,9 +106,8 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore>(
     Ok(prepared)
 }
 
-async fn prepare_shard_clause<M: MetaStore>(
-    meta_store: &M,
-    cache: &impl BytesCache,
+async fn prepare_shard_clause<M: MetaStore, B: BlobStore>(
+    tables: Tables<'_, M, B>,
     clause_spec: &IndexedClauseSpec,
     shard: LogShard,
     local_from: LogLocalId,
@@ -122,8 +119,7 @@ async fn prepare_shard_clause<M: MetaStore>(
     for value in &clause_spec.values {
         let stream = stream_id(clause_spec.stream_kind, value, shard);
         estimated_count = estimated_count.saturating_add(
-            estimate_stream_overlap(meta_store, cache, &stream, local_from.get(), local_to.get())
-                .await?,
+            estimate_stream_overlap(tables, &stream, local_from.get(), local_to.get()).await?,
         );
         stream_ids.push(stream);
     }
@@ -135,9 +131,8 @@ async fn prepare_shard_clause<M: MetaStore>(
     })
 }
 
-async fn estimate_stream_overlap<M: MetaStore>(
-    meta_store: &M,
-    cache: &impl BytesCache,
+async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
+    tables: Tables<'_, M, B>,
     stream_id: &str,
     local_from: u32,
     local_to: u32,
@@ -147,12 +142,13 @@ async fn estimate_stream_overlap<M: MetaStore>(
     let last_page_start = stream_page_start_local(local_to);
 
     loop {
-        if let Some(meta) = load_bitmap_page_meta(meta_store, cache, stream_id, page_start).await? {
+        if let Some(meta) = load_bitmap_page_meta(tables, stream_id, page_start).await? {
             if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
                 estimated = estimated.saturating_add(u64::from(meta.count));
             }
         } else {
-            let page = meta_store
+            let page = tables
+                .meta_store()
                 .list_prefix(
                     &bitmap_by_block_prefix(stream_id, page_start),
                     None,
@@ -160,7 +156,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 )
                 .await?;
             for key in page.keys {
-                let Some(record) = meta_store.get(&key).await? else {
+                let Some(record) = tables.meta_store().get(&key).await? else {
                     continue;
                 };
                 let meta = decode_bitmap_blob(&record.value)?;
@@ -190,27 +186,7 @@ pub(in crate::logs) fn clause_kind_rank(kind: ClauseKind) -> u8 {
 }
 
 async fn load_clause_sets<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
-    clause_specs: &[IndexedClauseSpec],
-    from_log_id: LogId,
-    to_log_id_inclusive: LogId,
-) -> Result<Vec<ShardBitmapSet>> {
-    load_clause_sets_with_cache(
-        meta_store,
-        blob_store,
-        &NoopBytesCache,
-        clause_specs,
-        from_log_id,
-        to_log_id_inclusive,
-    )
-    .await
-}
-
-async fn load_clause_sets_with_cache<M: MetaStore, B: BlobStore, C: BytesCache>(
-    meta_store: &M,
-    blob_store: &B,
-    cache: &C,
+    tables: Tables<'_, M, B>,
     clause_specs: &[IndexedClauseSpec],
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
@@ -219,9 +195,7 @@ async fn load_clause_sets_with_cache<M: MetaStore, B: BlobStore, C: BytesCache>(
 
     for clause_spec in clause_specs {
         let set = fetch_union_log_level_with_cache(
-            meta_store,
-            blob_store,
-            cache,
+            tables,
             clause_spec.stream_kind,
             &clause_spec.values,
             from_log_id,
@@ -242,9 +216,9 @@ pub async fn load_clause_sets_for_benchmark<M: MetaStore, B: BlobStore>(
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
 ) -> Result<Vec<ShardBitmapSet>> {
+    let caches = HashMapBytesCache::default();
     load_clause_sets(
-        meta_store,
-        blob_store,
+        Tables::new(meta_store, blob_store, &caches),
         &build_clause_specs(filter),
         from_log_id,
         to_log_id_inclusive,

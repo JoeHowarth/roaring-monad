@@ -14,6 +14,7 @@ use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::HealthReport;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A, M, B>,
@@ -68,6 +69,14 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
         self.cache.metrics_snapshot()
+    }
+
+    pub(crate) fn tables(&self) -> Tables<'_, M, B> {
+        Tables::new(
+            &self.ingest.meta_store,
+            &self.ingest.blob_store,
+            &self.cache,
+        )
     }
 
     fn update_backend_state<T>(&self, result: &Result<T>) {

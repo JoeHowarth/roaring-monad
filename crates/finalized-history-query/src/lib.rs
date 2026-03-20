@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod startup;
 pub mod store;
 pub mod streams;
+pub mod tables;
 
 pub use api::{
     ExecutionBudget, FinalizedHistoryService, FinalizedHistoryWriter, FinalizedLogQueries,

@@ -100,16 +100,7 @@ where
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let result = self
-            .query
-            .query_logs_with_cache(
-                &self.ingest.meta_store,
-                &self.ingest.blob_store,
-                &self.cache,
-                request,
-                budget,
-            )
-            .await;
+        let result = self.query.query_logs(self.tables(), request, budget).await;
         self.update_backend_state(&result);
         result
     }

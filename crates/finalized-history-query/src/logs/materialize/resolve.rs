@@ -1,9 +1,7 @@
-use crate::cache::{BytesCache, TableId};
 use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    log_dir_bucket_key, log_dir_bucket_start, log_dir_by_block_prefix, log_dir_sub_bucket_key,
-    log_dir_sub_bucket_start,
+    log_dir_bucket_start, log_dir_by_block_prefix, log_dir_sub_bucket_start,
 };
 use crate::domain::types::DirByBlock;
 use crate::error::{Error, Result};
@@ -11,15 +9,13 @@ use crate::store::traits::{BlobStore, MetaStore};
 
 use super::{LogMaterializer, ResolvedLogLocation};
 
-impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C> {
+impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     pub(crate) async fn resolve_log_id(
         &mut self,
         id: LogId,
     ) -> Result<Option<ResolvedLogLocation>> {
         let bucket_start = log_dir_bucket_start(id);
-        if let Some(bucket) = self
-            .load_directory_bucket(bucket_start, TableId::DirBuckets)
-            .await?
+        if let Some(bucket) = self.load_directory_bucket(bucket_start).await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
             return resolved_location_from_bucket_ref(&bucket, entry_index, id);
@@ -45,38 +41,18 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
         }))
     }
 
-    async fn load_directory_bucket(
-        &self,
-        bucket_start: u64,
-        table: TableId,
-    ) -> Result<Option<DirBucketRef>> {
-        let key = log_dir_bucket_key(bucket_start);
-        if let Some(bytes) = self.cache.get(table, &key) {
-            return Ok(Some(DirBucketRef::new(bytes)?));
-        }
-        let Some(record) = self.meta_store.get(&key).await? else {
-            return Ok(None);
-        };
-        self.cache
-            .put(table, &key, record.value.clone(), record.value.len());
-        Ok(Some(DirBucketRef::new(record.value)?))
+    async fn load_directory_bucket(&self, bucket_start: u64) -> Result<Option<DirBucketRef>> {
+        self.tables.dir_buckets().get(bucket_start).await
     }
 
     async fn load_directory_sub_bucket(
         &self,
         sub_bucket_start: u64,
     ) -> Result<Option<DirBucketRef>> {
-        let key = log_dir_sub_bucket_key(sub_bucket_start);
-        let table = TableId::LogDirSubBuckets;
-        if let Some(bytes) = self.cache.get(table, &key) {
-            return Ok(Some(DirBucketRef::new(bytes)?));
-        }
-        let Some(record) = self.meta_store.get(&key).await? else {
-            return Ok(None);
-        };
-        self.cache
-            .put(table, &key, record.value.clone(), record.value.len());
-        Ok(Some(DirBucketRef::new(record.value)?))
+        self.tables
+            .log_dir_sub_buckets()
+            .get(sub_bucket_start)
+            .await
     }
 
     async fn load_directory_fragments(&mut self, sub_bucket_start: u64) -> Result<&[DirByBlock]> {
@@ -84,12 +60,13 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
             self.directory_fragment_cache.entry(sub_bucket_start)
         {
             let page = self
-                .meta_store
+                .tables
+                .meta_store()
                 .list_prefix(&log_dir_by_block_prefix(sub_bucket_start), None, usize::MAX)
                 .await?;
             let mut fragments = Vec::with_capacity(page.keys.len());
             for key in page.keys {
-                let Some(record) = self.meta_store.get(&key).await? else {
+                let Some(record) = self.tables.meta_store().get(&key).await? else {
                     continue;
                 };
                 fragments.push(DirByBlock::decode(&record.value)?);

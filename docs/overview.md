@@ -16,7 +16,7 @@ The main path:
 4. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for the block exist
 5. `query_logs` resolves a finalized block window
 6. the logs family maps that block window to a log-ID window
-7. the query reads immutable artifacts through the configured bytes cache when a table budget is enabled
+7. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 8. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
 9. the query returns `QueryPage<Log>` with exact resume metadata
 
@@ -73,7 +73,7 @@ The shared layer owns:
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
-- immutable-bytes cache policy for immutable read artifacts (see [caching.md](caching.md))
+- typed immutable-artifact table reads with per-table bytes cache policy (see [caching.md](caching.md))
 - runtime degraded / throttled state
 - write-authority policy (see [write-authority.md](write-authority.md))
 - publication-state reads

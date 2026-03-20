@@ -1,7 +1,6 @@
 use roaring::RoaringBitmap;
 
 use crate::api::{ExecutionBudget, QueryLogsRequest};
-use crate::cache::{BytesCache, NoopBytesCache};
 use crate::codec::log_ref::LogRef;
 use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
@@ -17,6 +16,7 @@ use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 use super::clause::{build_clause_specs, prepare_shard_clauses};
 use super::stream_bitmap::load_prepared_clause_bitmap;
@@ -26,9 +26,7 @@ trait LogLocationResolver {
     async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>>;
 }
 
-impl<M: MetaStore, B: BlobStore, C: BytesCache> LogLocationResolver
-    for LogMaterializer<'_, M, B, C>
-{
+impl<M: MetaStore, B: BlobStore> LogLocationResolver for LogMaterializer<'_, M, B> {
     async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>> {
         LogMaterializer::resolve_log_id(self, id).await
     }
@@ -52,24 +50,7 @@ impl LogsQueryEngine {
 
     pub async fn query_logs<M: MetaStore + PublicationStore, B: BlobStore>(
         &self,
-        meta_store: &M,
-        blob_store: &B,
-        request: QueryLogsRequest,
-        budget: ExecutionBudget,
-    ) -> Result<QueryPage<Log>> {
-        self.query_logs_with_cache(meta_store, blob_store, &NoopBytesCache, request, budget)
-            .await
-    }
-
-    pub async fn query_logs_with_cache<
-        M: MetaStore + PublicationStore,
-        B: BlobStore,
-        C: BytesCache,
-    >(
-        &self,
-        meta_store: &M,
-        blob_store: &B,
-        cache: &C,
+        tables: Tables<'_, M, B>,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
@@ -95,7 +76,7 @@ impl LogsQueryEngine {
         let block_range = self
             .range_resolver
             .resolve(
-                meta_store,
+                tables.meta_store(),
                 request.from_block,
                 request.to_block,
                 request.order,
@@ -107,7 +88,7 @@ impl LogsQueryEngine {
 
         let Some(mut log_window) = self
             .window_resolver
-            .resolve(meta_store, &block_range)
+            .resolve(tables.meta_store(), &block_range)
             .await?
         else {
             return Ok(self.empty_page(&block_range));
@@ -137,9 +118,7 @@ impl LogsQueryEngine {
         let take = effective_limit.saturating_add(1);
         let matched = self
             .execute_indexed_query(
-                meta_store,
-                blob_store,
-                cache,
+                tables,
                 &request.filter,
                 (log_window.start, log_window.end_inclusive),
                 take,
@@ -200,11 +179,9 @@ impl LogsQueryEngine {
         }
     }
 
-    async fn execute_indexed_query<M: MetaStore, B: BlobStore, C: BytesCache>(
+    async fn execute_indexed_query<M: MetaStore, B: BlobStore>(
         &self,
-        meta_store: &M,
-        blob_store: &B,
-        cache: &C,
+        tables: Tables<'_, M, B>,
         filter: &LogFilter,
         id_window: (LogId, LogId),
         take: usize,
@@ -212,21 +189,14 @@ impl LogsQueryEngine {
         let (from_log_id, to_log_id_inclusive) = id_window;
         let clause_specs = build_clause_specs(filter);
         let mut matched = Vec::new();
-        let mut materializer = LogMaterializer::new(meta_store, blob_store, cache);
+        let mut materializer = LogMaterializer::new(tables);
 
         for shard_raw in from_log_id.shard().get()..=to_log_id_inclusive.shard().get() {
             let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
             let (local_from, local_to) =
                 local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
-            let shard_clauses = prepare_shard_clauses(
-                meta_store,
-                cache,
-                &clause_specs,
-                shard,
-                local_from,
-                local_to,
-            )
-            .await?;
+            let shard_clauses =
+                prepare_shard_clauses(tables, &clause_specs, shard, local_from, local_to).await?;
 
             if shard_clauses.is_empty() {
                 continue;
@@ -235,9 +205,7 @@ impl LogsQueryEngine {
             let mut shard_accumulator: Option<RoaringBitmap> = None;
             for prepared_clause in shard_clauses {
                 let clause_bitmap = load_prepared_clause_bitmap(
-                    meta_store,
-                    blob_store,
-                    cache,
+                    tables,
                     &prepared_clause,
                     local_from.get(),
                     local_to.get(),
