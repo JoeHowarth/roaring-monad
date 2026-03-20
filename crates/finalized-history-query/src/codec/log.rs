@@ -192,83 +192,30 @@ impl BlockLogHeader {
     }
 }
 
-impl DirByBlock {
-    pub fn encode(&self) -> Bytes {
-        let mut out = Vec::with_capacity(1 + 8 + 8 + 8);
-        out.push(1);
-        out.extend_from_slice(&self.block_num.to_be_bytes());
-        out.extend_from_slice(&self.first_log_id.to_be_bytes());
-        out.extend_from_slice(&self.end_log_id_exclusive.to_be_bytes());
-        Bytes::from(out)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != 1 + 8 + 8 + 8 {
-            return Err(Error::Decode("invalid log_dir fragment length"));
+fixed_codec! {
+    impl DirByBlock {
+        length_error = "invalid log_dir fragment length";
+        version = 1;
+        version_error = "unsupported log_dir fragment version";
+        fields {
+            block_num: u64,
+            first_log_id: u64,
+            end_log_id_exclusive: u64,
         }
-        if bytes[0] != 1 {
-            return Err(Error::Decode("unsupported log_dir fragment version"));
-        }
-        Ok(Self {
-            block_num: u64::from_be_bytes(
-                bytes[1..9]
-                    .try_into()
-                    .map_err(|_| Error::Decode("log_dir fragment block_num"))?,
-            ),
-            first_log_id: u64::from_be_bytes(
-                bytes[9..17]
-                    .try_into()
-                    .map_err(|_| Error::Decode("log_dir fragment first_log_id"))?,
-            ),
-            end_log_id_exclusive: u64::from_be_bytes(
-                bytes[17..25]
-                    .try_into()
-                    .map_err(|_| Error::Decode("log_dir fragment end_log_id_exclusive"))?,
-            ),
-        })
     }
 }
 
-impl StreamBitmapMeta {
-    pub fn encode(&self) -> Bytes {
-        let mut out = Vec::with_capacity(1 + 8 + 4 + 4 + 4);
-        out.push(1);
-        out.extend_from_slice(&self.block_num.to_be_bytes());
-        out.extend_from_slice(&self.count.to_be_bytes());
-        out.extend_from_slice(&self.min_local.to_be_bytes());
-        out.extend_from_slice(&self.max_local.to_be_bytes());
-        Bytes::from(out)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != 1 + 8 + 4 + 4 + 4 {
-            return Err(Error::Decode("invalid stream bitmap meta length"));
+fixed_codec! {
+    impl StreamBitmapMeta {
+        length_error = "invalid stream bitmap meta length";
+        version = 1;
+        version_error = "unsupported stream bitmap meta version";
+        fields {
+            block_num: u64,
+            count: u32,
+            min_local: u32,
+            max_local: u32,
         }
-        if bytes[0] != 1 {
-            return Err(Error::Decode("unsupported stream bitmap meta version"));
-        }
-        Ok(Self {
-            block_num: u64::from_be_bytes(
-                bytes[1..9]
-                    .try_into()
-                    .map_err(|_| Error::Decode("stream bitmap meta block_num"))?,
-            ),
-            count: u32::from_be_bytes(
-                bytes[9..13]
-                    .try_into()
-                    .map_err(|_| Error::Decode("stream bitmap meta count"))?,
-            ),
-            min_local: u32::from_be_bytes(
-                bytes[13..17]
-                    .try_into()
-                    .map_err(|_| Error::Decode("stream bitmap meta min_local"))?,
-            ),
-            max_local: u32::from_be_bytes(
-                bytes[17..21]
-                    .try_into()
-                    .map_err(|_| Error::Decode("stream bitmap meta max_local"))?,
-            ),
-        })
     }
 }
 
