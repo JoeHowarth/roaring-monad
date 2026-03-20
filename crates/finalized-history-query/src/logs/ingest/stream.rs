@@ -12,7 +12,7 @@ use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
 use crate::logs::types::Block;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
+use crate::streams::bitmap_blob::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 
 use super::artifact::{put_artifact_blob, put_artifact_meta, read_u64_suffix};
 
@@ -72,7 +72,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
             let count = bitmap.len() as u32;
             let min_local = bitmap.min().unwrap_or(page_start);
             let max_local = bitmap.max().unwrap_or(page_start);
-            let chunk = ChunkBlob {
+            let bitmap_blob = BitmapBlob {
                 min_local,
                 max_local,
                 count,
@@ -83,7 +83,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
             put_artifact_meta(
                 meta_store,
                 &bitmap_by_block_key(&stream, page_start, block.block_num),
-                encode_chunk(&chunk)?,
+                encode_bitmap_blob(&bitmap_blob)?,
                 epoch,
             )
             .await?;
@@ -131,7 +131,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         let Some(record) = meta_store.get(&key).await? else {
             continue;
         };
-        merged |= &decode_chunk(&record.value)?.bitmap;
+        merged |= &decode_bitmap_blob(&record.value)?.bitmap;
     }
     if merged.is_empty() {
         return Ok(false);
@@ -146,7 +146,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         min_local,
         max_local,
     };
-    let chunk = ChunkBlob {
+    let bitmap_blob = BitmapBlob {
         min_local,
         max_local,
         count,
@@ -157,7 +157,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     put_artifact_blob(
         blob_store,
         &bitmap_page_blob_key(stream_id, page_start),
-        encode_chunk(&chunk)?,
+        encode_bitmap_blob(&bitmap_blob)?,
     )
     .await?;
     put_artifact_meta(

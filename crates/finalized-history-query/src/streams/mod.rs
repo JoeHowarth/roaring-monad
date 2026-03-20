@@ -1,1 +1,1 @@
-pub mod chunk;
+pub mod bitmap_blob;

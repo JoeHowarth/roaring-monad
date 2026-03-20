@@ -8,7 +8,7 @@ use crate::domain::keys::{
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::store::traits::MetaStore;
-use crate::streams::chunk::decode_chunk;
+use crate::streams::bitmap_blob::decode_bitmap_blob;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClauseKind {
@@ -187,7 +187,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 let Some(record) = meta_store.get(&key).await? else {
                     continue;
                 };
-                let meta = decode_chunk(&record.value)?;
+                let meta = decode_bitmap_blob(&record.value)?;
                 if ranges_overlap(
                     meta.min_local,
                     meta.max_local,

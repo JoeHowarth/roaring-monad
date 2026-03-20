@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::chunk::decode_chunk;
+use crate::streams::bitmap_blob::decode_bitmap_blob;
 
 use super::stream_bitmap::{fetch_union_log_level_with_cache, load_bitmap_page_meta, overlaps};
 
@@ -163,7 +163,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 let Some(record) = meta_store.get(&key).await? else {
                     continue;
                 };
-                let meta = decode_chunk(&record.value)?;
+                let meta = decode_bitmap_blob(&record.value)?;
                 if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
                     estimated = estimated.saturating_add(u64::from(meta.count));
                 }

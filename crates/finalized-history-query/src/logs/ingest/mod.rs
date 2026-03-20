@@ -36,7 +36,7 @@ mod tests {
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
-    use crate::streams::chunk::decode_chunk;
+    use crate::streams::bitmap_blob::decode_bitmap_blob;
     use futures::executor::block_on;
 
     use super::collect_stream_appends;
@@ -213,7 +213,7 @@ mod tests {
                 .expect("stream page blob");
 
             assert!(
-                decode_chunk(&fragment.value)
+                decode_bitmap_blob(&fragment.value)
                     .expect("decode fragment")
                     .count
                     > 0
@@ -225,7 +225,7 @@ mod tests {
                     > 0
             );
             assert!(
-                decode_chunk(&page_blob)
+                decode_bitmap_blob(&page_blob)
                     .expect("decode stream page blob")
                     .count
                     > 0

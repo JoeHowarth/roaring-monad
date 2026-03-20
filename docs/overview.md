@@ -233,7 +233,7 @@ The crate intentionally does not implement:
 10. `src/core/execution.rs` — matched-primary vocabulary
 11. `src/core/runtime.rs` — degraded/throttled state machine
 12. `src/domain/keys.rs` — immutable-frontier key layout
-13. `src/streams/chunk.rs` — roaring bitmap blob format
+13. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
 

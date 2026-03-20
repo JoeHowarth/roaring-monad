@@ -11,7 +11,7 @@ use crate::domain::keys::{
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::chunk::decode_chunk;
+use crate::streams::bitmap_blob::decode_bitmap_blob;
 
 use super::clause::PreparedShardClause;
 
@@ -185,17 +185,22 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
             continue;
         };
         let _block_num = read_u64_suffix(&key)?;
-        let chunk = decode_chunk(&record.value)?;
-        if !overlaps(chunk.min_local, chunk.max_local, local_from, local_to) {
+        let bitmap_blob = decode_bitmap_blob(&record.value)?;
+        if !overlaps(
+            bitmap_blob.min_local,
+            bitmap_blob.max_local,
+            local_from,
+            local_to,
+        ) {
             continue;
         }
         if is_full_shard_range(local_from, local_to)
-            || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+            || (bitmap_blob.min_local >= local_from && bitmap_blob.max_local <= local_to)
         {
-            *out |= &chunk.bitmap;
+            *out |= &bitmap_blob.bitmap;
             continue;
         }
-        for value in chunk.bitmap {
+        for value in bitmap_blob.bitmap {
             if value >= local_from && value <= local_to {
                 out.insert(value);
             }
@@ -254,15 +259,15 @@ async fn maybe_merge_cached_bitmap_blob<B: BlobStore, C: BytesCache>(
     let Some(bytes) = load_bitmap_page_blob(blob_store, cache, key).await? else {
         return Ok(false);
     };
-    let chunk = decode_chunk(&bytes)?;
+    let bitmap_blob = decode_bitmap_blob(&bytes)?;
     if is_full_shard_range(local_from, local_to)
-        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+        || (bitmap_blob.min_local >= local_from && bitmap_blob.max_local <= local_to)
     {
-        *out |= &chunk.bitmap;
+        *out |= &bitmap_blob.bitmap;
         return Ok(true);
     }
 
-    for value in chunk.bitmap {
+    for value in bitmap_blob.bitmap {
         if value >= local_from && value <= local_to {
             out.insert(value);
         }
@@ -303,7 +308,7 @@ mod tests {
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore, Page, PutCond, PutResult, Record};
-    use crate::streams::chunk::{ChunkBlob, encode_chunk};
+    use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
 
@@ -386,7 +391,7 @@ mod tests {
 
             let mut fragment_bitmap = RoaringBitmap::new();
             fragment_bitmap.insert(11);
-            let fragment_chunk = ChunkBlob {
+            let fragment_bitmap_blob = BitmapBlob {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
@@ -396,7 +401,7 @@ mod tests {
 
             meta.put(
                 &bitmap_by_block_key(stream, page_start, block_num),
-                encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
+                encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
                 PutCond::Any,
             )
             .await
@@ -439,7 +444,7 @@ mod tests {
 
             let mut bitmap = RoaringBitmap::new();
             bitmap.insert(11);
-            let chunk = ChunkBlob {
+            let bitmap_blob = BitmapBlob {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
@@ -463,7 +468,7 @@ mod tests {
             inner_blob
                 .put_blob(
                     &blob_key,
-                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                    encode_bitmap_blob(&bitmap_blob).expect("encode stream page bitmap blob"),
                 )
                 .await
                 .expect("write stream page blob");
@@ -516,7 +521,7 @@ mod tests {
 
             let mut bitmap = RoaringBitmap::new();
             bitmap.insert(11);
-            let chunk = ChunkBlob {
+            let bitmap_blob = BitmapBlob {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
@@ -540,7 +545,7 @@ mod tests {
             inner_blob
                 .put_blob(
                     &blob_key,
-                    encode_chunk(&chunk).expect("encode stream page chunk"),
+                    encode_bitmap_blob(&bitmap_blob).expect("encode stream page bitmap blob"),
                 )
                 .await
                 .expect("write stream page blob");
