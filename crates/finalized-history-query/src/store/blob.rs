@@ -1,14 +1,14 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, Page};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct InMemoryBlobStore {
-    inner: RwLock<HashMap<Vec<u8>, Bytes>>,
+    inner: Arc<RwLock<HashMap<Vec<u8>, Bytes>>>,
 }
 
 impl BlobStore for InMemoryBlobStore {

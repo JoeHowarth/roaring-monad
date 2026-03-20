@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::domain::types::PublicationState;
 use crate::error::Result;
 
@@ -21,4 +23,25 @@ pub trait PublicationStore: Send + Sync {
         expected: &PublicationState,
         next: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>>;
+}
+
+impl<T: PublicationStore> PublicationStore for Arc<T> {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        self.as_ref().load().await
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        self.as_ref().create_if_absent(initial).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        self.as_ref().compare_and_set(expected, next).await
+    }
 }

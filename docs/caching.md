@@ -17,16 +17,14 @@ The underlying cache still stores raw `Bytes` values, not decoded structs. This 
 
 ```rust
 pub struct Tables<M, B> {
-    pub block_log_headers: BlockLogHeaderTable<M>,
-    pub dir_buckets: DirBucketTable<M>,
-    pub log_dir_sub_buckets: LogDirSubBucketTable<M>,
-    pub point_log_payloads: PointLogPayloadTable<M, B>,
-    pub bitmap_page_meta: BitmapPageMetaTable<M>,
-    pub bitmap_page_blobs: BitmapPageBlobTable<B>,
+    // accessor methods omitted
 }
 ```
 
-Hot-path callers do not manually select a cache table or backend. They call the typed table reader for the artifact they need. See [config.md](config.md) for `BytesCacheConfig`.
+Hot-path callers do not manually select a cache table or backend. They call
+the typed table reader for the artifact they need, such as
+`tables.block_log_headers().get(block_num)`. See [config.md](config.md) for
+`BytesCacheConfig`.
 
 ## Per-Table Byte Budgets
 
@@ -67,11 +65,14 @@ Write/recovery inventory only. The query path does not read these markers.
 
 ## Eviction
 
-LRU eviction happens independently within each enabled table cache. Per-table metrics track hits, misses, inserts, evictions, and resident bytes.
+Each enabled table uses an independent `quick_cache` instance with weighted,
+scan-resistant eviction rather than exact LRU. Per-table metrics track hits,
+misses, inserts, evictions, and resident bytes.
 
 ## Deferred Scope
 
 - miss deduplication (concurrent fetches for the same key)
 - eager cache population on ingest writes
 - compression or alternate backing allocation inside the cache
-- pay**load-only stored log encoding (removing duplicated** `block_num`/`block_hash` from stored log bytes)
+- payload-only stored log encoding (removing duplicated `block_num`/`block_hash`
+  from stored log bytes)

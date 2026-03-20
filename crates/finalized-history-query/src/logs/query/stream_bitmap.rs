@@ -16,7 +16,7 @@ use super::clause::PreparedShardClause;
 pub(in crate::logs) const STREAM_LOAD_CONCURRENCY: usize = 32;
 
 pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     prepared_clause: &PreparedShardClause,
     local_from: u32,
     local_to: u32,
@@ -43,7 +43,7 @@ pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobSt
 }
 
 pub(in crate::logs) async fn fetch_union_log_level_with_cache<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     kind: &str,
     values: &[Vec<u8>],
     from_log_id: crate::core::ids::LogId,
@@ -98,7 +98,7 @@ fn merge_union_entries(
 }
 
 pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream: &str,
     local_from: u32,
     local_to: u32,
@@ -138,7 +138,7 @@ pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
 }
 
 async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream: &str,
     page_start: u32,
     local_from: u32,
@@ -183,7 +183,7 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
 }
 
 pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream: &str,
     page_start: u32,
 ) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
@@ -191,7 +191,7 @@ pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
 }
 
 async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream: &str,
     page_start: u32,
 ) -> Result<Option<Bytes>> {
@@ -202,7 +202,7 @@ async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
 }
 
 async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream: &str,
     page_start: u32,
     out: &mut RoaringBitmap,
@@ -254,14 +254,13 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::cache::{BytesCacheConfig, HashMapBytesCache, TableCacheConfig};
     use crate::domain::keys::{bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key};
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore, Page, PutCond, PutResult, Record};
     use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
-    use crate::tables::Tables;
+    use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
 
@@ -338,7 +337,6 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let caches = HashMapBytesCache::default();
             let stream = "addr/test/00000000";
             let page_start = 0u32;
             let block_num = 7u64;
@@ -375,7 +373,8 @@ mod tests {
             .await
             .expect("write stream page meta");
 
-            let entries = load_stream_entries(Tables::new(&meta, &blob, &caches), stream, 0, 20)
+            let tables = Tables::without_cache(Arc::new(meta), Arc::new(blob));
+            let entries = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("load stream entries");
 
@@ -439,20 +438,24 @@ mod tests {
                 target_key: blob_key.clone(),
                 get_blob_count: blob_gets.clone(),
             };
-            let caches = HashMapBytesCache::new(BytesCacheConfig {
-                bitmap_page_meta: TableCacheConfig {
-                    max_bytes: 4 * 1024,
+            let tables = Tables::new(
+                Arc::new(meta),
+                Arc::new(blob),
+                BytesCacheConfig {
+                    bitmap_page_meta: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    bitmap_page_blobs: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
                 },
-                bitmap_page_blobs: TableCacheConfig {
-                    max_bytes: 4 * 1024,
-                },
-                ..BytesCacheConfig::disabled()
-            });
+            );
 
-            let first = load_stream_entries(Tables::new(&meta, &blob, &caches), stream, 0, 20)
+            let first = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries(Tables::new(&meta, &blob, &caches), stream, 0, 20)
+            let second = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("second load");
 
@@ -517,17 +520,21 @@ mod tests {
                 target_key: blob_key.clone(),
                 get_blob_count: blob_gets.clone(),
             };
-            let caches = HashMapBytesCache::new(BytesCacheConfig {
-                bitmap_page_meta: TableCacheConfig {
-                    max_bytes: 4 * 1024,
+            let tables = Tables::new(
+                Arc::new(meta),
+                Arc::new(blob),
+                BytesCacheConfig {
+                    bitmap_page_meta: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
                 },
-                ..BytesCacheConfig::disabled()
-            });
+            );
 
-            let first = load_stream_entries(Tables::new(&meta, &blob, &caches), stream, 0, 20)
+            let first = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries(Tables::new(&meta, &blob, &caches), stream, 0, 20)
+            let second = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("second load");
 

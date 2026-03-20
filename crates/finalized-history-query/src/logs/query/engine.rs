@@ -50,7 +50,7 @@ impl LogsQueryEngine {
 
     pub async fn query_logs<M: MetaStore + PublicationStore, B: BlobStore>(
         &self,
-        tables: Tables<'_, M, B>,
+        tables: &Tables<M, B>,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
@@ -181,7 +181,7 @@ impl LogsQueryEngine {
 
     async fn execute_indexed_query<M: MetaStore, B: BlobStore>(
         &self,
-        tables: Tables<'_, M, B>,
+        tables: &Tables<M, B>,
         filter: &LogFilter,
         id_window: (LogId, LogId),
         take: usize,

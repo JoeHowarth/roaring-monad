@@ -16,7 +16,7 @@ pub(crate) struct ResolvedLogLocation {
 }
 
 pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
-    tables: Tables<'a, M, B>,
+    tables: &'a Tables<M, B>,
     range_resolver: RangeResolver,
     // directory_fragment_cache stays as a per-request HashMap because fragments
     // are assembled from multiple list_prefix + get calls (not a single stored
@@ -28,7 +28,7 @@ pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
 }
 
 impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
-    pub fn new(tables: Tables<'a, M, B>) -> Self {
+    pub fn new(tables: &'a Tables<M, B>) -> Self {
         Self {
             tables,
             range_resolver: RangeResolver,
@@ -46,7 +46,6 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::cache::{BytesCacheConfig, HashMapBytesCache, TableCacheConfig};
     use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
@@ -58,7 +57,7 @@ mod tests {
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore, Page, PutCond};
-    use crate::tables::Tables;
+    use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
 
     struct CountingBlobStore {
@@ -110,8 +109,6 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let caches = HashMapBytesCache::default();
-
             meta.put(
                 &log_dir_bucket_key(0),
                 DirBucket {
@@ -124,7 +121,9 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let mut materializer = LogMaterializer::new(Tables::new(&meta, &blob, &caches));
+            let tables =
+                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(LogId::new(12))
                 .await
@@ -145,7 +144,6 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let caches = HashMapBytesCache::default();
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.put(
                 &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), 700),
@@ -160,7 +158,9 @@ mod tests {
             .await
             .expect("write directory fragment");
 
-            let mut materializer = LogMaterializer::new(Tables::new(&meta, &blob, &caches));
+            let tables =
+                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(log_id)
                 .await
@@ -181,8 +181,6 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let caches = HashMapBytesCache::default();
-
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
@@ -200,7 +198,9 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let mut materializer = LogMaterializer::new(Tables::new(&meta, &blob, &caches));
+            let tables =
+                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(log_id)
                 .await
@@ -225,12 +225,8 @@ mod tests {
                 get_blob_count: Arc::new(AtomicU64::new(0)),
                 read_range_count: Arc::new(AtomicU64::new(0)),
             };
-            let caches = HashMapBytesCache::new(BytesCacheConfig {
-                point_log_payloads: TableCacheConfig {
-                    max_bytes: 4 * 1024,
-                },
-                ..BytesCacheConfig::disabled()
-            });
+            let read_range_count = Arc::clone(&blob.read_range_count);
+            let get_blob_count = Arc::clone(&blob.get_blob_count);
             let block_num = 700u64;
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE);
             let log = Log {
@@ -270,7 +266,17 @@ mod tests {
                 .await
                 .expect("write block log blob");
 
-            let mut materializer = LogMaterializer::new(Tables::new(&meta, &blob, &caches));
+            let tables = Tables::new(
+                std::sync::Arc::new(meta),
+                std::sync::Arc::new(blob),
+                BytesCacheConfig {
+                    point_log_payloads: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+            );
+            let mut materializer = LogMaterializer::new(&tables);
             let first = PrimaryMaterializer::load_by_id(&mut materializer, log_id)
                 .await
                 .expect("first load")
@@ -281,13 +287,13 @@ mod tests {
                 .expect("second log");
 
             assert_eq!(first, second);
-            assert_eq!(blob.get_blob_count.load(Ordering::Relaxed), 0);
-            assert_eq!(blob.read_range_count.load(Ordering::Relaxed), 1);
+            assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
+            assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
 
-            let metrics = caches.metrics_snapshot();
-            assert_eq!(metrics.point_log_payloads.misses, 1);
-            assert_eq!(metrics.point_log_payloads.hits, 1);
-            assert_eq!(metrics.point_log_payloads.inserts, 1);
+            let metrics = tables.metrics_snapshot().point_log_payloads;
+            assert_eq!(metrics.misses, 1);
+            assert_eq!(metrics.hits, 1);
+            assert_eq!(metrics.inserts, 1);
         });
     }
 
@@ -300,12 +306,8 @@ mod tests {
                 get_blob_count: Arc::new(AtomicU64::new(0)),
                 read_range_count: Arc::new(AtomicU64::new(0)),
             };
-            let caches = HashMapBytesCache::new(BytesCacheConfig {
-                point_log_payloads: TableCacheConfig {
-                    max_bytes: 4 * 1024,
-                },
-                ..BytesCacheConfig::disabled()
-            });
+            let read_range_count = Arc::clone(&blob.read_range_count);
+            let get_blob_count = Arc::clone(&blob.get_blob_count);
             let block_num = 701u64;
             let logs = [
                 Log {
@@ -356,7 +358,17 @@ mod tests {
                 .await
                 .expect("write block log blob");
 
-            let mut materializer = LogMaterializer::new(Tables::new(&meta, &blob, &caches));
+            let tables = Tables::new(
+                std::sync::Arc::new(meta),
+                std::sync::Arc::new(blob),
+                BytesCacheConfig {
+                    point_log_payloads: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+            );
+            let mut materializer = LogMaterializer::new(&tables);
             let first = materializer
                 .load_contiguous_run(block_num, 0, 2)
                 .await
@@ -367,13 +379,13 @@ mod tests {
                 .expect("second contiguous load");
 
             assert_eq!(first, second);
-            assert_eq!(blob.get_blob_count.load(Ordering::Relaxed), 0);
-            assert_eq!(blob.read_range_count.load(Ordering::Relaxed), 1);
+            assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
+            assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
 
-            let metrics = caches.metrics_snapshot();
-            assert_eq!(metrics.point_log_payloads.misses, 3);
-            assert_eq!(metrics.point_log_payloads.hits, 3);
-            assert_eq!(metrics.point_log_payloads.inserts, 3);
+            let metrics = tables.metrics_snapshot().point_log_payloads;
+            assert_eq!(metrics.misses, 3);
+            assert_eq!(metrics.hits, 3);
+            assert_eq!(metrics.inserts, 3);
         });
     }
 }

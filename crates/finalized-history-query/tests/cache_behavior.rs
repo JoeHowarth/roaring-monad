@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::cache::{BytesCacheConfig, TableCacheConfig};
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::block_log_blob_key;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig};
 use futures::executor::block_on;
 
 use helpers::*;

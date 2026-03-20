@@ -1,4 +1,3 @@
-use crate::cache::HashMapBytesCache;
 use crate::core::execution::ShardBitmapSet;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
 use crate::domain::keys::{
@@ -89,7 +88,7 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
 }
 
 pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     clause_specs: &[IndexedClauseSpec],
     shard: LogShard,
     local_from: LogLocalId,
@@ -107,7 +106,7 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
 }
 
 async fn prepare_shard_clause<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     clause_spec: &IndexedClauseSpec,
     shard: LogShard,
     local_from: LogLocalId,
@@ -132,7 +131,7 @@ async fn prepare_shard_clause<M: MetaStore, B: BlobStore>(
 }
 
 async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     stream_id: &str,
     local_from: u32,
     local_to: u32,
@@ -186,7 +185,7 @@ pub(in crate::logs) fn clause_kind_rank(kind: ClauseKind) -> u8 {
 }
 
 async fn load_clause_sets<M: MetaStore, B: BlobStore>(
-    tables: Tables<'_, M, B>,
+    tables: &Tables<M, B>,
     clause_specs: &[IndexedClauseSpec],
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
@@ -209,16 +208,19 @@ async fn load_clause_sets<M: MetaStore, B: BlobStore>(
 }
 
 #[doc(hidden)]
-pub async fn load_clause_sets_for_benchmark<M: MetaStore, B: BlobStore>(
+pub async fn load_clause_sets_for_benchmark<M: MetaStore + Clone, B: BlobStore + Clone>(
     meta_store: &M,
     blob_store: &B,
     filter: &LogFilter,
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
 ) -> Result<Vec<ShardBitmapSet>> {
-    let caches = HashMapBytesCache::default();
+    let tables = Tables::without_cache(
+        std::sync::Arc::new((*meta_store).clone()),
+        std::sync::Arc::new((*blob_store).clone()),
+    );
     load_clause_sets(
-        Tables::new(meta_store, blob_store, &caches),
+        &tables,
         &build_clause_specs(filter),
         from_log_id,
         to_log_id_inclusive,

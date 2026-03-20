@@ -38,11 +38,11 @@ The crate is organized in three layers.
 
 ### Shared finalized-history substrate
 
-- `src/cache/*`
 - `src/core/*`
 - `src/ingest/authority.rs`
 - `src/ingest/authority/*`
 - `src/streams/*`
+- `src/tables/*`
 
 ### Logs family adapter
 
@@ -224,7 +224,7 @@ The crate intentionally does not implement:
 
 ### Pass 2: Shared substrate
 
-4. `src/cache/mod.rs` — immutable-bytes cache boundary, table IDs, byte-budget config
+4. `src/tables/mod.rs` — typed immutable-artifact tables, per-table bytes caches, and cache config/metrics
 5. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
 6. `src/core/page.rs` — pagination/result vocabulary
 7. `src/core/refs.rs` — shared `BlockRef` type

@@ -2,14 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::cache::{BytesCacheConfig, HashMapBytesCache, TableCacheConfig};
 use finalized_history_query::codec::log::validate_log;
 use finalized_history_query::config::Config;
 use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
@@ -29,7 +27,7 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
-use finalized_history_query::tables::Tables;
+use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
     Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
 };
@@ -38,7 +36,6 @@ use roaring::RoaringBitmap;
 
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
 pub const DEFAULT_WRITER_EPOCH: u64 = 1;
-static NOOP_BYTES_CACHE: LazyLock<HashMapBytesCache> = LazyLock::new(HashMapBytesCache::default);
 
 fn bench_hash(block_num: u64) -> [u8; 32] {
     let mut hash = [0u8; 32];
@@ -723,7 +720,11 @@ pub fn materializer<'a>(
     meta_store: &'a InMemoryMetaStore,
     blob_store: &'a InMemoryBlobStore,
 ) -> LogMaterializer<'a, InMemoryMetaStore, InMemoryBlobStore> {
-    LogMaterializer::new(Tables::new(meta_store, blob_store, &NOOP_BYTES_CACHE))
+    let tables = Box::leak(Box::new(Tables::without_cache(
+        std::sync::Arc::new(meta_store.clone()),
+        std::sync::Arc::new(blob_store.clone()),
+    )));
+    LogMaterializer::new(tables)
 }
 
 async fn put_meta_record(meta_store: &InMemoryMetaStore, key: &[u8], value: Bytes) {

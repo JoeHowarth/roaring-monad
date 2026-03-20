@@ -4,7 +4,6 @@ mod startup;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::cache::{BytesCacheMetrics, HashMapBytesCache};
 use crate::config::Config;
 use crate::core::runtime::RuntimeState;
 use crate::error::{Error, Result};
@@ -14,12 +13,12 @@ use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::HealthReport;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::tables::{BytesCacheMetrics, Tables};
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A, M, B>,
+    pub ingest: IngestEngine<A, Arc<M>, Arc<B>>,
     query: LogsQueryEngine,
-    cache: HashMapBytesCache,
+    tables: Tables<M, B>,
     config: Config,
     state: Arc<RuntimeState>,
     allows_writes: bool,
@@ -37,12 +36,18 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         allows_writes: bool,
     ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
-        let cache = HashMapBytesCache::new(config.bytes_cache);
+        let meta_store = Arc::new(meta_store);
+        let blob_store = Arc::new(blob_store);
+        let tables = Tables::new(
+            Arc::clone(&meta_store),
+            Arc::clone(&blob_store),
+            config.bytes_cache,
+        );
         let ingest = IngestEngine::new(config.clone(), authority, meta_store, blob_store);
         Self {
             ingest,
             query,
-            cache,
+            tables,
             config,
             state: Arc::new(RuntimeState::default()),
             allows_writes,
@@ -68,15 +73,11 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     }
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
-        self.cache.metrics_snapshot()
+        self.tables.metrics_snapshot()
     }
 
-    pub(crate) fn tables(&self) -> Tables<'_, M, B> {
-        Tables::new(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            &self.cache,
-        )
+    pub(crate) fn tables(&self) -> &Tables<M, B> {
+        &self.tables
     }
 
     fn update_backend_state<T>(&self, result: &Result<T>) {
