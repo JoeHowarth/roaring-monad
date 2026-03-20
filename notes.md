@@ -1,5 +1,5 @@
 - combine small api files
-- don't like manual codecs. Prefer rust derive 
+- don't like manual codecs. Prefer rust derive
 - block identity and block ref are the same, why duplicate?
 - don't like that we're allocating for each key, then just referencing. Could we re-use vecs to build the keys instead? Over optimizatin?
 - in resolved block range why are we storing from_block when resolved_from_ref has this too? same for to
@@ -8,4 +8,12 @@
 - why does streams export domain keys? shouldn't this abstracted somehow?
 - dashmap instead of rwlock<hashmap>, stream wrieer cache
 - confusing if let Some(cached) ... multi arm if/else chain. Should use a helper or at least a comment
-- 
+-
+
+Andre:
+
+- conistent and simpler naming for concepts
+- smaller vocab
+- Chain Data Redux: evm header, bft header, txs, receipts, logs, traces (maybe verbose?),
+- add hash of chain data and hash of parent publication state
+
