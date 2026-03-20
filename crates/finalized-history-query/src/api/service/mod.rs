@@ -8,9 +8,7 @@ use crate::cache::{BytesCacheMetrics, HashMapBytesCache};
 use crate::config::Config;
 use crate::core::runtime::RuntimeState;
 use crate::error::{Error, Result};
-use crate::ingest::authority::{
-    LeaseAuthority, ReadOnlyAuthority, SingleWriterAuthority, WriteAuthority, WriteToken,
-};
+use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteToken};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::HealthReport;
@@ -23,21 +21,8 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     cache: HashMapBytesCache,
     config: Config,
     state: Arc<RuntimeState>,
-    role: ServiceRole,
+    allows_writes: bool,
     writer: Arc<futures::lock::Mutex<Option<WriteToken>>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ServiceRole {
-    ReaderOnly,
-    ReaderWriter,
-    SingleWriter,
-}
-
-impl ServiceRole {
-    fn allows_writes(self) -> bool {
-        !matches!(self, Self::ReaderOnly)
-    }
 }
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
@@ -48,7 +33,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         meta_store: M,
         blob_store: B,
         authority: A,
-        role: ServiceRole,
+        allows_writes: bool,
     ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
         let cache = HashMapBytesCache::new(config.bytes_cache);
@@ -59,7 +44,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             cache,
             config,
             state: Arc::new(RuntimeState::default()),
-            role,
+            allows_writes,
             writer: Arc::new(futures::lock::Mutex::new(None)),
         }
     }
@@ -104,12 +89,12 @@ fn should_clear_writer(error: &Error) -> bool {
         Error::LeaseLost
             | Error::LeaseObservationUnavailable
             | Error::PublicationConflict
-            | Error::ModeConflict(_)
+            | Error::ReadOnlyMode(_)
     )
 }
 
 fn reader_only_mode_error() -> Error {
-    Error::ModeConflict("reader-only service cannot acquire write authority")
+    Error::ReadOnlyMode("reader-only service cannot acquire write authority")
 }
 
 impl<M, B> FinalizedHistoryService<LeaseAuthority<M>, M, B>
@@ -124,13 +109,7 @@ where
             config.publication_lease_blocks,
             config.publication_lease_renew_threshold_blocks,
         );
-        Self::with_authority(
-            config,
-            meta_store,
-            blob_store,
-            authority,
-            ServiceRole::ReaderWriter,
-        )
+        Self::with_authority(config, meta_store, blob_store, authority, true)
     }
 }
 
@@ -140,29 +119,6 @@ where
     B: BlobStore,
 {
     pub fn new_reader_only(config: Config, meta_store: M, blob_store: B) -> Self {
-        Self::with_authority(
-            config,
-            meta_store,
-            blob_store,
-            ReadOnlyAuthority,
-            ServiceRole::ReaderOnly,
-        )
-    }
-}
-
-impl<M, B> FinalizedHistoryService<SingleWriterAuthority<M>, M, B>
-where
-    M: MetaStore + PublicationStore + Clone,
-    B: BlobStore,
-{
-    pub fn new_single_writer(config: Config, meta_store: M, blob_store: B) -> Self {
-        let authority = SingleWriterAuthority::new(meta_store.clone());
-        Self::with_authority(
-            config,
-            meta_store,
-            blob_store,
-            authority,
-            ServiceRole::SingleWriter,
-        )
+        Self::with_authority(config, meta_store, blob_store, ReadOnlyAuthority, false)
     }
 }

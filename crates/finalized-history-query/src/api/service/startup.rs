@@ -1,7 +1,7 @@
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::Result;
 use crate::ingest::authority::{WriteAuthority, WriteToken};
-use crate::recovery::{RecoveryPlan, build_recovery_plan, startup_plan};
+use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -10,8 +10,8 @@ use super::{FinalizedHistoryService, should_clear_writer};
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     FinalizedHistoryService<A, M, B>
 {
-    pub async fn startup(&self) -> Result<RecoveryPlan> {
-        if !self.role.allows_writes() {
+    pub async fn startup(&self) -> Result<StartupPlan> {
+        if !self.allows_writes {
             let result = startup_plan(&self.ingest.meta_store, &self.ingest.blob_store, 0).await;
             self.update_backend_state(&result);
             return result;
@@ -37,11 +37,11 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     pub(super) async fn startup_locked(
         &self,
         writer: &mut Option<WriteToken>,
-    ) -> Result<RecoveryPlan>
+    ) -> Result<StartupPlan>
     where
         M: PublicationStore,
     {
-        debug_assert!(self.role.allows_writes());
+        debug_assert!(self.allows_writes);
         if let Some(token) = *writer {
             let result = self
                 .ingest
@@ -82,10 +82,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         Ok(plan)
     }
 
-    async fn recover_and_plan(&self, token: WriteToken) -> Result<RecoveryPlan> {
+    async fn recover_and_plan(&self, token: WriteToken) -> Result<StartupPlan> {
         let next_log_id =
             derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
-        Ok(build_recovery_plan(
+        Ok(build_startup_plan(
             token.indexed_finalized_head,
             token.epoch,
             next_log_id,

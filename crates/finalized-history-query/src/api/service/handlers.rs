@@ -32,7 +32,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
-        if !self.role.allows_writes() {
+        if !self.allows_writes {
             return Err(reader_only_mode_error());
         }
 

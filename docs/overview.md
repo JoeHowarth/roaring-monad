@@ -192,7 +192,7 @@ Numeric key components use big-endian encoded u64. The exception is `block_hash_
 
 ```python
 class FinalizedHistoryService:
-    async def startup(self) -> RecoveryPlan
+    async def startup(self) -> StartupPlan
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
     async def ingest_finalized_block(self, block: Block) -> IngestOutcome
     async def ingest_finalized_blocks(self, blocks: list[Block]) -> IngestOutcome
@@ -257,17 +257,16 @@ The crate intentionally does not implement:
 25. `src/ingest/engine.rs` — ingest orchestrator
 26. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
 27. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-28. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
-29. `src/recovery/mod.rs` — startup view and next-position derivation
+28. `src/startup.rs` — startup view and next-position derivation
 
 ### Pass 6: End-to-end behavior
 
-30. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-31. `tests/startup_recovery.rs` — startup, session reuse, roles
-32. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-33. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-34. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-35. `tests/crash_injection_matrix.rs` — crash-retry behavior
-36. `tests/differential_and_gc.rs` — differential correctness, recovery
+29. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
+30. `tests/startup.rs` — startup, session reuse, roles
+31. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+32. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+33. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+34. `tests/crash_injection_matrix.rs` — crash-retry behavior
+35. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

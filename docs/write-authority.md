@@ -4,14 +4,13 @@ This document describes the write-authority model: leases, epochs, service roles
 
 ## Service Roles
 
-Three roles are available at the `FinalizedHistoryService` constructor layer:
+Two roles are available at the `FinalizedHistoryService` constructor layer:
 
 
 | Role          | Constructor              | Writes | Lease                 | Upstream observation required |
 | ------------- | ------------------------ | ------ | --------------------- | ----------------------------- |
 | Reader-only   | `new_reader_only(...)`   | No     | No                    | No                            |
 | Reader+writer | `new_reader_writer(...)` | Yes    | LeaseAuthority        | Yes                           |
-| Single-writer | `new_single_writer(...)` | Yes    | SingleWriterAuthority | No                            |
 
 
 Reader-only nodes load `startup_plan(...)` state observationally and never attempt ownership.
@@ -172,21 +171,6 @@ Using the last observed block number after observation has been lost is not allo
 ## Same-Node Restart
 
 Reacquiring with the same node identity must still bump `epoch`. Node identity is not process identity — a restarted process generates a new `session_id`, so it always takes the foreign-session takeover path.
-
-## Single-Writer Mode
-
-Use `SingleWriterAuthority` (`new_single_writer`) when:
-
-- exactly one writer process exists with no standby
-- the deployment guarantees exclusive access (single-node or process-level lock)
-- lease overhead and observation dependency are not needed
-
-### Safety properties deliberately absent
-
-- no lease-based expiry or takeover — a second writer is not gated by lease freshness
-- `publish` uses `PutCond::Any` rather than `compare_and_set` — concurrent writers would silently overwrite each other's heads
-
-Single-writer mode relies entirely on the deployment preventing concurrent writers.
 
 ## Ownership Rules
 

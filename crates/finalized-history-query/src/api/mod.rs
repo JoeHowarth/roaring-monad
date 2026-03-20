@@ -5,6 +5,7 @@ pub use crate::core::refs::BlockRef;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::types::{Block, IngestOutcome, Log};
+pub use crate::startup::StartupPlan;
 pub use service::FinalizedHistoryService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

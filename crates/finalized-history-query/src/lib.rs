@@ -8,7 +8,7 @@ pub mod error;
 pub mod ingest;
 pub mod logs;
 pub mod metrics;
-pub mod recovery;
+pub mod startup;
 pub mod store;
 pub mod streams;
 
@@ -21,8 +21,6 @@ pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use core::refs::BlockRef;
 pub use error::{Error, Result};
-pub use ingest::authority::{
-    LeaseAuthority, ReadOnlyAuthority, SingleWriterAuthority, WriteAuthority, WriteToken,
-};
+pub use ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteToken};
 pub use logs::filter::LogFilter;
 pub use logs::types::{Block, HealthReport, IngestOutcome, Log};

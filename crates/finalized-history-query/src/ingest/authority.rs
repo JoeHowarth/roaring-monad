@@ -2,11 +2,9 @@ use crate::error::Result;
 
 pub mod lease;
 pub mod read_only;
-pub mod single_writer;
 
 pub use lease::LeaseAuthority;
 pub use read_only::ReadOnlyAuthority;
-pub use single_writer::SingleWriterAuthority;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteToken {

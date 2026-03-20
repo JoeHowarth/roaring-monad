@@ -3,12 +3,6 @@ use std::sync::Arc;
 
 use crate::cache::BytesCacheConfig;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IngestMode {
-    StrictCas,
-    SingleWriterFast,
-}
-
 #[derive(Clone)]
 pub struct Config {
     pub observe_upstream_finalized_block: Arc<dyn Fn() -> Option<u64> + Send + Sync>,
@@ -17,7 +11,6 @@ pub struct Config {
     pub planner_max_or_terms: usize,
     pub backend_error_throttle_after: u64,
     pub backend_error_degraded_after: u64,
-    pub ingest_mode: IngestMode,
     pub assume_empty_streams: bool,
     pub stream_append_concurrency: usize,
     pub bytes_cache: BytesCacheConfig,
@@ -41,7 +34,6 @@ impl fmt::Debug for Config {
                 "backend_error_degraded_after",
                 &self.backend_error_degraded_after,
             )
-            .field("ingest_mode", &self.ingest_mode)
             .field("assume_empty_streams", &self.assume_empty_streams)
             .field("stream_append_concurrency", &self.stream_append_concurrency)
             .field("bytes_cache", &self.bytes_cache)
@@ -58,7 +50,6 @@ impl Default for Config {
             planner_max_or_terms: 128,
             backend_error_throttle_after: 3,
             backend_error_degraded_after: 10,
-            ingest_mode: IngestMode::StrictCas,
             assume_empty_streams: false,
             stream_append_concurrency: 96,
             bytes_cache: BytesCacheConfig::default(),

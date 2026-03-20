@@ -6,7 +6,7 @@ pub struct ReadOnlyAuthority;
 
 impl ReadOnlyAuthority {
     fn writer_mode_error() -> Error {
-        Error::ModeConflict("reader-only service cannot acquire write authority")
+        Error::ReadOnlyMode("reader-only service cannot acquire write authority")
     }
 }
 

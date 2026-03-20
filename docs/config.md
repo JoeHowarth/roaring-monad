@@ -35,15 +35,6 @@ See [write-authority.md](write-authority.md) for the lease clock model.
 
 See [caching.md](caching.md) for cache design details.
 
-## Ingest Mode
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `ingest_mode` | `IngestMode` | `StrictCas` | Publication CAS mode |
-
-- `StrictCas` — uses `compare_and_set` for head publication (lease-backed mode)
-- `SingleWriterFast` — uses `PutCond::Any` for head publication (single-writer mode)
-
 ## Stream Config
 
 | Field | Type | Default | Purpose |

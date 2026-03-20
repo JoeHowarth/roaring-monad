@@ -13,7 +13,7 @@ use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
 use finalized_history_query::domain::types::BlockRecord;
-use finalized_history_query::recovery::startup_plan;
+use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
@@ -36,32 +36,6 @@ fn service_startup_bootstraps_publication_ownership() {
         assert_eq!(plan.head_state.indexed_finalized_head, 0);
         assert_eq!(plan.head_state.publication_epoch, 1);
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
-    });
-}
-
-#[test]
-fn single_writer_service_ingests_and_publishes_reader_visible_head() {
-    block_on(async {
-        let meta = InMemoryMetaStore::default();
-        let blob = InMemoryBlobStore::default();
-        let svc = FinalizedHistoryService::new_single_writer(Config::default(), meta.clone(), blob);
-
-        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(3, 10, 20, 1, 0, 0)]))
-            .await
-            .expect("single-writer ingest");
-
-        let state = meta
-            .load()
-            .await
-            .expect("load publication state")
-            .expect("publication state");
-        let head = load_finalized_head_state(&meta)
-            .await
-            .expect("load finalized head state");
-
-        assert_eq!(state.owner_id, 0);
-        assert_eq!(state.indexed_finalized_head, 1);
-        assert_eq!(head.indexed_finalized_head, 1);
     });
 }
 
@@ -183,7 +157,7 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         assert_eq!(plan.head_state.indexed_finalized_head, 3);
         assert_eq!(state.owner_id, 11);
         assert_eq!(state.epoch, 4);
-        assert!(matches!(err, Error::ModeConflict(_)));
+        assert!(matches!(err, Error::ReadOnlyMode(_)));
     });
 }
 
