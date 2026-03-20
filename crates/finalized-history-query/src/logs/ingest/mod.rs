@@ -24,10 +24,9 @@ mod tests {
     use crate::core::ids::LogId;
     use crate::domain::keys::{
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
-        bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key,
-        bitmap_page_meta_key, block_hash_index_key, block_log_blob_key, block_log_header_key,
-        block_record_key, log_dir_bucket_key, log_dir_by_block_key, log_dir_sub_bucket_key,
-        log_local, stream_page_start_local,
+        bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key, block_hash_index_key,
+        block_log_blob_key, block_log_header_key, block_record_key, log_dir_bucket_key,
+        log_dir_by_block_key, log_dir_sub_bucket_key, log_local, stream_page_start_local,
     };
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
@@ -198,15 +197,10 @@ mod tests {
                 .expect("stream");
             let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
             let fragment = meta
-                .get(&bitmap_by_block_meta_key(&sid, first_page, block.block_num))
+                .get(&bitmap_by_block_key(&sid, first_page, block.block_num))
                 .await
-                .expect("read stream fragment meta")
-                .expect("stream fragment meta");
-            let fragment_blob = blob
-                .get_blob(&bitmap_by_block_blob_key(&sid, first_page, block.block_num))
-                .await
-                .expect("read stream fragment blob")
-                .expect("stream fragment blob");
+                .expect("read stream fragment")
+                .expect("stream fragment");
             let page_meta = meta
                 .get(&bitmap_page_meta_key(&sid, first_page))
                 .await
@@ -218,15 +212,9 @@ mod tests {
                 .expect("read stream page blob")
                 .expect("stream page blob");
 
-            assert_eq!(
-                decode_stream_bitmap_meta(&fragment.value)
-                    .expect("decode stream fragment meta")
-                    .block_num,
-                block.block_num
-            );
             assert!(
-                decode_chunk(&fragment_blob)
-                    .expect("decode fragment blob")
+                decode_chunk(&fragment.value)
+                    .expect("decode fragment")
                     .count
                     > 0
             );

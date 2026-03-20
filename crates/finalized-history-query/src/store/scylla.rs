@@ -28,7 +28,7 @@ const KNOWN_GROUPS: &[&str] = &[
     "log_dir_sub_bucket",
     "log_dir_by_block",
     "open_bitmap_page",
-    "bitmap_by_block_meta",
+    "bitmap_by_block",
     "bitmap_page_meta",
     "manifests",
     "tails",

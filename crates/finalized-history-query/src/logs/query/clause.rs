@@ -1,14 +1,14 @@
 use crate::cache::{BytesCache, NoopBytesCache};
-use crate::codec::log::decode_stream_bitmap_meta;
 use crate::core::execution::ShardBitmapSet;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
 use crate::domain::keys::{
-    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_meta_prefix, stream_id, stream_page_start_local,
+    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, stream_id, stream_page_start_local,
 };
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::streams::chunk::decode_chunk;
 
 use super::stream_bitmap::{fetch_union_log_level_with_cache, load_bitmap_page_meta, overlaps};
 
@@ -154,7 +154,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
         } else {
             let page = meta_store
                 .list_prefix(
-                    &bitmap_by_block_meta_prefix(stream_id, page_start),
+                    &bitmap_by_block_prefix(stream_id, page_start),
                     None,
                     usize::MAX,
                 )
@@ -163,7 +163,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 let Some(record) = meta_store.get(&key).await? else {
                     continue;
                 };
-                let meta = decode_stream_bitmap_meta(&record.value)?;
+                let meta = decode_chunk(&record.value)?;
                 if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
                     estimated = estimated.saturating_add(u64::from(meta.count));
                 }

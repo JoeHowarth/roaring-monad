@@ -294,14 +294,9 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
                 b"log_dir_by_block/".as_slice(),
             ),
             (
-                "bitmap_by_block_meta_put",
+                "bitmap_by_block_put",
                 FaultOp::MetaPut,
-                b"bitmap_by_block_meta/".as_slice(),
-            ),
-            (
-                "bitmap_by_block_blob_put",
-                FaultOp::BlobPut,
-                b"bitmap_by_block_blob/".as_slice(),
+                b"bitmap_by_block/".as_slice(),
             ),
             (
                 "publication_state_cas",

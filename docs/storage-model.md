@@ -31,7 +31,7 @@ The artifact write order for a block:
 3. block meta (`block_record/<block_num>`)
 4. block hash lookup (`block_hash_index/<block_hash>`)
 5. directory fragments (`log_dir_by_block/...`)
-6. stream fragments (`bitmap_by_block_meta/...`, `bitmap_by_block_blob/...`)
+6. stream fragments (`bitmap_by_block/...`)
 7. compaction (directory sub-buckets, stream pages)
 8. head advance via CAS on `publication_state`
 
@@ -118,8 +118,7 @@ A stream ID encodes the index kind, the indexed value, and the shard:
 
 | Tier | Key pattern | Scope | Written by |
 |------|------------|-------|------------|
-| Fragment meta | `bitmap_by_block_meta/<stream_id>/<page_start_local>/<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
-| Fragment blob | `bitmap_by_block_blob/<stream_id>/<page_start_local>/<block_num>` | Roaring bitmap blob for one shard-local page | Ingest |
+| By-block | `bitmap_by_block/<stream_id>/<page_start_local>/<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
 | Page meta | `bitmap_page_meta/<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
 | Page blob | `bitmap_page_blob/<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
 

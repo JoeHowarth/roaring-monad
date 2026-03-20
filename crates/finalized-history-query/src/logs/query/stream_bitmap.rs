@@ -5,8 +5,8 @@ use roaring::RoaringBitmap;
 use crate::cache::{BytesCache, TableId};
 use crate::codec::log::decode_stream_bitmap_meta;
 use crate::domain::keys::{
-    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_blob_key, bitmap_by_block_meta_prefix,
-    bitmap_page_blob_key, bitmap_page_meta_key, stream_page_start_local,
+    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, bitmap_page_blob_key, bitmap_page_meta_key,
+    stream_page_start_local,
 };
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
@@ -166,7 +166,7 @@ pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
 
 async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
     meta_store: &M,
-    blob_store: &B,
+    _blob_store: &B,
     stream: &str,
     page_start: u32,
     local_from: u32,
@@ -175,7 +175,7 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let page = meta_store
         .list_prefix(
-            &bitmap_by_block_meta_prefix(stream, page_start),
+            &bitmap_by_block_prefix(stream, page_start),
             None,
             usize::MAX,
         )
@@ -184,47 +184,24 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
         let Some(record) = meta_store.get(&key).await? else {
             continue;
         };
-        let meta = decode_stream_bitmap_meta(&record.value)?;
-        if !overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+        let _block_num = read_u64_suffix(&key)?;
+        let chunk = decode_chunk(&record.value)?;
+        if !overlaps(chunk.min_local, chunk.max_local, local_from, local_to) {
             continue;
         }
-        let block_num = read_u64_suffix(&key)?;
-        let _ = maybe_merge_bitmap_blob(
-            blob_store,
-            &bitmap_by_block_blob_key(stream, page_start, block_num),
-            out,
-            local_from,
-            local_to,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn maybe_merge_bitmap_blob<B: BlobStore>(
-    blob_store: &B,
-    key: &[u8],
-    out: &mut RoaringBitmap,
-    local_from: u32,
-    local_to: u32,
-) -> Result<bool> {
-    let Some(bytes) = blob_store.get_blob(key).await? else {
-        return Ok(false);
-    };
-    let chunk = decode_chunk(&bytes)?;
-    if is_full_shard_range(local_from, local_to)
-        || (chunk.min_local >= local_from && chunk.max_local <= local_to)
-    {
-        *out |= &chunk.bitmap;
-        return Ok(true);
-    }
-
-    for value in chunk.bitmap {
-        if value >= local_from && value <= local_to {
-            out.insert(value);
+        if is_full_shard_range(local_from, local_to)
+            || (chunk.min_local >= local_from && chunk.max_local <= local_to)
+        {
+            *out |= &chunk.bitmap;
+            continue;
+        }
+        for value in chunk.bitmap {
+            if value >= local_from && value <= local_to {
+                out.insert(value);
+            }
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, C: BytesCache>(
@@ -321,10 +298,7 @@ mod tests {
 
     use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
     use crate::codec::log::encode_stream_bitmap_meta;
-    use crate::domain::keys::{
-        bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key,
-        bitmap_page_meta_key,
-    };
+    use crate::domain::keys::{bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key};
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -421,23 +395,12 @@ mod tests {
             };
 
             meta.put(
-                &bitmap_by_block_meta_key(stream, page_start, block_num),
-                encode_stream_bitmap_meta(&StreamBitmapMeta {
-                    block_num,
-                    count: 1,
-                    min_local: 11,
-                    max_local: 11,
-                }),
+                &bitmap_by_block_key(stream, page_start, block_num),
+                encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
                 PutCond::Any,
             )
             .await
-            .expect("write stream fragment meta");
-            blob.put_blob(
-                &bitmap_by_block_blob_key(stream, page_start, block_num),
-                encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
-            )
-            .await
-            .expect("write stream fragment blob");
+            .expect("write stream fragment");
 
             meta.put(
                 &bitmap_page_meta_key(stream, page_start),

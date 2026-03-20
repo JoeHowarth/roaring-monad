@@ -178,8 +178,7 @@ Directory metadata:
 Stream index metadata/blob pairs:
 
 - `open_bitmap_page/<shard>/<page_start_local>/<stream_id> -> marker`
-- `bitmap_by_block_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
-- `bitmap_by_block_blob/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
+- `bitmap_by_block/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
 - `bitmap_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
 - `bitmap_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
 

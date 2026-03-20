@@ -5,7 +5,7 @@ use roaring::RoaringBitmap;
 use crate::codec::log::encode_stream_bitmap_meta;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key, bitmap_page_meta_key,
+    bitmap_by_block_key, bitmap_by_block_prefix, bitmap_page_blob_key, bitmap_page_meta_key,
     log_local, log_shard, stream_id, stream_page_start_local,
 };
 use crate::domain::types::StreamBitmapMeta;
@@ -54,7 +54,7 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
 
 pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     meta_store: &M,
-    blob_store: &B,
+    _blob_store: &B,
     block: &Block,
     first_log_id: u64,
     epoch: u64,
@@ -72,12 +72,6 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
             let count = bitmap.len() as u32;
             let min_local = bitmap.min().unwrap_or(page_start);
             let max_local = bitmap.max().unwrap_or(page_start);
-            let meta = StreamBitmapMeta {
-                block_num: block.block_num,
-                count,
-                min_local,
-                max_local,
-            };
             let chunk = ChunkBlob {
                 min_local,
                 max_local,
@@ -88,15 +82,9 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 
             put_artifact_meta(
                 meta_store,
-                &bitmap_by_block_meta_key(&stream, page_start, block.block_num),
-                encode_stream_bitmap_meta(&meta),
-                epoch,
-            )
-            .await?;
-            put_artifact_blob(
-                blob_store,
-                &bitmap_by_block_blob_key(&stream, page_start, block.block_num),
+                &bitmap_by_block_key(&stream, page_start, block.block_num),
                 encode_chunk(&chunk)?,
+                epoch,
             )
             .await?;
             touched_pages.insert((stream.clone(), page_start));
@@ -132,21 +120,18 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
 ) -> Result<bool> {
     let page = meta_store
         .list_prefix(
-            &crate::domain::keys::bitmap_by_block_meta_prefix(stream_id, page_start),
+            &bitmap_by_block_prefix(stream_id, page_start),
             None,
             usize::MAX,
         )
         .await?;
     let mut merged = RoaringBitmap::new();
     for key in page.keys {
-        let block_num = read_u64_suffix(&key)?;
-        let Some(blob) = blob_store
-            .get_blob(&bitmap_by_block_blob_key(stream_id, page_start, block_num))
-            .await?
-        else {
+        let _block_num = read_u64_suffix(&key)?;
+        let Some(record) = meta_store.get(&key).await? else {
             continue;
         };
-        merged |= &decode_chunk(&blob)?.bitmap;
+        merged |= &decode_chunk(&record.value)?.bitmap;
     }
     if merged.is_empty() {
         return Ok(false);

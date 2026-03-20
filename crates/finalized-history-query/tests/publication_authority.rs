@@ -11,8 +11,8 @@ use finalized_history_query::codec::finalized_state::{
 use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{
-    PUBLICATION_STATE_KEY, bitmap_by_block_blob_key, bitmap_by_block_meta_key, block_log_blob_key,
-    block_record_key, log_dir_by_block_key, stream_id, stream_page_start_local,
+    PUBLICATION_STATE_KEY, bitmap_by_block_key, block_log_blob_key, block_record_key,
+    log_dir_by_block_key, stream_id, stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
@@ -81,17 +81,9 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&bitmap_by_block_meta_key(&sid, page_start, 1))
+                .get(&bitmap_by_block_key(&sid, page_start, 1))
                 .await
-                .expect("stream fragment meta get")
-                .is_some()
-        );
-        assert!(
-            svc.ingest
-                .blob_store
-                .get_blob(&bitmap_by_block_blob_key(&sid, page_start, 1))
-                .await
-                .expect("stream fragment blob get")
+                .expect("stream fragment get")
                 .is_some()
         );
     });

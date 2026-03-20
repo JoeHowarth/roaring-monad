@@ -41,7 +41,7 @@ For each block in the batch:
 3. **Block meta** — `block_record/<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
 4. **Block hash index** — `block_hash_index/<block_hash>`: reverse lookup
 5. **Directory fragments** — one `log_dir_by_block/<sub_bucket_start>/<block_num>` per covered sub-bucket
-6. **Stream fragments** — `bitmap_by_block_meta/...` and `bitmap_by_block_blob/...` per stream per page touched
+6. **Stream fragments** — `bitmap_by_block/...` per stream per page touched
 
 All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary.
 
@@ -58,7 +58,7 @@ See [storage-model.md](storage-model.md) for directory layout details.
 
 When `next_log_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
 
-1. load all `bitmap_by_block_meta` and `bitmap_by_block_blob` entries for the page
+1. load all `bitmap_by_block` entries for the page
 2. merge the roaring bitmaps
 3. write compacted `bitmap_page_meta` and `bitmap_page_blob`
 4. delete the `open_bitmap_page` marker for the sealed page
