@@ -112,14 +112,6 @@ impl BlobStore for CountingBlobStore {
         self.inner.put_blob(key, value).await
     }
 
-    async fn put_blob_if_absent(
-        &self,
-        key: &[u8],
-        value: Bytes,
-    ) -> Result<finalized_history_query::store::traits::CreateOutcome> {
-        self.inner.put_blob_if_absent(key, value).await
-    }
-
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
         if key.starts_with(b"block_log_blob/") {
             self.counters.get_blob_calls.fetch_add(1, Ordering::Relaxed);

@@ -26,7 +26,6 @@ The `BlobStore` trait provides unversioned object storage with range reads:
 ```rust
 pub trait BlobStore: Send + Sync {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
-    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome>;
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
     async fn read_range(&self, key: &[u8], start: u64, end_exclusive: u64) -> Result<Option<Bytes>>;
     async fn delete_blob(&self, key: &[u8]) -> Result<()>;
@@ -35,6 +34,10 @@ pub trait BlobStore: Send + Sync {
 ```
 
 `read_range` has a default implementation that loads the full blob and slices locally. Backends with native range-read support can override this.
+
+Normal artifact writes use unconditional blob puts. Immutability is a
+convention enforced by writer behavior and rollout discipline rather
+than a blob-store create-if-absent requirement.
 
 ## PublicationStore
 
@@ -92,7 +95,7 @@ This distributes load across partitions while keeping related keys in the same g
 
 ### CAS operations
 
-`PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions. `PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and conflicts in telemetry.
+`PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions. `PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and conflicts in telemetry. Normal artifact writes now use unconditional puts on the write path; conditional writes remain for publication-state CAS and any callers that still need them.
 
 ### Retry policy
 
@@ -104,6 +107,5 @@ S3-compatible object storage implementation for `BlobStore`.
 
 - Objects are stored under `<object_prefix>/<group>/<hex_key>`
 - Bucket is auto-created if it doesn't exist
-- `put_blob_if_absent` is not implemented (returns `Unsupported`)
 - `list_prefix` uses S3 `ListObjectsV2` with continuation tokens
 - Retryable errors use the same exponential backoff pattern as Scylla

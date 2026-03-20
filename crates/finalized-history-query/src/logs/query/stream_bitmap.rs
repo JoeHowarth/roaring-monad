@@ -380,14 +380,6 @@ mod tests {
             self.inner.put_blob(key, value).await
         }
 
-        async fn put_blob_if_absent(
-            &self,
-            key: &[u8],
-            value: Bytes,
-        ) -> crate::Result<crate::store::traits::CreateOutcome> {
-            self.inner.put_blob_if_absent(key, value).await
-        }
-
         async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
             if key == self.target_key.as_slice() {
                 self.get_blob_count.fetch_add(1, Ordering::Relaxed);

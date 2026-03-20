@@ -10,7 +10,7 @@ use crate::domain::types::DirBucket;
 use crate::error::{Error, Result};
 use crate::store::traits::MetaStore;
 
-use super::artifact::{ImmutableClass, put_immutable_meta};
+use super::artifact::put_artifact_meta;
 
 pub async fn compact_sealed_directory<M: MetaStore>(
     meta_store: &M,
@@ -132,12 +132,11 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
         start_block: fragments[0].block_num,
         first_log_ids,
     };
-    put_immutable_meta(
+    put_artifact_meta(
         meta_store,
         &log_dir_sub_bucket_key(sub_bucket_start),
         encode_log_dir_bucket(&bucket),
         epoch,
-        ImmutableClass::Summary,
     )
     .await?;
     Ok(())
@@ -205,7 +204,7 @@ async fn compact_directory_bucket<M: MetaStore>(
     let mut first_log_ids = boundaries.into_values().collect::<Vec<_>>();
     first_log_ids.push(sentinel);
 
-    put_immutable_meta(
+    put_artifact_meta(
         meta_store,
         &log_dir_bucket_key(bucket_start),
         encode_log_dir_bucket(&DirBucket {
@@ -213,7 +212,6 @@ async fn compact_directory_bucket<M: MetaStore>(
             first_log_ids,
         }),
         epoch,
-        ImmutableClass::Summary,
     )
     .await?;
     Ok(())

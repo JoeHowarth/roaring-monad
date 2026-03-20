@@ -50,7 +50,6 @@ pub trait MetaStore: Send + Sync {
 #[allow(async_fn_in_trait)]
 pub trait BlobStore: Send + Sync {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
-    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome>;
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
     async fn read_range(
         &self,
@@ -77,10 +76,4 @@ pub trait BlobStore: Send + Sync {
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CreateOutcome {
-    Created,
-    AlreadyExists,
 }

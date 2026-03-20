@@ -40,10 +40,10 @@ For each block in the batch:
 2. **Block log header** — `block_log_header/<block_num>`: byte offset table for local ordinals
 3. **Block meta** — `block_record/<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
 4. **Block hash index** — `block_hash_index/<block_hash>`: reverse lookup
-5. **Directory fragments** — one immutable `log_dir_by_block/<sub_bucket_start>/<block_num>` per covered sub-bucket
+5. **Directory fragments** — one `log_dir_by_block/<sub_bucket_start>/<block_num>` per covered sub-bucket
 6. **Stream fragments** — `bitmap_by_block_meta/...` and `bitmap_by_block_blob/...` per stream per page touched
 
-All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md).
+All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary.
 
 ## Directory Compaction
 

@@ -20,7 +20,7 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
 use futures::executor::block_on;
 
@@ -154,11 +154,6 @@ impl BlobStore for FaultyBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
         self.injector.maybe_fail(FaultOp::BlobPut, key)?;
         self.inner.put_blob(key, value).await
-    }
-
-    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome> {
-        self.injector.maybe_fail(FaultOp::BlobPut, key)?;
-        self.inner.put_blob_if_absent(key, value).await
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
@@ -376,7 +371,7 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
 }
 
 #[test]
-fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
+fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() {
     block_on(async {
         let injector = Arc::new(FaultInjector::default());
         let meta = Arc::new(InMemoryMetaStore::default());
@@ -482,11 +477,10 @@ fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
                 mk_log(7, 10, 23, 2, 0, 3),
             ],
         );
-        let err = takeover_writer
+        takeover_writer
             .ingest_finalized_block(retry_block)
             .await
-            .expect_err("retry with different immutable artifacts should conflict");
-        assert!(matches!(err, Error::ArtifactConflict));
+            .expect("retry should overwrite unpublished artifacts");
 
         let plan = startup_plan(
             &takeover_writer.ingest.meta_store,
@@ -495,6 +489,8 @@ fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
         )
         .await
         .expect("post conflict startup plan");
-        assert_eq!(plan.head_state.indexed_finalized_head, 1);
+        assert_eq!(plan.head_state.indexed_finalized_head, 2);
+        let items = query_range(&takeover_writer, 2, 2).await;
+        assert_eq!(items.len(), 4);
     });
 }

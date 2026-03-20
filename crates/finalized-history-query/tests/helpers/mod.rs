@@ -13,7 +13,7 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
 
@@ -298,14 +298,6 @@ pub struct CountingBlobStore {
 impl BlobStore for CountingBlobStore {
     async fn put_blob(&self, key: &[u8], value: Bytes) -> finalized_history_query::Result<()> {
         self.inner.put_blob(key, value).await
-    }
-
-    async fn put_blob_if_absent(
-        &self,
-        key: &[u8],
-        value: Bytes,
-    ) -> finalized_history_query::Result<CreateOutcome> {
-        self.inner.put_blob_if_absent(key, value).await
     }
 
     async fn get_blob(&self, key: &[u8]) -> finalized_history_query::Result<Option<Bytes>> {

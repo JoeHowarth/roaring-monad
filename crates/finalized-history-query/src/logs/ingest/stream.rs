@@ -14,7 +14,7 @@ use crate::logs::types::Block;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::chunk::{ChunkBlob, decode_chunk, encode_chunk};
 
-use super::artifact::{ImmutableClass, put_immutable_blob, put_immutable_meta, read_u64_suffix};
+use super::artifact::{put_artifact_blob, put_artifact_meta, read_u64_suffix};
 
 pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<String, Vec<u32>> {
     let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
@@ -86,19 +86,17 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
                 bitmap,
             };
 
-            put_immutable_meta(
+            put_artifact_meta(
                 meta_store,
                 &bitmap_by_block_meta_key(&stream, page_start, block.block_num),
                 encode_stream_bitmap_meta(&meta),
                 epoch,
-                ImmutableClass::Artifact,
             )
             .await?;
-            put_immutable_blob(
+            put_artifact_blob(
                 blob_store,
                 &bitmap_by_block_blob_key(&stream, page_start, block.block_num),
                 encode_chunk(&chunk)?,
-                ImmutableClass::Artifact,
             )
             .await?;
             touched_pages.insert((stream.clone(), page_start));
@@ -171,19 +169,17 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         bitmap: merged,
     };
 
-    put_immutable_blob(
+    put_artifact_blob(
         blob_store,
         &bitmap_page_blob_key(stream_id, page_start),
         encode_chunk(&chunk)?,
-        ImmutableClass::Summary,
     )
     .await?;
-    put_immutable_meta(
+    put_artifact_meta(
         meta_store,
         &bitmap_page_meta_key(stream_id, page_start),
         encode_stream_bitmap_meta(&meta),
         epoch,
-        ImmutableClass::Summary,
     )
     .await?;
     Ok(true)

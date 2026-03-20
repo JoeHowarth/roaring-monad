@@ -11,9 +11,7 @@ use crate::codec::finalized_state::{decode_publication_state, encode_publication
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::store::publication::{CasOutcome, PublicationStore};
-use crate::store::traits::{
-    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
-};
+use crate::store::traits::{BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
@@ -291,21 +289,6 @@ impl BlobStore for FsBlobStore {
                 .map_err(|e| Error::Backend(format!("create fs blob group dir: {e}")))?;
         }
         write_file_bytes(&path, &value)
-    }
-
-    async fn put_blob_if_absent(&self, key: &[u8], value: Bytes) -> Result<CreateOutcome> {
-        let path = self.key_path(key);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::Backend(format!("create fs blob group dir: {e}")))?;
-        }
-        match write_file_bytes_create_new(&path, &value) {
-            Ok(()) => Ok(CreateOutcome::Created),
-            Err(Error::Backend(message)) if message.contains("exists") => {
-                Ok(CreateOutcome::AlreadyExists)
-            }
-            Err(error) => Err(error),
-        }
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {

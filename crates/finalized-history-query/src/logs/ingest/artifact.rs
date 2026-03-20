@@ -11,69 +11,25 @@ use crate::domain::keys::{
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, PutCond};
+use crate::store::traits::{BlobStore, MetaStore, PutCond};
 
-#[derive(Clone, Copy)]
-pub(in crate::logs) enum ImmutableClass {
-    Artifact,
-    Summary,
-}
-
-pub(in crate::logs) async fn put_immutable_meta<M: MetaStore>(
+pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
     key: &[u8],
     value: Bytes,
     epoch: u64,
-    class: ImmutableClass,
 ) -> Result<()> {
     let _ = epoch;
-    let result = meta_store
-        .put(key, value.clone(), PutCond::IfAbsent)
-        .await?;
-    if result.applied {
-        return Ok(());
-    }
-
-    let Some(existing) = meta_store.get(key).await? else {
-        return Err(Error::Backend(
-            "immutable metadata create reported existing row but row is missing".to_string(),
-        ));
-    };
-    if existing.value == value {
-        return Ok(());
-    }
-
-    match class {
-        ImmutableClass::Artifact => Err(Error::ArtifactConflict),
-        ImmutableClass::Summary => Err(Error::SummaryConflict),
-    }
+    let _ = meta_store.put(key, value, PutCond::Any).await?;
+    Ok(())
 }
 
-pub(in crate::logs) async fn put_immutable_blob<B: BlobStore>(
+pub(in crate::logs) async fn put_artifact_blob<B: BlobStore>(
     blob_store: &B,
     key: &[u8],
     value: Bytes,
-    class: ImmutableClass,
 ) -> Result<()> {
-    match blob_store.put_blob_if_absent(key, value.clone()).await? {
-        CreateOutcome::Created => Ok(()),
-        CreateOutcome::AlreadyExists => {
-            let Some(existing) = blob_store.get_blob(key).await? else {
-                return Err(Error::Backend(
-                    "immutable blob create reported existing object but object is missing"
-                        .to_string(),
-                ));
-            };
-            if existing == value {
-                Ok(())
-            } else {
-                match class {
-                    ImmutableClass::Artifact => Err(Error::ArtifactConflict),
-                    ImmutableClass::Summary => Err(Error::SummaryConflict),
-                }
-            }
-        }
-    }
+    blob_store.put_blob(key, value).await
 }
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
@@ -90,19 +46,12 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     }
 
     let (block_blob, header) = encode_block_log_blob(logs)?;
-    put_immutable_blob(
-        blob_store,
-        &block_log_blob_key(block_num),
-        block_blob,
-        ImmutableClass::Artifact,
-    )
-    .await?;
-    put_immutable_meta(
+    put_artifact_blob(blob_store, &block_log_blob_key(block_num), block_blob).await?;
+    put_artifact_meta(
         meta_store,
         &block_log_header_key(block_num),
         encode_block_log_header(&header),
         epoch,
-        ImmutableClass::Artifact,
     )
     .await?;
     Ok(())
@@ -121,21 +70,19 @@ pub async fn persist_log_block_record<M: MetaStore>(
         count: block.logs.len() as u32,
     };
 
-    put_immutable_meta(
+    put_artifact_meta(
         meta_store,
         &block_record_key(block.block_num),
         encode_block_record(&block_record),
         epoch,
-        ImmutableClass::Artifact,
     )
     .await?;
 
-    put_immutable_meta(
+    put_artifact_meta(
         meta_store,
         &block_hash_index_key(&block.block_hash),
         encode_u64(block.block_num),
         epoch,
-        ImmutableClass::Artifact,
     )
     .await?;
 
@@ -164,12 +111,11 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     let encoded_fragment = encode_dir_by_block(&fragment);
 
     loop {
-        put_immutable_meta(
+        put_artifact_meta(
             meta_store,
             &log_dir_by_block_key(sub_bucket_start, block_num),
             encoded_fragment.clone(),
             epoch,
-            ImmutableClass::Artifact,
         )
         .await?;
         if sub_bucket_start == last_sub_bucket_start {

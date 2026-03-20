@@ -64,7 +64,7 @@ mod tests {
     use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, Page, PutCond};
+    use crate::store::traits::{BlobStore, MetaStore, Page, PutCond};
     use futures::executor::block_on;
 
     struct CountingBlobStore {
@@ -76,14 +76,6 @@ mod tests {
     impl BlobStore for CountingBlobStore {
         async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
             self.inner.put_blob(key, value).await
-        }
-
-        async fn put_blob_if_absent(
-            &self,
-            key: &[u8],
-            value: Bytes,
-        ) -> crate::Result<CreateOutcome> {
-            self.inner.put_blob_if_absent(key, value).await
         }
 
         async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {

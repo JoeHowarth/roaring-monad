@@ -1,18 +1,19 @@
 # Storage Model
 
-This document describes the immutable artifact model and the block-keyed log-payload layout.
+This document describes the published artifact model and the block-keyed log-payload layout.
 
 ## Design Principles
 
 - `log_id` is the primary query and pagination identity
 - log payload bytes are stored in block-keyed objects
 - no per-log locator records — directory buckets handle `log_id -> block_num` resolution
-- published data-path artifacts are immutable once created
+- published data-path artifacts are immutable by convention
 - summaries never replace source fragments — they are acceleration artifacts
 
-## Immutable Artifact Model
+## Published Artifact Model
 
-All read-path data artifacts are immutable once published. The only shared mutable state is:
+All read-path data artifacts are treated as immutable once published. The
+only shared mutable state is:
 
 - `publication_state` — ownership, epoch, indexed finalized head
 - `open_bitmap_page/*` — write/recovery inventory markers
@@ -33,6 +34,10 @@ The artifact write order for a block:
 6. stream fragments (`bitmap_by_block_meta/...`, `bitmap_by_block_blob/...`)
 7. compaction (directory sub-buckets, stream pages)
 8. head advance via CAS on `publication_state`
+
+Writers use unconditional writes for normal artifacts. Correctness
+depends on the publication boundary and on rewrites remaining
+deterministic and reader-compatible within one artifact version/keyspace.
 
 ### Fragment Retention
 
@@ -93,8 +98,8 @@ Blocks can span bucket boundaries. When that happens, every covered bucket store
 When ingest writes block `N` with `first_log_id = X`:
 
 1. compute every covered sub-bucket from `sub_bucket(X)` through `sub_bucket(max(X, X + count - 1))`
-2. write one immutable `log_dir_by_block/<sub_bucket_start>/<block_num>` record for each covered sub-bucket
-3. once `next_log_id` crosses a sub-bucket end, compact its immutable fragments into `log_dir_sub_bucket/<sub_bucket_start>`
+2. write one `log_dir_by_block/<sub_bucket_start>/<block_num>` record for each covered sub-bucket
+3. once `next_log_id` crosses a sub-bucket end, compact its retained fragments into `log_dir_sub_bucket/<sub_bucket_start>`
 4. once `next_log_id` crosses a 1M-bucket end, optionally compact the sealed sub-buckets into `log_dir_bucket/<bucket_start>`
 
 ## Stream Layout
