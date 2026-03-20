@@ -14,10 +14,6 @@ pub enum Error {
     LeaseObservationUnavailable,
     #[error("lease lost")]
     LeaseLost,
-    #[error("immutable artifact conflict")]
-    ArtifactConflict,
-    #[error("immutable summary conflict")]
-    SummaryConflict,
     #[error("invalid finalized sequence: expected {expected}, got {got}")]
     InvalidSequence { expected: u64, got: u64 },
     #[error("invalid parent linkage")]
