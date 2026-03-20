@@ -15,7 +15,7 @@ This document describes the immutable artifact model and the block-keyed log-pay
 All read-path data artifacts are immutable once published. The only shared mutable state is:
 
 - `publication_state` — ownership, epoch, indexed finalized head
-- `open_stream_page/*` — write/recovery inventory markers
+- `open_bitmap_page/*` — write/recovery inventory markers
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.
 
@@ -25,12 +25,12 @@ All artifacts for a block must be durable before `publication_state.indexed_fina
 
 The artifact write order for a block:
 
-1. log blob (`block_logs/<block_num>`)
-2. block log header (`block_log_headers/<block_num>`)
-3. block meta (`block_meta/<block_num>`)
-4. block hash lookup (`block_hash_to_num/<block_hash>`)
-5. directory fragments (`log_dir_frag/...`)
-6. stream fragments (`stream_frag_meta/...`, `stream_frag_blob/...`)
+1. log blob (`block_log_blob/<block_num>`)
+2. block log header (`block_log_header/<block_num>`)
+3. block meta (`block_record/<block_num>`)
+4. block hash lookup (`block_hash_index/<block_hash>`)
+5. directory fragments (`log_dir_by_block/...`)
+6. stream fragments (`bitmap_by_block_meta/...`, `bitmap_by_block_blob/...`)
 7. compaction (directory sub-buckets, stream pages)
 8. head advance via CAS on `publication_state`
 
@@ -50,9 +50,9 @@ Three tiers of directory objects exist:
 
 | Tier | Key pattern | Scope | Written by |
 |------|------------|-------|------------|
-| Fragment | `log_dir_frag/<sub_bucket_start>/<block_num>` | One block's contribution to one sub-bucket | Ingest, per block |
-| Sub-bucket | `log_dir_sub/<sub_bucket_start>` | 10,000 `log_id` range | Compaction when sub-bucket seals |
-| Bucket | `log_dir/<bucket_start>` | 1,000,000 `log_id` range | Optional compaction when bucket seals |
+| Fragment | `log_dir_by_block/<sub_bucket_start>/<block_num>` | One block's contribution to one sub-bucket | Ingest, per block |
+| Sub-bucket | `log_dir_sub_bucket/<sub_bucket_start>` | 10,000 `log_id` range | Compaction when sub-bucket seals |
+| Bucket | `log_dir_bucket/<bucket_start>` | 1,000,000 `log_id` range | Optional compaction when bucket seals |
 
 Queries prefer the most compacted tier available and fall back to fragments for the frontier (recent, not-yet-compacted data).
 
@@ -60,7 +60,7 @@ Queries prefer the most compacted tier available and fall back to fragments for 
 
 A bucket is keyed by a large aligned `log_id` range (1,000,000 for full buckets, 10,000 for sub-buckets).
 
-Example key: `log_dir/120000000`
+Example key: `log_dir_bucket/120000000`
 
 Example value:
 
@@ -93,9 +93,9 @@ Blocks can span bucket boundaries. When that happens, every covered bucket store
 When ingest writes block `N` with `first_log_id = X`:
 
 1. compute every covered sub-bucket from `sub_bucket(X)` through `sub_bucket(max(X, X + count - 1))`
-2. write one immutable `log_dir_frag/<sub_bucket_start>/<block_num>` record for each covered sub-bucket
-3. once `next_log_id` crosses a sub-bucket end, compact its immutable fragments into `log_dir_sub/<sub_bucket_start>`
-4. once `next_log_id` crosses a 1M-bucket end, optionally compact the sealed sub-buckets into `log_dir/<bucket_start>`
+2. write one immutable `log_dir_by_block/<sub_bucket_start>/<block_num>` record for each covered sub-bucket
+3. once `next_log_id` crosses a sub-bucket end, compact its immutable fragments into `log_dir_sub_bucket/<sub_bucket_start>`
+4. once `next_log_id` crosses a 1M-bucket end, optionally compact the sealed sub-buckets into `log_dir_bucket/<bucket_start>`
 
 ## Stream Layout
 
@@ -113,23 +113,23 @@ A stream ID encodes the index kind, the indexed value, and the shard:
 
 | Tier | Key pattern | Scope | Written by |
 |------|------------|-------|------------|
-| Fragment meta | `stream_frag_meta/<stream_id>/<page_start_local>/<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
-| Fragment blob | `stream_frag_blob/<stream_id>/<page_start_local>/<block_num>` | Roaring bitmap blob for one shard-local page | Ingest |
-| Page meta | `stream_page_meta/<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
-| Page blob | `stream_page_blob/<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
+| Fragment meta | `bitmap_by_block_meta/<stream_id>/<page_start_local>/<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
+| Fragment blob | `bitmap_by_block_blob/<stream_id>/<page_start_local>/<block_num>` | Roaring bitmap blob for one shard-local page | Ingest |
+| Page meta | `bitmap_page_meta/<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
+| Page blob | `bitmap_page_blob/<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
 
 Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 
 ### Open-Page Markers
 
-`open_stream_page/<shard>/<page_start_local>/<stream_id>` markers track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
+`open_bitmap_page/<shard>/<page_start_local>/<stream_id>` markers track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
 
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
 - startup repair: to clean up stale markers left by interrupted ingest
 
 ## Block Headers
 
-Each block gets a small header object: `block_log_headers/<block_num> -> BlockLogHeader`
+Each block gets a small header object: `block_log_header/<block_num> -> BlockLogHeader`
 
 The header contains byte offsets for local log ordinals:
 
@@ -145,11 +145,11 @@ This means:
 - local log `1` lives at bytes `[41, 97)`
 - local log `2` lives at bytes `[97, 124)`
 
-Empty blocks do not need `block_log_headers` or `block_logs` objects. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockMeta`.
+Empty blocks do not need `block_log_header` or `block_log_blob` objects. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockRecord`.
 
 ## Block Log Objects
 
-Each block gets one payload object: `block_logs/<block_num> -> concatenated encoded log bytes`
+Each block gets one payload object: `block_log_blob/<block_num> -> concatenated encoded log bytes`
 
 Reads use byte slices via `read_range(key, start, end_exclusive)` rather than fetching the full blob.
 
@@ -160,14 +160,14 @@ For backends that do not support range reads natively, the blob-store adapter po
 Given a candidate `log_id`:
 
 1. compute `bucket_start = floor(log_id / bucket_size) * bucket_size`
-2. load `log_dir/<bucket_start>` (or `log_dir_sub/...` or fall back to fragments)
+2. load `log_dir_bucket/<bucket_start>` (or `log_dir_sub_bucket/...` or fall back to fragments)
 3. find the last index `i` where `first_log_ids[i] <= log_id`
 4. verify that `log_id < first_log_ids[i + 1]`
 5. compute `block_num = start_block + i`
 6. compute `local_ordinal = log_id - first_log_ids[i]`
-7. load cached `block_log_headers/<block_num>`
+7. load cached `block_log_header/<block_num>`
 8. read `offsets[local_ordinal]..offsets[local_ordinal + 1]`
-9. issue `read_range(block_logs/<block_num>, start, end)`
+9. issue `read_range(block_log_blob/<block_num>, start, end)`
 10. decode one log
 
 ### Worked Example
@@ -196,7 +196,7 @@ Resolve `log_id = 120000006`:
 3. `block_num = 5001 + 2 = 5003`
 4. `local_ordinal = 120000006 - 120000003 = 3`
 5. byte range is `offsets[3]..offsets[4] = 110..160`
-6. fetch bytes `[110, 160)` from `block_logs/5003`
+6. fetch bytes `[110, 160)` from `block_log_blob/5003`
 
 The duplicate `120000003` entries matter here. The lookup must choose the last index where `first_log_ids[i] <= 120000006`, not an arbitrary duplicate position.
 
@@ -212,7 +212,7 @@ The executor iterates candidate `log_id`s in ascending order, which improves cac
 
 ### Pressure Points
 
-- very large blocks produce very large `block_logs/<block_num>` objects
+- very large blocks produce very large `block_log_blob/<block_num>` objects
 - cold random point lookups can bounce across many blocks
 - too-small directory buckets create avoidable cross-bucket lookups
 
@@ -224,10 +224,10 @@ Mitigations:
 
 ## Block Metadata
 
-`BlockMeta` is the authoritative per-block sequencing record:
+`BlockRecord` is the authoritative per-block sequencing record:
 
 ```text
-block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }
+block_record/<block_num> -> BlockRecord { block_hash, parent_hash, first_log_id, count }
 ```
 
-This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate — `BlockMeta` is the authoritative per-block record for finalized-state reads; directory buckets are lookup accelerators for `log_id -> block_num`.
+This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate — `BlockRecord` is the authoritative per-block record for finalized-state reads; directory buckets are lookup accelerators for `log_id -> block_num`.

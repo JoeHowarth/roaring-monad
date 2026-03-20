@@ -1,15 +1,14 @@
 use bytes::Bytes;
 
-use crate::codec::finalized_state::{encode_block_meta, encode_u64};
-use crate::codec::log::{encode_block_log_header, encode_log, encode_log_dir_fragment};
+use crate::codec::finalized_state::{encode_block_record, encode_u64};
+use crate::codec::log::{encode_block_log_header, encode_dir_by_block, encode_log};
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_to_num_key, block_log_header_key,
-    block_logs_blob_key, block_meta_key, log_directory_fragment_key,
-    log_directory_sub_bucket_start,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_key, block_log_blob_key, block_log_header_key,
+    block_record_key, log_dir_by_block_key, log_dir_sub_bucket_start,
 };
-use crate::domain::types::{BlockLogHeader, BlockMeta, Log, LogDirFragment};
+use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
 use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, PutCond};
@@ -90,10 +89,10 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
         return Ok(());
     }
 
-    let (block_blob, header) = encode_block_logs(logs)?;
+    let (block_blob, header) = encode_block_log_blob(logs)?;
     put_immutable_blob(
         blob_store,
-        &block_logs_blob_key(block_num),
+        &block_log_blob_key(block_num),
         block_blob,
         ImmutableClass::Artifact,
     )
@@ -109,13 +108,13 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     Ok(())
 }
 
-pub async fn persist_log_block_metadata<M: MetaStore>(
+pub async fn persist_log_block_record<M: MetaStore>(
     meta_store: &M,
     block: &Block,
     first_log_id: u64,
     epoch: u64,
 ) -> Result<()> {
-    let block_meta = BlockMeta {
+    let block_record = BlockRecord {
         block_hash: block.block_hash,
         parent_hash: block.parent_hash,
         first_log_id,
@@ -124,8 +123,8 @@ pub async fn persist_log_block_metadata<M: MetaStore>(
 
     put_immutable_meta(
         meta_store,
-        &block_meta_key(block.block_num),
-        encode_block_meta(&block_meta),
+        &block_record_key(block.block_num),
+        encode_block_record(&block_record),
         epoch,
         ImmutableClass::Artifact,
     )
@@ -133,7 +132,7 @@ pub async fn persist_log_block_metadata<M: MetaStore>(
 
     put_immutable_meta(
         meta_store,
-        &block_hash_to_num_key(&block.block_hash),
+        &block_hash_index_key(&block.block_hash),
         encode_u64(block.block_num),
         epoch,
         ImmutableClass::Artifact,
@@ -143,31 +142,31 @@ pub async fn persist_log_block_metadata<M: MetaStore>(
     Ok(())
 }
 
-pub async fn persist_log_directory_fragments<M: MetaStore>(
+pub async fn persist_log_dir_by_block<M: MetaStore>(
     meta_store: &M,
     block_num: u64,
     first_log_id: u64,
     count: u32,
     epoch: u64,
 ) -> Result<()> {
-    let fragment = LogDirFragment {
+    let fragment = DirByBlock {
         block_num,
         first_log_id,
         end_log_id_exclusive: first_log_id.saturating_add(u64::from(count)),
     };
 
-    let mut sub_bucket_start = log_directory_sub_bucket_start(LogId::new(first_log_id));
+    let mut sub_bucket_start = log_dir_sub_bucket_start(LogId::new(first_log_id));
     let last_sub_bucket_start = if count == 0 {
         sub_bucket_start
     } else {
-        log_directory_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
+        log_dir_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
     };
-    let encoded_fragment = encode_log_dir_fragment(&fragment);
+    let encoded_fragment = encode_dir_by_block(&fragment);
 
     loop {
         put_immutable_meta(
             meta_store,
-            &log_directory_fragment_key(sub_bucket_start, block_num),
+            &log_dir_by_block_key(sub_bucket_start, block_num),
             encoded_fragment.clone(),
             epoch,
             ImmutableClass::Artifact,
@@ -182,7 +181,7 @@ pub async fn persist_log_directory_fragments<M: MetaStore>(
     Ok(())
 }
 
-fn encode_block_logs(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
+fn encode_block_log_blob(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
     let mut out = Vec::<u8>::new();
     let mut offsets = Vec::with_capacity(logs.len() + 1);
     for log in logs {

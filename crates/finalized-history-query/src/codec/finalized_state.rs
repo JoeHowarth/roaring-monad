@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockMeta, PublicationState};
+use crate::domain::types::{BlockRecord, PublicationState};
 use crate::error::{Error, Result};
 
 const PUBLICATION_STATE_VERSION: u8 = 3;
@@ -43,7 +43,7 @@ pub fn decode_publication_state(bytes: &[u8]) -> Result<PublicationState> {
     })
 }
 
-pub fn encode_block_meta(meta: &BlockMeta) -> Bytes {
+pub fn encode_block_record(meta: &BlockRecord) -> Bytes {
     let mut out = Vec::with_capacity(76);
     out.extend_from_slice(&meta.block_hash);
     out.extend_from_slice(&meta.parent_hash);
@@ -52,9 +52,9 @@ pub fn encode_block_meta(meta: &BlockMeta) -> Bytes {
     Bytes::from(out)
 }
 
-pub fn decode_block_meta(bytes: &[u8]) -> Result<BlockMeta> {
+pub fn decode_block_record(bytes: &[u8]) -> Result<BlockRecord> {
     if bytes.len() != 76 {
-        return Err(Error::Decode("invalid block_meta length"));
+        return Err(Error::Decode("invalid block_record length"));
     }
     let mut block_hash = [0u8; 32];
     let mut parent_hash = [0u8; 32];
@@ -65,7 +65,7 @@ pub fn decode_block_meta(bytes: &[u8]) -> Result<BlockMeta> {
     let mut count = [0u8; 4];
     count.copy_from_slice(&bytes[72..76]);
 
-    Ok(BlockMeta {
+    Ok(BlockRecord {
         block_hash,
         parent_hash,
         first_log_id: u64::from_be_bytes(first_log_id),
@@ -91,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_publication_state_and_block_meta() {
+    fn roundtrip_publication_state_and_block_record() {
         let publication_state = PublicationState {
             owner_id: 8,
             session_id: [7u8; 16],
@@ -105,13 +105,13 @@ mod tests {
             publication_state
         );
 
-        let meta = BlockMeta {
+        let meta = BlockRecord {
             block_hash: [1u8; 32],
             parent_hash: [2u8; 32],
             first_log_id: 77,
             count: 99,
         };
-        let dec_meta = decode_block_meta(&encode_block_meta(&meta)).expect("decode meta");
+        let dec_meta = decode_block_record(&encode_block_record(&meta)).expect("decode meta");
         assert_eq!(dec_meta.first_log_id, meta.first_log_id);
         assert_eq!(dec_meta.count, meta.count);
         assert_eq!(dec_meta.block_hash, meta.block_hash);

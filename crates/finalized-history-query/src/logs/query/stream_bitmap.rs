@@ -5,8 +5,8 @@ use roaring::RoaringBitmap;
 use crate::cache::{BytesCache, TableId};
 use crate::codec::log::decode_stream_bitmap_meta;
 use crate::domain::keys::{
-    STREAM_PAGE_LOCAL_ID_SPAN, stream_fragment_blob_key, stream_fragment_meta_prefix,
-    stream_page_blob_key, stream_page_meta_key, stream_page_start_local,
+    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_blob_key, bitmap_by_block_meta_prefix,
+    bitmap_page_blob_key, bitmap_page_meta_key, stream_page_start_local,
 };
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
@@ -130,26 +130,26 @@ pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     let last_page_start = stream_page_start_local(local_to);
 
     loop {
-        if let Some(meta) = load_stream_page_meta(meta_store, cache, stream, page_start).await? {
+        if let Some(meta) = load_bitmap_page_meta(meta_store, cache, stream, page_start).await? {
             if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
                 let loaded_page_blob = maybe_merge_cached_bitmap_blob(
                     blob_store,
                     cache,
-                    &stream_page_blob_key(stream, page_start),
+                    &bitmap_page_blob_key(stream, page_start),
                     &mut out,
                     local_from,
                     local_to,
                 )
                 .await?;
                 if !loaded_page_blob {
-                    load_stream_fragment_entries_for_page(
+                    load_bitmap_by_block_entries_for_page(
                         meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
                     )
                     .await?;
                 }
             }
         } else {
-            load_stream_fragment_entries_for_page(
+            load_bitmap_by_block_entries_for_page(
                 meta_store, blob_store, stream, page_start, local_from, local_to, &mut out,
             )
             .await?;
@@ -164,7 +164,7 @@ pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     Ok(out)
 }
 
-async fn load_stream_fragment_entries_for_page<M: MetaStore, B: BlobStore>(
+async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     stream: &str,
@@ -175,7 +175,7 @@ async fn load_stream_fragment_entries_for_page<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let page = meta_store
         .list_prefix(
-            &stream_fragment_meta_prefix(stream, page_start),
+            &bitmap_by_block_meta_prefix(stream, page_start),
             None,
             usize::MAX,
         )
@@ -191,7 +191,7 @@ async fn load_stream_fragment_entries_for_page<M: MetaStore, B: BlobStore>(
         let block_num = read_u64_suffix(&key)?;
         let _ = maybe_merge_bitmap_blob(
             blob_store,
-            &stream_fragment_blob_key(stream, page_start, block_num),
+            &bitmap_by_block_blob_key(stream, page_start, block_num),
             out,
             local_from,
             local_to,
@@ -227,14 +227,14 @@ async fn maybe_merge_bitmap_blob<B: BlobStore>(
     Ok(true)
 }
 
-pub(in crate::logs) async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
+pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, C: BytesCache>(
     meta_store: &M,
     cache: &C,
     stream: &str,
     page_start: u32,
 ) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
-    let key = stream_page_meta_key(stream, page_start);
-    if let Some(bytes) = cache.get(TableId::StreamPageMeta, &key) {
+    let key = bitmap_page_meta_key(stream, page_start);
+    if let Some(bytes) = cache.get(TableId::BitmapPageMeta, &key) {
         return Ok(Some(decode_stream_bitmap_meta(&bytes)?));
     }
 
@@ -242,7 +242,7 @@ pub(in crate::logs) async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
         return Ok(None);
     };
     cache.put(
-        TableId::StreamPageMeta,
+        TableId::BitmapPageMeta,
         &key,
         record.value.clone(),
         record.value.len(),
@@ -250,19 +250,19 @@ pub(in crate::logs) async fn load_stream_page_meta<M: MetaStore, C: BytesCache>(
     Ok(Some(decode_stream_bitmap_meta(&record.value)?))
 }
 
-async fn load_stream_page_blob<B: BlobStore, C: BytesCache>(
+async fn load_bitmap_page_blob<B: BlobStore, C: BytesCache>(
     blob_store: &B,
     cache: &C,
     key: &[u8],
 ) -> Result<Option<Bytes>> {
-    if let Some(bytes) = cache.get(TableId::StreamPageBlobs, key) {
+    if let Some(bytes) = cache.get(TableId::BitmapPageBlobs, key) {
         return Ok(Some(bytes));
     }
 
     let Some(bytes) = blob_store.get_blob(key).await? else {
         return Ok(None);
     };
-    cache.put(TableId::StreamPageBlobs, key, bytes.clone(), bytes.len());
+    cache.put(TableId::BitmapPageBlobs, key, bytes.clone(), bytes.len());
     Ok(Some(bytes))
 }
 
@@ -274,7 +274,7 @@ async fn maybe_merge_cached_bitmap_blob<B: BlobStore, C: BytesCache>(
     local_from: u32,
     local_to: u32,
 ) -> Result<bool> {
-    let Some(bytes) = load_stream_page_blob(blob_store, cache, key).await? else {
+    let Some(bytes) = load_bitmap_page_blob(blob_store, cache, key).await? else {
         return Ok(false);
     };
     let chunk = decode_chunk(&bytes)?;
@@ -322,8 +322,8 @@ mod tests {
     use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
     use crate::codec::log::encode_stream_bitmap_meta;
     use crate::domain::keys::{
-        stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
-        stream_page_meta_key,
+        bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key,
+        bitmap_page_meta_key,
     };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
@@ -429,7 +429,7 @@ mod tests {
             };
 
             meta.put(
-                &stream_fragment_meta_key(stream, page_start, block_num),
+                &bitmap_by_block_meta_key(stream, page_start, block_num),
                 encode_stream_bitmap_meta(&StreamBitmapMeta {
                     block_num,
                     count: 1,
@@ -441,14 +441,14 @@ mod tests {
             .await
             .expect("write stream fragment meta");
             blob.put_blob(
-                &stream_fragment_blob_key(stream, page_start, block_num),
+                &bitmap_by_block_blob_key(stream, page_start, block_num),
                 encode_chunk(&fragment_chunk).expect("encode fragment chunk"),
             )
             .await
             .expect("write stream fragment blob");
 
             meta.put(
-                &stream_page_meta_key(stream, page_start),
+                &bitmap_page_meta_key(stream, page_start),
                 encode_stream_bitmap_meta(&StreamBitmapMeta {
                     block_num: 0,
                     count: 1,
@@ -470,12 +470,12 @@ mod tests {
     }
 
     #[test]
-    fn load_stream_entries_reuses_cached_stream_page_meta_and_blob() {
+    fn load_stream_entries_reuses_cached_bitmap_page_meta_and_blob() {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = stream_page_meta_key(stream, page_start);
-            let blob_key = stream_page_blob_key(stream, page_start);
+            let meta_key = bitmap_page_meta_key(stream, page_start);
+            let blob_key = bitmap_page_blob_key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
             let inner_blob = InMemoryBlobStore::default();
@@ -524,10 +524,10 @@ mod tests {
                 get_blob_count: blob_gets.clone(),
             };
             let cache = HashMapBytesCache::new(BytesCacheConfig {
-                stream_page_meta: TableCacheConfig {
+                bitmap_page_meta: TableCacheConfig {
                     max_bytes: 4 * 1024,
                 },
-                stream_page_blobs: TableCacheConfig {
+                bitmap_page_blobs: TableCacheConfig {
                     max_bytes: 4 * 1024,
                 },
                 ..BytesCacheConfig::disabled()
@@ -551,8 +551,8 @@ mod tests {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = stream_page_meta_key(stream, page_start);
-            let blob_key = stream_page_blob_key(stream, page_start);
+            let meta_key = bitmap_page_meta_key(stream, page_start);
+            let blob_key = bitmap_page_blob_key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
             let inner_blob = InMemoryBlobStore::default();
@@ -601,7 +601,7 @@ mod tests {
                 get_blob_count: blob_gets.clone(),
             };
             let cache = HashMapBytesCache::new(BytesCacheConfig {
-                stream_page_meta: TableCacheConfig {
+                bitmap_page_meta: TableCacheConfig {
                     max_bytes: 4 * 1024,
                 },
                 ..BytesCacheConfig::disabled()

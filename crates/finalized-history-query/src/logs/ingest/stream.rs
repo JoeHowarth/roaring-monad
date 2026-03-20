@@ -5,8 +5,8 @@ use roaring::RoaringBitmap;
 use crate::codec::log::encode_stream_bitmap_meta;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    log_local, log_shard, stream_fragment_blob_key, stream_fragment_meta_key, stream_id,
-    stream_page_blob_key, stream_page_meta_key, stream_page_start_local,
+    bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key, bitmap_page_meta_key,
+    log_local, log_shard, stream_id, stream_page_start_local,
 };
 use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
@@ -88,7 +88,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 
             put_immutable_meta(
                 meta_store,
-                &stream_fragment_meta_key(&stream, page_start, block.block_num),
+                &bitmap_by_block_meta_key(&stream, page_start, block.block_num),
                 encode_stream_bitmap_meta(&meta),
                 epoch,
                 ImmutableClass::Artifact,
@@ -96,7 +96,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
             .await?;
             put_immutable_blob(
                 blob_store,
-                &stream_fragment_blob_key(&stream, page_start, block.block_num),
+                &bitmap_by_block_blob_key(&stream, page_start, block.block_num),
                 encode_chunk(&chunk)?,
                 ImmutableClass::Artifact,
             )
@@ -134,7 +134,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
 ) -> Result<bool> {
     let page = meta_store
         .list_prefix(
-            &crate::domain::keys::stream_fragment_meta_prefix(stream_id, page_start),
+            &crate::domain::keys::bitmap_by_block_meta_prefix(stream_id, page_start),
             None,
             usize::MAX,
         )
@@ -143,7 +143,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     for key in page.keys {
         let block_num = read_u64_suffix(&key)?;
         let Some(blob) = blob_store
-            .get_blob(&stream_fragment_blob_key(stream_id, page_start, block_num))
+            .get_blob(&bitmap_by_block_blob_key(stream_id, page_start, block_num))
             .await?
         else {
             continue;
@@ -173,14 +173,14 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
 
     put_immutable_blob(
         blob_store,
-        &stream_page_blob_key(stream_id, page_start),
+        &bitmap_page_blob_key(stream_id, page_start),
         encode_chunk(&chunk)?,
         ImmutableClass::Summary,
     )
     .await?;
     put_immutable_meta(
         meta_store,
-        &stream_page_meta_key(stream_id, page_start),
+        &bitmap_page_meta_key(stream_id, page_start),
         encode_stream_bitmap_meta(&meta),
         epoch,
         ImmutableClass::Summary,

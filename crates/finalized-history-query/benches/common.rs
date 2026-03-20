@@ -10,11 +10,11 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::cache::{BytesCacheConfig, NoopBytesCache, TableCacheConfig};
 use finalized_history_query::codec::finalized_state::{
-    encode_block_meta, encode_publication_state,
+    encode_block_record, encode_publication_state,
 };
 use finalized_history_query::codec::log::validate_log;
 use finalized_history_query::codec::log::{
-    encode_block_log_header, encode_log, encode_log_directory_bucket,
+    encode_block_log_header, encode_log, encode_log_dir_bucket,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
@@ -23,11 +23,11 @@ use finalized_history_query::core::ids::{
 };
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
-    MAX_LOCAL_ID, PUBLICATION_STATE_KEY, block_log_header_key, block_logs_blob_key, block_meta_key,
-    log_directory_bucket_key, log_directory_bucket_start, stream_id,
+    MAX_LOCAL_ID, PUBLICATION_STATE_KEY, block_log_blob_key, block_log_header_key,
+    block_record_key, log_dir_bucket_key, log_dir_bucket_start, stream_id,
 };
 use finalized_history_query::domain::types::{
-    Block, BlockMeta, Log, LogDirectoryBucket, PublicationState,
+    Block, BlockRecord, DirBucket, Log, PublicationState,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -121,7 +121,7 @@ impl BlobStore for CountingBlobStore {
     }
 
     async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if key.starts_with(b"block_logs/") {
+        if key.starts_with(b"block_log_blob/") {
             self.counters.get_blob_calls.fetch_add(1, Ordering::Relaxed);
         }
         self.inner.get_blob(key).await
@@ -133,7 +133,7 @@ impl BlobStore for CountingBlobStore {
         start: u64,
         end_exclusive: u64,
     ) -> Result<Option<Bytes>> {
-        if key.starts_with(b"block_logs/") {
+        if key.starts_with(b"block_log_blob/") {
             self.counters
                 .read_range_calls
                 .fetch_add(1, Ordering::Relaxed);
@@ -230,9 +230,9 @@ pub fn build_counting_service() -> (CountingBenchService, Arc<BlobAccessCounters
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
             planner_max_or_terms: 256,
             bytes_cache: BytesCacheConfig {
-                block_log_headers: TableCacheConfig { max_bytes: 1 << 20 },
-                log_directory_buckets: TableCacheConfig { max_bytes: 1 << 20 },
-                log_directory_sub_buckets: TableCacheConfig { max_bytes: 1 << 20 },
+                block_log_header: TableCacheConfig { max_bytes: 1 << 20 },
+                log_dir_buckets: TableCacheConfig { max_bytes: 1 << 20 },
+                log_dir_sub_buckets: TableCacheConfig { max_bytes: 1 << 20 },
                 point_log_payloads: TableCacheConfig { max_bytes: 4 << 20 },
                 ..BytesCacheConfig::disabled()
             },
@@ -628,8 +628,8 @@ pub fn seed_materialized_blocks(
 
             put_meta_record(
                 meta_store,
-                &block_meta_key(block.block_num),
-                encode_block_meta(&BlockMeta {
+                &block_record_key(block.block_num),
+                encode_block_record(&BlockRecord {
                     block_hash,
                     parent_hash,
                     first_log_id: block.first_log_id,
@@ -648,7 +648,7 @@ pub fn seed_materialized_blocks(
                 )
                 .await;
                 blob_store
-                    .put_blob(&block_logs_blob_key(block.block_num), Bytes::from(payload))
+                    .put_blob(&block_log_blob_key(block.block_num), Bytes::from(payload))
                     .await
                     .expect("put block blob");
             }
@@ -656,8 +656,8 @@ pub fn seed_materialized_blocks(
             let count = block.logs.len() as u64;
             let end_exclusive = block.first_log_id.saturating_add(count);
             let last_covered_id = end_exclusive.saturating_sub(1);
-            let mut bucket_start = log_directory_bucket_start(LogId::new(block.first_log_id));
-            let last_bucket_start = log_directory_bucket_start(LogId::new(last_covered_id));
+            let mut bucket_start = log_dir_bucket_start(LogId::new(block.first_log_id));
+            let last_bucket_start = log_dir_bucket_start(LogId::new(last_covered_id));
             loop {
                 bucket_entries.entry(bucket_start).or_default().push((
                     block.block_num,
@@ -690,8 +690,8 @@ pub fn seed_materialized_blocks(
             );
             put_meta_record(
                 meta_store,
-                &log_directory_bucket_key(bucket_start),
-                encode_log_directory_bucket(&LogDirectoryBucket {
+                &log_dir_bucket_key(bucket_start),
+                encode_log_dir_bucket(&DirBucket {
                     start_block,
                     first_log_ids,
                 }),

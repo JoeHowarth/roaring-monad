@@ -22,55 +22,55 @@ pub fn read_u64_be(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(out))
 }
 
-pub fn log_directory_bucket_start(global_log_id: LogId) -> u64 {
+pub fn log_dir_bucket_start(global_log_id: LogId) -> u64 {
     (global_log_id.get() / LOG_DIRECTORY_BUCKET_SIZE) * LOG_DIRECTORY_BUCKET_SIZE
 }
 
-pub fn log_directory_sub_bucket_start(global_log_id: LogId) -> u64 {
+pub fn log_dir_sub_bucket_start(global_log_id: LogId) -> u64 {
     (global_log_id.get() / LOG_DIRECTORY_SUB_BUCKET_SIZE) * LOG_DIRECTORY_SUB_BUCKET_SIZE
 }
 
-pub fn log_directory_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_dir/".to_vec();
+pub fn log_dir_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir_bucket/".to_vec();
     k.extend_from_slice(&u64_be(bucket_start_log_id));
     k
 }
 
-pub fn log_directory_prefix() -> &'static [u8] {
-    b"log_dir/"
+pub fn log_dir_bucket_prefix() -> &'static [u8] {
+    b"log_dir_bucket/"
 }
 
-pub fn log_directory_sub_bucket_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_dir_sub/".to_vec();
+pub fn log_dir_sub_bucket_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir_sub_bucket/".to_vec();
     k.extend_from_slice(&u64_be(sub_bucket_start_log_id));
     k
 }
 
-pub fn log_directory_fragment_key(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
-    let mut k = log_directory_fragment_prefix(sub_bucket_start_log_id);
+pub fn log_dir_by_block_key(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
+    let mut k = log_dir_by_block_prefix(sub_bucket_start_log_id);
     k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn log_directory_fragment_prefix(sub_bucket_start_log_id: u64) -> Vec<u8> {
-    let mut k = b"log_dir_frag/".to_vec();
+pub fn log_dir_by_block_prefix(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = b"log_dir_by_block/".to_vec();
     k.extend_from_slice(&u64_be(sub_bucket_start_log_id));
     k.push(b'/');
     k
 }
 
 pub fn block_log_header_key(block_num: u64) -> Vec<u8> {
-    let mut k = b"block_log_headers/".to_vec();
+    let mut k = b"block_log_header/".to_vec();
     k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn block_log_headers_prefix() -> &'static [u8] {
-    b"block_log_headers/"
+pub fn block_log_header_prefix() -> &'static [u8] {
+    b"block_log_header/"
 }
 
-pub fn block_logs_blob_key(block_num: u64) -> Vec<u8> {
-    let mut k = b"block_logs/".to_vec();
+pub fn block_log_blob_key(block_num: u64) -> Vec<u8> {
+    let mut k = b"block_log_blob/".to_vec();
     k.extend_from_slice(&u64_be(block_num));
     k
 }
@@ -82,14 +82,14 @@ pub fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8
     k
 }
 
-pub fn block_meta_key(block_num: u64) -> Vec<u8> {
-    let mut k = b"block_meta/".to_vec();
+pub fn block_record_key(block_num: u64) -> Vec<u8> {
+    let mut k = b"block_record/".to_vec();
     k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn block_hash_to_num_key(hash: &[u8; 32]) -> Vec<u8> {
-    let mut k = b"block_hash_to_num/".to_vec();
+pub fn block_hash_index_key(hash: &[u8; 32]) -> Vec<u8> {
+    let mut k = b"block_hash_index/".to_vec();
     k.extend_from_slice(hash);
     k
 }
@@ -130,63 +130,63 @@ pub fn local_range_for_shard(
     (local_from, local_to)
 }
 
-pub fn stream_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("stream_page_meta/{stream_id}/").into_bytes();
+pub fn bitmap_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("bitmap_page_meta/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k
 }
 
-pub fn stream_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("stream_page_blob/{stream_id}/").into_bytes();
+pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("bitmap_page_blob/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k
 }
 
-pub fn open_stream_page_key(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
-    let mut k = open_stream_page_shard_page_prefix(shard, page_start_local);
+pub fn open_bitmap_page_key(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_page_prefix(shard, page_start_local);
     k.extend_from_slice(stream_id.as_bytes());
     k
 }
 
-pub fn open_stream_page_prefix() -> &'static [u8] {
-    b"open_stream_page/"
+pub fn open_bitmap_page_prefix() -> &'static [u8] {
+    b"open_bitmap_page/"
 }
 
-pub fn open_stream_page_shard_prefix(shard: LogShard) -> Vec<u8> {
-    let mut k = open_stream_page_prefix().to_vec();
+pub fn open_bitmap_page_shard_prefix(shard: LogShard) -> Vec<u8> {
+    let mut k = open_bitmap_page_prefix().to_vec();
     k.extend_from_slice(&u64_be(shard.get()));
     k.push(b'/');
     k
 }
 
-pub fn open_stream_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
-    let mut k = open_stream_page_shard_prefix(shard);
+pub fn open_bitmap_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_prefix(shard);
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k
 }
 
-pub fn stream_fragment_meta_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
-    let mut k = stream_fragment_meta_prefix(stream_id, page_start_local);
+pub fn bitmap_by_block_meta_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
+    let mut k = bitmap_by_block_meta_prefix(stream_id, page_start_local);
     k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn stream_fragment_blob_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
-    let mut k = stream_fragment_blob_prefix(stream_id, page_start_local);
+pub fn bitmap_by_block_blob_key(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
+    let mut k = bitmap_by_block_blob_prefix(stream_id, page_start_local);
     k.extend_from_slice(&u64_be(block_num));
     k
 }
 
-pub fn stream_fragment_meta_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("stream_frag_meta/{stream_id}/").into_bytes();
+pub fn bitmap_by_block_meta_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("bitmap_by_block_meta/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k
 }
 
-pub fn stream_fragment_blob_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("stream_frag_blob/{stream_id}/").into_bytes();
+pub fn bitmap_by_block_blob_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("bitmap_by_block_blob/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k
@@ -268,21 +268,21 @@ mod tests {
     }
 
     #[test]
-    fn log_directory_bucket_start_aligns_to_bucket_size() {
-        assert_eq!(log_directory_bucket_start(LogId::new(0)), 0);
-        assert_eq!(log_directory_bucket_start(LogId::new(123)), 0);
+    fn log_dir_bucket_start_aligns_to_bucket_size() {
+        assert_eq!(log_dir_bucket_start(LogId::new(0)), 0);
+        assert_eq!(log_dir_bucket_start(LogId::new(123)), 0);
         assert_eq!(
-            log_directory_bucket_start(LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17)),
+            log_dir_bucket_start(LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17)),
             LOG_DIRECTORY_BUCKET_SIZE
         );
     }
 
     #[test]
-    fn log_directory_sub_bucket_start_aligns_to_sub_bucket_size() {
-        assert_eq!(log_directory_sub_bucket_start(LogId::new(0)), 0);
-        assert_eq!(log_directory_sub_bucket_start(LogId::new(123)), 0);
+    fn log_dir_sub_bucket_start_aligns_to_sub_bucket_size() {
+        assert_eq!(log_dir_sub_bucket_start(LogId::new(0)), 0);
+        assert_eq!(log_dir_sub_bucket_start(LogId::new(123)), 0);
         assert_eq!(
-            log_directory_sub_bucket_start(LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17)),
+            log_dir_sub_bucket_start(LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17)),
             LOG_DIRECTORY_SUB_BUCKET_SIZE
         );
     }

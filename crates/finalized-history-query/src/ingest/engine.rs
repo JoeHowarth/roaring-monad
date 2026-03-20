@@ -4,12 +4,12 @@ use crate::domain::types::{Block, IngestOutcome};
 use crate::error::{Error, Result};
 use crate::ingest::authority::{WriteAuthority, WriteToken};
 use crate::ingest::open_pages::{
-    OpenStreamPage, collect_newly_sealed_open_stream_pages, delete_open_stream_page,
-    mark_open_stream_page_if_absent,
+    OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
+    mark_open_bitmap_page_if_absent,
 };
 use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
-    persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
+    persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
 };
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -63,7 +63,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
         let from_next_log_id =
             derive_next_log_id(&self.meta_store, token.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
-        let mut opened_during = Vec::<OpenStreamPage>::new();
+        let mut opened_during = Vec::<OpenBitmapPage>::new();
         let epoch = token.epoch;
 
         for block in blocks {
@@ -77,8 +77,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
                 epoch,
             )
             .await?;
-            persist_log_block_metadata(&self.meta_store, block, next_log_id, epoch).await?;
-            persist_log_directory_fragments(
+            persist_log_block_record(&self.meta_store, block, next_log_id, epoch).await?;
+            persist_log_dir_by_block(
                 &self.meta_store,
                 block.block_num,
                 next_log_id,
@@ -96,7 +96,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             .await?;
             opened_during.extend(touched_pages.into_iter().filter_map(
                 |(stream_id, page_start)| {
-                    parse_stream_shard(&stream_id).map(|shard| OpenStreamPage {
+                    parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
                         shard,
                         page_start_local: page_start,
                         stream_id,
@@ -110,13 +110,13 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id))
         {
-            mark_open_stream_page_if_absent(&self.meta_store, page).await?;
+            mark_open_bitmap_page_if_absent(&self.meta_store, page).await?;
         }
 
         compact_newly_sealed_directory(&self.meta_store, from_next_log_id, next_log_id, epoch)
             .await?;
 
-        for page in collect_newly_sealed_open_stream_pages(
+        for page in collect_newly_sealed_open_bitmap_pages(
             &self.meta_store,
             &opened_during,
             from_next_log_id,
@@ -132,7 +132,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
                 epoch,
             )
             .await?;
-            delete_open_stream_page(&self.meta_store, &page).await?;
+            delete_open_bitmap_page(&self.meta_store, &page).await?;
         }
 
         let publish_token = self

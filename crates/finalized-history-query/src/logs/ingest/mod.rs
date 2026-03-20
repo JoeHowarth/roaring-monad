@@ -3,8 +3,7 @@ mod compaction;
 mod stream;
 
 pub use artifact::{
-    parse_stream_shard, persist_log_artifacts, persist_log_block_metadata,
-    persist_log_directory_fragments,
+    parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
 };
 pub use compaction::{
     compact_newly_sealed_directory, compact_sealed_directory, newly_sealed_directory_bucket_starts,
@@ -18,21 +17,21 @@ pub use stream::{
 #[cfg(test)]
 mod tests {
     use crate::codec::log::{
-        decode_block_log_header, decode_log, decode_log_dir_fragment, decode_log_directory_bucket,
+        decode_block_log_header, decode_dir_by_block, decode_log, decode_log_dir_bucket,
         decode_stream_bitmap_meta, encode_log,
     };
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
-        block_hash_to_num_key, block_log_header_key, block_logs_blob_key, block_meta_key,
-        log_directory_bucket_key, log_directory_fragment_key, log_directory_sub_bucket_key,
-        log_local, stream_fragment_blob_key, stream_fragment_meta_key, stream_page_blob_key,
-        stream_page_meta_key, stream_page_start_local,
+        bitmap_by_block_blob_key, bitmap_by_block_meta_key, bitmap_page_blob_key,
+        bitmap_page_meta_key, block_hash_index_key, block_log_blob_key, block_log_header_key,
+        block_record_key, log_dir_bucket_key, log_dir_by_block_key, log_dir_sub_bucket_key,
+        log_local, stream_page_start_local,
     };
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
-        persist_log_block_metadata, persist_log_directory_fragments, persist_stream_fragments,
+        persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
     };
     use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
@@ -78,7 +77,7 @@ mod tests {
                 .expect("persist artifacts");
 
             let block_blob = blob
-                .get_blob(&block_logs_blob_key(7))
+                .get_blob(&block_log_blob_key(7))
                 .await
                 .expect("read block blob")
                 .expect("block blob present");
@@ -106,13 +105,13 @@ mod tests {
     }
 
     #[test]
-    fn persist_log_directory_fragments_and_compaction_cover_spanning_block() {
+    fn persist_log_dir_by_block_and_compaction_cover_spanning_block() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let first_log_id = crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
-            persist_log_directory_fragments(&meta, 700, first_log_id, count, 3)
+            persist_log_dir_by_block(&meta, 700, first_log_id, count, 3)
                 .await
                 .expect("persist fragments");
             compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
@@ -120,12 +119,12 @@ mod tests {
                 .expect("compact directory");
 
             let fragment0 = meta
-                .get(&log_directory_fragment_key(0, 700))
+                .get(&log_dir_by_block_key(0, 700))
                 .await
                 .expect("read fragment0")
                 .expect("fragment0");
             let fragment1 = meta
-                .get(&log_directory_fragment_key(
+                .get(&log_dir_by_block_key(
                     crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     700,
                 ))
@@ -133,25 +132,25 @@ mod tests {
                 .expect("read fragment1")
                 .expect("fragment1");
             let sub_bucket = meta
-                .get(&log_directory_sub_bucket_key(0))
+                .get(&log_dir_sub_bucket_key(0))
                 .await
                 .expect("read sub bucket")
                 .expect("sub bucket");
 
             assert_eq!(
-                decode_log_dir_fragment(&fragment0.value)
+                decode_dir_by_block(&fragment0.value)
                     .expect("decode fragment0")
                     .block_num,
                 700
             );
             assert_eq!(
-                decode_log_dir_fragment(&fragment1.value)
+                decode_dir_by_block(&fragment1.value)
                     .expect("decode fragment1")
                     .end_log_id_exclusive,
                 first_log_id + count as u64
             );
             assert_eq!(
-                decode_log_directory_bucket(&sub_bucket.value)
+                decode_log_dir_bucket(&sub_bucket.value)
                     .expect("decode sub bucket")
                     .first_log_ids,
                 vec![first_log_id, first_log_id + count as u64]
@@ -199,22 +198,22 @@ mod tests {
                 .expect("stream");
             let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
             let fragment = meta
-                .get(&stream_fragment_meta_key(&sid, first_page, block.block_num))
+                .get(&bitmap_by_block_meta_key(&sid, first_page, block.block_num))
                 .await
                 .expect("read stream fragment meta")
                 .expect("stream fragment meta");
             let fragment_blob = blob
-                .get_blob(&stream_fragment_blob_key(&sid, first_page, block.block_num))
+                .get_blob(&bitmap_by_block_blob_key(&sid, first_page, block.block_num))
                 .await
                 .expect("read stream fragment blob")
                 .expect("stream fragment blob");
             let page_meta = meta
-                .get(&stream_page_meta_key(&sid, first_page))
+                .get(&bitmap_page_meta_key(&sid, first_page))
                 .await
                 .expect("read stream page meta")
                 .expect("stream page meta");
             let page_blob = blob
-                .get_blob(&stream_page_blob_key(&sid, first_page))
+                .get_blob(&bitmap_page_blob_key(&sid, first_page))
                 .await
                 .expect("read stream page blob")
                 .expect("stream page blob");
@@ -247,23 +246,23 @@ mod tests {
     }
 
     #[test]
-    fn persist_log_block_metadata_writes_block_meta_and_hash_index() {
+    fn persist_log_block_record_writes_block_record_and_hash_index() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
 
-            persist_log_block_metadata(&meta, &block, 33, 7)
+            persist_log_block_record(&meta, &block, 33, 7)
                 .await
                 .expect("persist block metadata");
 
             assert!(
-                meta.get(&block_meta_key(9))
+                meta.get(&block_record_key(9))
                     .await
                     .expect("block meta")
                     .is_some()
             );
             assert!(
-                meta.get(&block_hash_to_num_key(&block.block_hash))
+                meta.get(&block_hash_index_key(&block.block_hash))
                     .await
                     .expect("hash index")
                     .is_some()
@@ -278,7 +277,7 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
             let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
-            persist_log_directory_fragments(&meta, 700, first_log_id, count, 3)
+            persist_log_dir_by_block(&meta, 700, first_log_id, count, 3)
                 .await
                 .expect("persist fragments");
             compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
@@ -286,12 +285,11 @@ mod tests {
                 .expect("compact directory");
 
             let bucket = meta
-                .get(&log_directory_bucket_key(0))
+                .get(&log_dir_bucket_key(0))
                 .await
                 .expect("directory bucket")
                 .expect("directory bucket present");
-            let bucket =
-                decode_log_directory_bucket(&bucket.value).expect("decode directory bucket");
+            let bucket = decode_log_dir_bucket(&bucket.value).expect("decode directory bucket");
             assert_eq!(bucket.start_block, 700);
             assert_eq!(
                 bucket.first_log_ids,

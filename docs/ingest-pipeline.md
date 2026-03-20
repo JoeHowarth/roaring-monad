@@ -8,18 +8,18 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 async def ingest_finalized_blocks(blocks, lease):
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
 
-    first_log_id = derive_next_log_id_from_block_meta(lease.indexed_finalized_head)
+    first_log_id = derive_next_log_id_from_block_record(lease.indexed_finalized_head)
     next_log_id = first_log_id
     opened_during = []
 
     for block in blocks:
         await logs.persist_log_artifacts(block.logs, next_log_id)
-        await logs.persist_log_block_metadata(block, next_log_id)
-        await logs.persist_log_directory_fragments(block, next_log_id)
+        await logs.persist_log_block_record(block, next_log_id)
+        await logs.persist_log_dir_by_block(block, next_log_id)
         opened_during.extend(await logs.persist_stream_fragments(block, next_log_id))
         next_log_id += len(block.logs)
 
-    await mark_open_stream_pages_that_remain_open(opened_during, next_log_id)
+    await mark_open_bitmap_pages_that_remain_open(opened_during, next_log_id)
 
     await logs.compact_newly_sealed_directory_boundaries(first_log_id, next_log_id)
     await seal_newly_sealed_stream_pages(first_log_id, next_log_id, opened_during)
@@ -36,12 +36,12 @@ The `IngestEngine` orchestrates this flow. It validates finalized sequencing and
 
 For each block in the batch:
 
-1. **Log blob** — `block_logs/<block_num>`: concatenated encoded log bytes
-2. **Block log header** — `block_log_headers/<block_num>`: byte offset table for local ordinals
-3. **Block meta** — `block_meta/<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
-4. **Block hash index** — `block_hash_to_num/<block_hash>`: reverse lookup
-5. **Directory fragments** — one immutable `log_dir_frag/<sub_bucket_start>/<block_num>` per covered sub-bucket
-6. **Stream fragments** — `stream_frag_meta/...` and `stream_frag_blob/...` per stream per page touched
+1. **Log blob** — `block_log_blob/<block_num>`: concatenated encoded log bytes
+2. **Block log header** — `block_log_header/<block_num>`: byte offset table for local ordinals
+3. **Block meta** — `block_record/<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
+4. **Block hash index** — `block_hash_index/<block_hash>`: reverse lookup
+5. **Directory fragments** — one immutable `log_dir_by_block/<sub_bucket_start>/<block_num>` per covered sub-bucket
+6. **Stream fragments** — `bitmap_by_block_meta/...` and `bitmap_by_block_blob/...` per stream per page touched
 
 All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md).
 
@@ -49,8 +49,8 @@ All artifacts must be durable before the head advance — see the publication or
 
 After all blocks in the batch are persisted, sealed directory boundaries are compacted:
 
-- **Sub-bucket compaction**: when `next_log_id` crosses a sub-bucket boundary (10,000 `log_id` range), the sealed sub-bucket's fragments are compacted into `log_dir_sub/<sub_bucket_start>`
-- **Bucket compaction**: when `next_log_id` crosses a 1M-bucket boundary, the sealed sub-buckets are optionally compacted into `log_dir/<bucket_start>`
+- **Sub-bucket compaction**: when `next_log_id` crosses a sub-bucket boundary (10,000 `log_id` range), the sealed sub-bucket's fragments are compacted into `log_dir_sub_bucket/<sub_bucket_start>`
+- **Bucket compaction**: when `next_log_id` crosses a 1M-bucket boundary, the sealed sub-buckets are optionally compacted into `log_dir_bucket/<bucket_start>`
 
 See [storage-model.md](storage-model.md) for directory layout details.
 
@@ -58,14 +58,14 @@ See [storage-model.md](storage-model.md) for directory layout details.
 
 When `next_log_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
 
-1. load all `stream_frag_meta` and `stream_frag_blob` entries for the page
+1. load all `bitmap_by_block_meta` and `bitmap_by_block_blob` entries for the page
 2. merge the roaring bitmaps
-3. write compacted `stream_page_meta` and `stream_page_blob`
-4. delete the `open_stream_page` marker for the sealed page
+3. write compacted `bitmap_page_meta` and `bitmap_page_blob`
+4. delete the `open_bitmap_page` marker for the sealed page
 
 ## Open-Page Markers
 
-`open_stream_page/<shard>/<page_start_local>/<stream_id>` markers serve two purposes:
+`open_bitmap_page/<shard>/<page_start_local>/<stream_id>` markers serve two purposes:
 
 ### During ingest
 

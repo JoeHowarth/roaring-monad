@@ -62,7 +62,7 @@ Test doubles backed by in-memory collections.
 File-system backed stores for local development and testing.
 
 - Keys are hex-encoded into file paths under a `meta/` or `blob/` root directory
-- Keys are grouped by the prefix before the first `/` (e.g., `block_meta/...` goes into the `block_meta` group directory)
+- Keys are grouped by the prefix before the first `/` (e.g., `block_record/...` goes into the `block_record` group directory)
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
 - `PublicationStore` CAS operations are serialized via a per-path mutex to prevent races
@@ -85,7 +85,7 @@ Two metadata tables are created:
 
 Keys are partitioned by:
 
-1. **Group** — derived from the key prefix before the first `/` (e.g., `block_meta`, `log_dir_sub`)
+1. **Group** — derived from the key prefix before the first `/` (e.g., `block_record`, `log_dir_sub_bucket`)
 2. **Bucket** — FNV-1a hash of the full key modulo 256
 
 This distributes load across partitions while keeping related keys in the same group for efficient prefix listing.

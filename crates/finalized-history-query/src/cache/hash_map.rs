@@ -79,16 +79,12 @@ impl HashMapBytesCache {
     pub fn metrics_snapshot(&self) -> BytesCacheMetrics {
         let guard = self.inner.lock().unwrap();
         BytesCacheMetrics {
-            block_log_headers: table_metrics(&guard.tables[TableId::BlockLogHeaders.as_index()]),
-            log_directory_buckets: table_metrics(
-                &guard.tables[TableId::LogDirectoryBuckets.as_index()],
-            ),
-            log_directory_sub_buckets: table_metrics(
-                &guard.tables[TableId::LogDirectorySubBuckets.as_index()],
-            ),
+            block_log_header: table_metrics(&guard.tables[TableId::BlockLogHeaders.as_index()]),
+            log_dir_buckets: table_metrics(&guard.tables[TableId::DirBuckets.as_index()]),
+            log_dir_sub_buckets: table_metrics(&guard.tables[TableId::LogDirSubBuckets.as_index()]),
             point_log_payloads: table_metrics(&guard.tables[TableId::PointLogPayloads.as_index()]),
-            stream_page_meta: table_metrics(&guard.tables[TableId::StreamPageMeta.as_index()]),
-            stream_page_blobs: table_metrics(&guard.tables[TableId::StreamPageBlobs.as_index()]),
+            bitmap_page_meta: table_metrics(&guard.tables[TableId::BitmapPageMeta.as_index()]),
+            bitmap_page_blobs: table_metrics(&guard.tables[TableId::BitmapPageBlobs.as_index()]),
         }
     }
 }
@@ -190,7 +186,7 @@ mod tests {
     #[test]
     fn evicts_least_recently_used_within_a_table_budget() {
         let cache = HashMapBytesCache::new(BytesCacheConfig {
-            block_log_headers: super::super::TableCacheConfig { max_bytes: 5 },
+            block_log_header: super::super::TableCacheConfig { max_bytes: 5 },
             ..BytesCacheConfig::disabled()
         });
 
@@ -213,18 +209,13 @@ mod tests {
     #[test]
     fn budgets_are_isolated_per_table() {
         let cache = HashMapBytesCache::new(BytesCacheConfig {
-            block_log_headers: super::super::TableCacheConfig { max_bytes: 2 },
-            log_directory_buckets: super::super::TableCacheConfig { max_bytes: 2 },
+            block_log_header: super::super::TableCacheConfig { max_bytes: 2 },
+            log_dir_buckets: super::super::TableCacheConfig { max_bytes: 2 },
             ..BytesCacheConfig::disabled()
         });
 
         cache.put(TableId::BlockLogHeaders, b"a", Bytes::from_static(b"aa"), 2);
-        cache.put(
-            TableId::LogDirectoryBuckets,
-            b"a",
-            Bytes::from_static(b"bb"),
-            2,
-        );
+        cache.put(TableId::DirBuckets, b"a", Bytes::from_static(b"bb"), 2);
         cache.put(TableId::BlockLogHeaders, b"b", Bytes::from_static(b"cc"), 2);
 
         assert_eq!(cache.get(TableId::BlockLogHeaders, b"a"), None);
@@ -233,7 +224,7 @@ mod tests {
             Some(Bytes::from_static(b"cc"))
         );
         assert_eq!(
-            cache.get(TableId::LogDirectoryBuckets, b"a"),
+            cache.get(TableId::DirBuckets, b"a"),
             Some(Bytes::from_static(b"bb"))
         );
     }
@@ -241,12 +232,12 @@ mod tests {
     #[test]
     fn reports_per_table_metrics() {
         let cache = HashMapBytesCache::new(BytesCacheConfig {
-            block_log_headers: super::super::TableCacheConfig { max_bytes: 3 },
+            block_log_header: super::super::TableCacheConfig { max_bytes: 3 },
             ..BytesCacheConfig::disabled()
         });
 
         assert_eq!(
-            cache.metrics_snapshot().block_log_headers,
+            cache.metrics_snapshot().block_log_header,
             TableCacheMetrics::default()
         );
 
@@ -255,7 +246,7 @@ mod tests {
         let _ = cache.get(TableId::BlockLogHeaders, b"a");
         cache.put(TableId::BlockLogHeaders, b"b", Bytes::from_static(b"bb"), 2);
 
-        let metrics = cache.metrics_snapshot().block_log_headers;
+        let metrics = cache.metrics_snapshot().block_log_header;
         assert_eq!(metrics.hits, 1);
         assert_eq!(metrics.misses, 1);
         assert_eq!(metrics.inserts, 2);

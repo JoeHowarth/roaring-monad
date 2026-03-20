@@ -142,7 +142,7 @@ class BlockIdentity:
     parent_hash: bytes32
 
 
-class BlockMeta:
+class BlockRecord:
     block_hash: bytes32
     parent_hash: bytes32
     first_log_id: int
@@ -165,29 +165,29 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 Shared metadata:
 
 - `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_valid_through_block }`
-- `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
-- `block_hash_to_num/<block_hash> -> block_num`
-- `block_log_headers/<block_num> -> BlockLogHeader { offsets }`
+- `block_record/<block_num> -> BlockRecord { block_hash, parent_hash, first_log_id, count }`
+- `block_hash_index/<block_hash> -> block_num`
+- `block_log_header/<block_num> -> BlockLogHeader { offsets }`
 
 Directory metadata:
 
-- `log_dir_frag/<sub_bucket_start>/<block_num> -> LogDirFragment { block_num, first_log_id, end_log_id_exclusive }`
-- `log_dir_sub/<sub_bucket_start> -> LogDirectoryBucket { start_block, first_log_ids }`
-- optional `log_dir/<bucket_start> -> LogDirectoryBucket { start_block, first_log_ids }`
+- `log_dir_by_block/<sub_bucket_start>/<block_num> -> DirByBlock { block_num, first_log_id, end_log_id_exclusive }`
+- `log_dir_sub_bucket/<sub_bucket_start> -> DirBucket { start_block, first_log_ids }`
+- optional `log_dir_bucket/<bucket_start> -> DirBucket { start_block, first_log_ids }`
 
 Stream index metadata/blob pairs:
 
-- `open_stream_page/<shard>/<page_start_local>/<stream_id> -> marker`
-- `stream_frag_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
-- `stream_frag_blob/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
-- `stream_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
-- `stream_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
+- `open_bitmap_page/<shard>/<page_start_local>/<stream_id> -> marker`
+- `bitmap_by_block_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
+- `bitmap_by_block_blob/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
+- `bitmap_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
+- `bitmap_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
 
 Payload blobs:
 
-- `block_logs/<block_num> -> concatenated encoded logs`
+- `block_log_blob/<block_num> -> concatenated encoded logs`
 
-Numeric key components use big-endian encoded u64. The exception is `block_hash_to_num/<block_hash>` which uses the raw 32-byte hash. Blob-store keys follow the same conventions.
+Numeric key components use big-endian encoded u64. The exception is `block_hash_index/<block_hash>` which uses the raw 32-byte hash. Blob-store keys follow the same conventions.
 
 ## Top-Level Service Boundary
 
@@ -240,7 +240,7 @@ The crate intentionally does not implement:
 
 14. `src/logs/filter.rs` — log matching semantics, indexed clauses
 15. `src/logs/types.rs` — logs-family aliases and projections
-16. `src/logs/state.rs` — `BlockMeta` helpers, log-window fields
+16. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
 17. `src/logs/window.rs` — block range to primary-ID range bridge
 18. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
 19. `src/logs/query/` — main query engine
@@ -249,7 +249,7 @@ The crate intentionally does not implement:
 ### Pass 4: Storage and codecs
 
 21. `src/domain/types.rs` — core persisted/data model structs
-22. `src/codec/finalized_state.rs` — `PublicationState`, `BlockMeta` encoding
+22. `src/codec/finalized_state.rs` — `PublicationState`, `BlockRecord` encoding
 23. `src/codec/log.rs` — log, directory bucket, block log header encodings
 24. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 

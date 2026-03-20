@@ -17,13 +17,13 @@ pub struct Log {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LogDirectoryBucket {
+pub struct DirBucket {
     pub start_block: u64,
     pub first_log_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LogDirFragment {
+pub struct DirByBlock {
     pub block_num: u64,
     pub first_log_id: u64,
     pub end_log_id_exclusive: u64,
@@ -43,7 +43,7 @@ pub struct StreamBitmapMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BlockMeta {
+pub struct BlockRecord {
     pub block_hash: Hash32,
     pub parent_hash: Hash32,
     pub first_log_id: u64,

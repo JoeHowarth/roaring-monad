@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::cache::BytesCache;
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
-use crate::domain::types::LogDirFragment;
+use crate::domain::types::DirByBlock;
 use crate::store::traits::{BlobStore, MetaStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,8 +22,8 @@ pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore, C: BytesCache> {
     range_resolver: RangeResolver,
     // directory_fragment_cache stays as a per-request HashMap because fragments
     // are assembled from multiple list_prefix + get calls (not a single stored
-    // value), and each LogDirFragment is only 25 bytes. Not worth BytesCache.
-    directory_fragment_cache: HashMap<u64, Vec<LogDirFragment>>,
+    // value), and each DirByBlock is only 25 bytes. Not worth BytesCache.
+    directory_fragment_cache: HashMap<u64, Vec<DirByBlock>>,
     // block_ref_cache remains because BlockRef is a small Copy type
     // computed from multiple sources, not a direct decode of stored bytes.
     block_ref_cache: HashMap<u64, BlockRef>,
@@ -52,16 +52,16 @@ mod tests {
 
     use crate::cache::{BytesCacheConfig, HashMapBytesCache, NoopBytesCache, TableCacheConfig};
     use crate::codec::log::{
-        encode_block_log_header, encode_log, encode_log_dir_fragment, encode_log_directory_bucket,
+        encode_block_log_header, encode_dir_by_block, encode_log, encode_log_dir_bucket,
     };
     use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_header_key,
-        block_logs_blob_key, log_directory_bucket_key, log_directory_bucket_start,
-        log_directory_fragment_key, log_directory_sub_bucket_start,
+        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_blob_key,
+        block_log_header_key, log_dir_bucket_key, log_dir_bucket_start, log_dir_by_block_key,
+        log_dir_sub_bucket_start,
     };
-    use crate::domain::types::{BlockLogHeader, Log, LogDirFragment, LogDirectoryBucket};
+    use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, Page, PutCond};
@@ -87,7 +87,7 @@ mod tests {
         }
 
         async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
-            if key.starts_with(b"block_logs/") {
+            if key.starts_with(b"block_log_blob/") {
                 self.get_blob_count.fetch_add(1, Ordering::Relaxed);
             }
             self.inner.get_blob(key).await
@@ -99,7 +99,7 @@ mod tests {
             start: u64,
             end_exclusive: u64,
         ) -> crate::Result<Option<Bytes>> {
-            if key.starts_with(b"block_logs/") {
+            if key.starts_with(b"block_log_blob/") {
                 self.read_range_count.fetch_add(1, Ordering::Relaxed);
             }
             self.inner.read_range(key, start, end_exclusive).await
@@ -127,8 +127,8 @@ mod tests {
             let cache = NoopBytesCache;
 
             meta.put(
-                &log_directory_bucket_key(0),
-                encode_log_directory_bucket(&LogDirectoryBucket {
+                &log_dir_bucket_key(0),
+                encode_log_dir_bucket(&DirBucket {
                     start_block: 700,
                     first_log_ids: vec![11, 13],
                 }),
@@ -161,8 +161,8 @@ mod tests {
             let cache = NoopBytesCache;
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.put(
-                &log_directory_fragment_key(log_directory_sub_bucket_start(log_id), 700),
-                encode_log_dir_fragment(&LogDirFragment {
+                &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), 700),
+                encode_dir_by_block(&DirByBlock {
                     block_num: 700,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
@@ -198,8 +198,8 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
-                &log_directory_bucket_key(log_directory_bucket_start(log_id)),
-                encode_log_directory_bucket(&LogDirectoryBucket {
+                &log_dir_bucket_key(log_dir_bucket_start(log_id)),
+                encode_log_dir_bucket(&DirBucket {
                     start_block: 700,
                     first_log_ids: vec![
                         first_log_id,
@@ -256,8 +256,8 @@ mod tests {
             let encoded = encode_log(&log);
 
             meta.put(
-                &log_directory_fragment_key(log_directory_sub_bucket_start(log_id), block_num),
-                encode_log_dir_fragment(&LogDirFragment {
+                &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), block_num),
+                encode_dir_by_block(&DirByBlock {
                     block_num,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
@@ -275,7 +275,7 @@ mod tests {
             )
             .await
             .expect("write block log header");
-            blob.put_blob(&block_logs_blob_key(block_num), encoded.clone())
+            blob.put_blob(&block_log_blob_key(block_num), encoded.clone())
                 .await
                 .expect("write block log blob");
 
@@ -361,7 +361,7 @@ mod tests {
             )
             .await
             .expect("write block log header");
-            blob.put_blob(&block_logs_blob_key(block_num), Bytes::from(blob_bytes))
+            blob.put_blob(&block_log_blob_key(block_num), Bytes::from(blob_bytes))
                 .await
                 .expect("write block log blob");
 

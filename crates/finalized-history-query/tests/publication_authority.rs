@@ -6,15 +6,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::codec::finalized_state::{
-    decode_publication_state, encode_block_meta,
+    decode_publication_state, encode_block_record,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{
-    PUBLICATION_STATE_KEY, block_logs_blob_key, block_meta_key, log_directory_fragment_key,
-    stream_fragment_blob_key, stream_fragment_meta_key, stream_id, stream_page_start_local,
+    PUBLICATION_STATE_KEY, bitmap_by_block_blob_key, bitmap_by_block_meta_key, block_log_blob_key,
+    block_record_key, log_dir_by_block_key, stream_id, stream_page_start_local,
 };
-use finalized_history_query::domain::types::BlockMeta;
+use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -66,7 +66,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&log_directory_fragment_key(0, 1))
+                .get(&log_dir_by_block_key(0, 1))
                 .await
                 .expect("directory fragment get")
                 .is_some()
@@ -81,7 +81,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&stream_fragment_meta_key(&sid, page_start, 1))
+                .get(&bitmap_by_block_meta_key(&sid, page_start, 1))
                 .await
                 .expect("stream fragment meta get")
                 .is_some()
@@ -89,7 +89,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .blob_store
-                .get_blob(&stream_fragment_blob_key(&sid, page_start, 1))
+                .get_blob(&bitmap_by_block_blob_key(&sid, page_start, 1))
                 .await
                 .expect("stream fragment blob get")
                 .is_some()
@@ -166,8 +166,8 @@ fn readers_use_only_publication_state() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(3),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(3),
+            encode_block_record(&BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
                 first_log_id: 9,
@@ -279,7 +279,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         assert!(
             engine
                 .meta_store
-                .get(&block_meta_key(1))
+                .get(&block_record_key(1))
                 .await
                 .expect("read block meta")
                 .is_none(),
@@ -288,7 +288,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         assert!(
             engine
                 .blob_store
-                .get_blob(&block_logs_blob_key(1))
+                .get_blob(&block_log_blob_key(1))
                 .await
                 .expect("read block blob")
                 .is_none(),

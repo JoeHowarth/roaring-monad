@@ -202,13 +202,13 @@ impl std::fmt::Debug for BlockLogHeaderRef {
 ///   count:         u32 BE
 ///   first_log_ids: count * u64 BE
 #[derive(Clone)]
-pub struct LogDirectoryBucketRef {
+pub struct DirBucketRef {
     buf: Bytes,
     start_block: u64,
     count: u32,
 }
 
-impl LogDirectoryBucketRef {
+impl DirBucketRef {
     pub fn new(buf: Bytes) -> Result<Self> {
         if buf.len() < 1 + 8 + 4 + 8 {
             return Err(Error::Decode("log directory bucket too short"));
@@ -270,9 +270,9 @@ impl LogDirectoryBucketRef {
     }
 }
 
-impl std::fmt::Debug for LogDirectoryBucketRef {
+impl std::fmt::Debug for DirBucketRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LogDirectoryBucketRef")
+        f.debug_struct("DirBucketRef")
             .field("start_block", &self.start_block)
             .field("count", &self.count)
             .finish()
@@ -446,17 +446,16 @@ mod tests {
     }
 
     #[test]
-    fn log_directory_bucket_ref_roundtrip() {
-        use crate::codec::log::encode_log_directory_bucket;
-        use crate::domain::types::LogDirectoryBucket;
+    fn log_dir_bucket_ref_roundtrip() {
+        use crate::codec::log::encode_log_dir_bucket;
+        use crate::domain::types::DirBucket;
 
-        let bucket = LogDirectoryBucket {
+        let bucket = DirBucket {
             start_block: 5001,
             first_log_ids: vec![120_000_000, 120_000_003, 120_000_003, 120_000_008],
         };
-        let encoded = encode_log_directory_bucket(&bucket);
-        let bucket_ref =
-            LogDirectoryBucketRef::new(encoded).expect("construct LogDirectoryBucketRef");
+        let encoded = encode_log_dir_bucket(&bucket);
+        let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");
         assert_eq!(bucket_ref.start_block(), bucket.start_block);
         assert_eq!(bucket_ref.count(), bucket.first_log_ids.len());
         for (i, &expected) in bucket.first_log_ids.iter().enumerate() {
@@ -465,17 +464,16 @@ mod tests {
     }
 
     #[test]
-    fn log_directory_bucket_ref_partition_point() {
-        use crate::codec::log::encode_log_directory_bucket;
-        use crate::domain::types::LogDirectoryBucket;
+    fn log_dir_bucket_ref_partition_point() {
+        use crate::codec::log::encode_log_dir_bucket;
+        use crate::domain::types::DirBucket;
 
-        let bucket = LogDirectoryBucket {
+        let bucket = DirBucket {
             start_block: 0,
             first_log_ids: vec![10, 20, 30, 40],
         };
-        let encoded = encode_log_directory_bucket(&bucket);
-        let bucket_ref =
-            LogDirectoryBucketRef::new(encoded).expect("construct LogDirectoryBucketRef");
+        let encoded = encode_log_dir_bucket(&bucket);
+        let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");
 
         // partition_point with <= 25 should return 2 (ids 10, 20 satisfy <= 25)
         assert_eq!(bucket_ref.partition_point(|id| id <= 25), 2);

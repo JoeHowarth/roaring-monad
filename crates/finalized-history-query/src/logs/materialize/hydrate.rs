@@ -3,10 +3,10 @@ use crate::codec::log_ref::{BlockLogHeaderRef, LogRef};
 use crate::core::execution::PrimaryMaterializer;
 use crate::core::ids::LogId;
 use crate::core::refs::BlockRef;
-use crate::domain::keys::{block_log_header_key, block_logs_blob_key, point_log_payload_cache_key};
+use crate::domain::keys::{block_log_blob_key, block_log_header_key, point_log_payload_cache_key};
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
-use crate::logs::state::load_log_block_meta;
+use crate::logs::state::load_log_block_record;
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::LogMaterializer;
@@ -85,7 +85,7 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
         let Some(run_bytes) = self
             .blob_store
             .read_range(
-                &block_logs_blob_key(block_num),
+                &block_log_blob_key(block_num),
                 u64::from(start),
                 u64::from(end),
             )
@@ -167,13 +167,14 @@ impl<M: MetaStore, B: BlobStore, C: BytesCache> PrimaryMaterializer
         {
             block_ref
         } else {
-            let Some(block_meta) = load_log_block_meta(self.meta_store, block_num).await? else {
+            let Some(block_record) = load_log_block_record(self.meta_store, block_num).await?
+            else {
                 return Err(Error::NotFound);
             };
             BlockRef {
                 number: block_num,
                 hash: *item.block_hash(),
-                parent_hash: block_meta.parent_hash,
+                parent_hash: block_record.parent_hash,
             }
         };
         self.block_ref_cache.insert(block_num, block_ref);

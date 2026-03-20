@@ -1,9 +1,9 @@
 use crate::core::ids::LogId;
-use crate::domain::types::BlockMeta;
+use crate::domain::types::BlockRecord;
 
 pub use crate::domain::types::PublicationState;
 pub use crate::domain::types::{
-    Block, BlockLogHeader, HealthReport, IngestOutcome, Log, LogDirectoryBucket,
+    Block, BlockLogHeader, DirBucket, HealthReport, IngestOutcome, Log,
 };
 
 pub type Hash32 = [u8; 32];
@@ -21,8 +21,8 @@ pub struct LogBlockWindow {
     pub count: u32,
 }
 
-impl From<&BlockMeta> for LogBlockWindow {
-    fn from(value: &BlockMeta) -> Self {
+impl From<&BlockRecord> for LogBlockWindow {
+    fn from(value: &BlockRecord) -> Self {
         Self {
             first_log_id: LogId::new(value.first_log_id),
             count: value.count,

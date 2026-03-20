@@ -6,7 +6,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_meta_key};
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
 use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;

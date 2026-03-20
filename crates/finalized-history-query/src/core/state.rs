@@ -1,7 +1,7 @@
-use crate::codec::finalized_state::decode_block_meta;
+use crate::codec::finalized_state::decode_block_record;
 use crate::core::refs::BlockRef;
-use crate::domain::keys::block_meta_key;
-use crate::domain::types::{BlockMeta, PublicationState};
+use crate::domain::keys::block_record_key;
+use crate::domain::types::{BlockRecord, PublicationState};
 use crate::error::{Error, Result};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::MetaStore;
@@ -38,8 +38,8 @@ impl BlockIdentity {
     }
 }
 
-impl From<(u64, &BlockMeta)> for BlockIdentity {
-    fn from((number, meta): (u64, &BlockMeta)) -> Self {
+impl From<(u64, &BlockRecord)> for BlockIdentity {
+    fn from((number, meta): (u64, &BlockRecord)) -> Self {
         Self {
             number,
             hash: meta.block_hash,
@@ -64,11 +64,11 @@ pub async fn load_block_identity<M: MetaStore>(
     meta_store: &M,
     block_num: u64,
 ) -> Result<Option<BlockIdentity>> {
-    let Some(record) = meta_store.get(&block_meta_key(block_num)).await? else {
+    let Some(record) = meta_store.get(&block_record_key(block_num)).await? else {
         return Ok(None);
     };
-    let block_meta = decode_block_meta(&record.value)?;
-    Ok(Some(BlockIdentity::from((block_num, &block_meta))))
+    let block_record = decode_block_record(&record.value)?;
+    Ok(Some(BlockIdentity::from((block_num, &block_record))))
 }
 
 pub async fn derive_next_log_id<M: MetaStore>(
@@ -80,23 +80,23 @@ pub async fn derive_next_log_id<M: MetaStore>(
     }
 
     let Some(record) = meta_store
-        .get(&block_meta_key(indexed_finalized_head))
+        .get(&block_record_key(indexed_finalized_head))
         .await?
     else {
         return Err(Error::NotFound);
     };
-    let block_meta = decode_block_meta(&record.value)?;
-    Ok(block_meta
+    let block_record = decode_block_record(&record.value)?;
+    Ok(block_record
         .first_log_id
-        .saturating_add(u64::from(block_meta.count)))
+        .saturating_add(u64::from(block_record.count)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
-    use crate::codec::finalized_state::encode_block_meta;
-    use crate::domain::keys::block_meta_key;
-    use crate::domain::types::{BlockMeta, PublicationState};
+    use crate::codec::finalized_state::encode_block_record;
+    use crate::domain::keys::block_record_key;
+    use crate::domain::types::{BlockRecord, PublicationState};
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::publication::{CasOutcome, PublicationStore};
     use crate::store::traits::{MetaStore, PutCond};
@@ -131,8 +131,8 @@ mod tests {
                 CasOutcome::Applied(_)
             ));
             meta.put(
-                &block_meta_key(7),
-                encode_block_meta(&BlockMeta {
+                &block_record_key(7),
+                encode_block_record(&BlockRecord {
                     block_hash: [3; 32],
                     parent_hash: [4; 32],
                     first_log_id: 90,

@@ -1,8 +1,6 @@
 use bytes::Bytes;
 
-use crate::domain::types::{
-    BlockLogHeader, Log, LogDirFragment, LogDirectoryBucket, StreamBitmapMeta, Topic32,
-};
+use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta, Topic32};
 use crate::error::{Error, Result};
 
 pub fn validate_log(log: &Log) -> bool {
@@ -93,7 +91,7 @@ pub fn decode_log(bytes: &[u8]) -> Result<Log> {
     })
 }
 
-pub fn encode_log_directory_bucket(bucket: &LogDirectoryBucket) -> Bytes {
+pub fn encode_log_dir_bucket(bucket: &DirBucket) -> Bytes {
     assert!(u32::try_from(bucket.first_log_ids.len()).is_ok());
     let mut out = Vec::with_capacity(1 + 8 + 4 + bucket.first_log_ids.len() * 8);
     out.push(1);
@@ -105,7 +103,7 @@ pub fn encode_log_directory_bucket(bucket: &LogDirectoryBucket) -> Bytes {
     Bytes::from(out)
 }
 
-pub fn decode_log_directory_bucket(bytes: &[u8]) -> Result<LogDirectoryBucket> {
+pub fn decode_log_dir_bucket(bytes: &[u8]) -> Result<DirBucket> {
     if bytes.len() < 1 + 8 + 4 + 8 {
         return Err(Error::Decode("log directory bucket too short"));
     }
@@ -139,7 +137,7 @@ pub fn decode_log_directory_bucket(bytes: &[u8]) -> Result<LogDirectoryBucket> {
         ));
         pos += 8;
     }
-    Ok(LogDirectoryBucket {
+    Ok(DirBucket {
         start_block,
         first_log_ids,
     })
@@ -188,7 +186,7 @@ pub fn decode_block_log_header(bytes: &[u8]) -> Result<BlockLogHeader> {
     Ok(BlockLogHeader { offsets })
 }
 
-pub fn encode_log_dir_fragment(fragment: &LogDirFragment) -> Bytes {
+pub fn encode_dir_by_block(fragment: &DirByBlock) -> Bytes {
     let mut out = Vec::with_capacity(1 + 8 + 8 + 8);
     out.push(1);
     out.extend_from_slice(&fragment.block_num.to_be_bytes());
@@ -197,14 +195,14 @@ pub fn encode_log_dir_fragment(fragment: &LogDirFragment) -> Bytes {
     Bytes::from(out)
 }
 
-pub fn decode_log_dir_fragment(bytes: &[u8]) -> Result<LogDirFragment> {
+pub fn decode_dir_by_block(bytes: &[u8]) -> Result<DirByBlock> {
     if bytes.len() != 1 + 8 + 8 + 8 {
         return Err(Error::Decode("invalid log_dir fragment length"));
     }
     if bytes[0] != 1 {
         return Err(Error::Decode("unsupported log_dir fragment version"));
     }
-    Ok(LogDirFragment {
+    Ok(DirByBlock {
         block_num: u64::from_be_bytes(
             bytes[1..9]
                 .try_into()
@@ -291,13 +289,13 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_log_directory_bucket() {
-        let bucket = LogDirectoryBucket {
+    fn roundtrip_log_dir_bucket() {
+        let bucket = DirBucket {
             start_block: 5001,
             first_log_ids: vec![120_000_000, 120_000_003, 120_000_003, 120_000_008],
         };
-        let enc = encode_log_directory_bucket(&bucket);
-        let dec = decode_log_directory_bucket(&enc).expect("decode bucket");
+        let enc = encode_log_dir_bucket(&bucket);
+        let dec = decode_log_dir_bucket(&enc).expect("decode bucket");
         assert_eq!(dec, bucket);
     }
 
@@ -312,19 +310,19 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_large_log_directory_bucket() {
+    fn roundtrip_large_log_dir_bucket() {
         let count = (u16::MAX as usize) + 2;
         let mut first_log_ids = Vec::with_capacity(count);
         for i in 0..count {
             first_log_ids.push(i as u64);
         }
-        let bucket = LogDirectoryBucket {
+        let bucket = DirBucket {
             start_block: 123,
             first_log_ids,
         };
 
-        let enc = encode_log_directory_bucket(&bucket);
-        let dec = decode_log_directory_bucket(&enc).expect("decode large bucket");
+        let enc = encode_log_dir_bucket(&bucket);
+        let dec = decode_log_dir_bucket(&enc).expect("decode large bucket");
         assert_eq!(dec, bucket);
     }
 
@@ -343,14 +341,14 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_log_dir_fragment() {
-        let fragment = LogDirFragment {
+    fn roundtrip_log_dir_by_blockment() {
+        let fragment = DirByBlock {
             block_num: 9,
             first_log_id: 100,
             end_log_id_exclusive: 105,
         };
-        let enc = encode_log_dir_fragment(&fragment);
-        let dec = decode_log_dir_fragment(&enc).expect("decode fragment");
+        let enc = encode_dir_by_block(&fragment);
+        let dec = decode_dir_by_block(&enc).expect("decode fragment");
         assert_eq!(dec, fragment);
     }
 

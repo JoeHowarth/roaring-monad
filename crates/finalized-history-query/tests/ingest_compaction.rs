@@ -2,13 +2,13 @@
 mod helpers;
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::finalized_state::encode_block_meta;
+use finalized_history_query::codec::finalized_state::encode_block_record;
 use finalized_history_query::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, block_meta_key,
-    log_directory_fragment_key, stream_id, stream_page_blob_key, stream_page_meta_key,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_page_blob_key,
+    bitmap_page_meta_key, block_record_key, log_dir_by_block_key, stream_id,
     stream_page_start_local,
 };
-use finalized_history_query::domain::types::BlockMeta;
+use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
@@ -31,8 +31,8 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(1),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(1),
+            encode_block_record(&BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: u64::from(MAX_LOCAL_ID),
@@ -74,8 +74,8 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(1),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(1),
+            encode_block_record(&BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id,
@@ -103,7 +103,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&stream_page_meta_key(&sid, page_start))
+                .get(&bitmap_page_meta_key(&sid, page_start))
                 .await
                 .expect("stream page meta")
                 .is_some()
@@ -111,7 +111,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.ingest
                 .blob_store
-                .get_blob(&stream_page_blob_key(&sid, page_start))
+                .get_blob(&bitmap_page_blob_key(&sid, page_start))
                 .await
                 .expect("stream page blob")
                 .is_some()
@@ -133,8 +133,8 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(1),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(1),
+            encode_block_record(&BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE - 2,
@@ -161,7 +161,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&log_directory_fragment_key(0, 2))
+                .get(&log_dir_by_block_key(0, 2))
                 .await
                 .expect("directory fragment")
                 .is_some()

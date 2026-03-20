@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::codec::finalized_state::{
-    decode_publication_state, encode_block_meta,
+    decode_publication_state, encode_block_record,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_meta_key};
-use finalized_history_query::domain::types::BlockMeta;
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
+use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -160,8 +160,8 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(3),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(3),
+            encode_block_record(&BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
                 first_log_id: 9,
@@ -221,8 +221,8 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         let inner = InMemoryMetaStore::default();
         inner
             .put(
-                &block_meta_key(1),
-                encode_block_meta(&BlockMeta {
+                &block_record_key(1),
+                encode_block_record(&BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [0; 32],
                     first_log_id: 0,
@@ -245,7 +245,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&block_meta_key(1))
+                .get(&block_record_key(1))
                 .await
                 .expect("read block meta after startup")
                 .is_some()

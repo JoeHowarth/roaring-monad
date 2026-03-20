@@ -7,13 +7,13 @@ use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::codec::finalized_state::encode_block_meta;
+use finalized_history_query::codec::finalized_state::encode_block_record;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_KEY, block_meta_key,
-    log_directory_sub_bucket_key, stream_id, stream_page_meta_key, stream_page_start_local,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_KEY, bitmap_page_meta_key, block_record_key,
+    log_dir_sub_bucket_key, stream_id, stream_page_start_local,
 };
-use finalized_history_query::domain::types::{Block, BlockMeta, Log, PublicationState};
+use finalized_history_query::domain::types::{Block, BlockRecord, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -274,39 +274,39 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
     block_on(async {
         let cases = vec![
             (
-                "block_logs_put",
+                "block_log_blob_put",
                 FaultOp::BlobPut,
-                b"block_logs/".as_slice(),
+                b"block_log_blob/".as_slice(),
             ),
             (
                 "block_log_header_put",
                 FaultOp::MetaPut,
-                b"block_log_headers/".as_slice(),
+                b"block_log_header/".as_slice(),
             ),
             (
-                "block_meta_put",
+                "block_record_put",
                 FaultOp::MetaPut,
-                b"block_meta/".as_slice(),
+                b"block_record/".as_slice(),
             ),
             (
-                "block_hash_to_num_put",
+                "block_hash_index_put",
                 FaultOp::MetaPut,
-                b"block_hash_to_num/".as_slice(),
+                b"block_hash_index/".as_slice(),
             ),
             (
-                "log_dir_frag_put",
+                "log_dir_by_block_put",
                 FaultOp::MetaPut,
-                b"log_dir_frag/".as_slice(),
+                b"log_dir_by_block/".as_slice(),
             ),
             (
-                "stream_frag_meta_put",
+                "bitmap_by_block_meta_put",
                 FaultOp::MetaPut,
-                b"stream_frag_meta/".as_slice(),
+                b"bitmap_by_block_meta/".as_slice(),
             ),
             (
-                "stream_frag_blob_put",
+                "bitmap_by_block_blob_put",
                 FaultOp::BlobPut,
-                b"stream_frag_blob/".as_slice(),
+                b"bitmap_by_block_blob/".as_slice(),
             ),
             (
                 "publication_state_cas",
@@ -396,8 +396,8 @@ fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
             CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_meta_key(1),
-            encode_block_meta(&BlockMeta {
+            &block_record_key(1),
+            encode_block_record(&BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
                 first_log_id: seed_first_log_id,
@@ -429,7 +429,7 @@ fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
         assert!(matches!(err, Error::Backend(_)));
 
         assert!(
-            meta.get(&log_directory_sub_bucket_key(
+            meta.get(&log_dir_sub_bucket_key(
                 2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE
             ))
             .await
@@ -443,7 +443,7 @@ fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
         );
         let page_start = stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
         assert!(
-            meta.get(&stream_page_meta_key(&sid, page_start))
+            meta.get(&bitmap_page_meta_key(&sid, page_start))
                 .await
                 .expect("stream page meta")
                 .is_some()

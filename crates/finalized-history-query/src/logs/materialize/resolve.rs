@@ -1,12 +1,12 @@
 use crate::cache::{BytesCache, TableId};
-use crate::codec::log::decode_log_dir_fragment;
-use crate::codec::log_ref::LogDirectoryBucketRef;
+use crate::codec::log::decode_dir_by_block;
+use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    log_directory_bucket_key, log_directory_bucket_start, log_directory_fragment_prefix,
-    log_directory_sub_bucket_key, log_directory_sub_bucket_start,
+    log_dir_bucket_key, log_dir_bucket_start, log_dir_by_block_prefix, log_dir_sub_bucket_key,
+    log_dir_sub_bucket_start,
 };
-use crate::domain::types::LogDirFragment;
+use crate::domain::types::DirByBlock;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -17,16 +17,16 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
         &mut self,
         id: LogId,
     ) -> Result<Option<ResolvedLogLocation>> {
-        let bucket_start = log_directory_bucket_start(id);
+        let bucket_start = log_dir_bucket_start(id);
         if let Some(bucket) = self
-            .load_directory_bucket(bucket_start, TableId::LogDirectoryBuckets)
+            .load_directory_bucket(bucket_start, TableId::DirBuckets)
             .await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
             return resolved_location_from_bucket_ref(&bucket, entry_index, id);
         }
 
-        let sub_bucket_start = log_directory_sub_bucket_start(id);
+        let sub_bucket_start = log_dir_sub_bucket_start(id);
         if let Some(bucket) = self.load_directory_sub_bucket(sub_bucket_start).await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
@@ -50,57 +50,50 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
         &self,
         bucket_start: u64,
         table: TableId,
-    ) -> Result<Option<LogDirectoryBucketRef>> {
-        let key = log_directory_bucket_key(bucket_start);
+    ) -> Result<Option<DirBucketRef>> {
+        let key = log_dir_bucket_key(bucket_start);
         if let Some(bytes) = self.cache.get(table, &key) {
-            return Ok(Some(LogDirectoryBucketRef::new(bytes)?));
+            return Ok(Some(DirBucketRef::new(bytes)?));
         }
         let Some(record) = self.meta_store.get(&key).await? else {
             return Ok(None);
         };
         self.cache
             .put(table, &key, record.value.clone(), record.value.len());
-        Ok(Some(LogDirectoryBucketRef::new(record.value)?))
+        Ok(Some(DirBucketRef::new(record.value)?))
     }
 
     async fn load_directory_sub_bucket(
         &self,
         sub_bucket_start: u64,
-    ) -> Result<Option<LogDirectoryBucketRef>> {
-        let key = log_directory_sub_bucket_key(sub_bucket_start);
-        let table = TableId::LogDirectorySubBuckets;
+    ) -> Result<Option<DirBucketRef>> {
+        let key = log_dir_sub_bucket_key(sub_bucket_start);
+        let table = TableId::LogDirSubBuckets;
         if let Some(bytes) = self.cache.get(table, &key) {
-            return Ok(Some(LogDirectoryBucketRef::new(bytes)?));
+            return Ok(Some(DirBucketRef::new(bytes)?));
         }
         let Some(record) = self.meta_store.get(&key).await? else {
             return Ok(None);
         };
         self.cache
             .put(table, &key, record.value.clone(), record.value.len());
-        Ok(Some(LogDirectoryBucketRef::new(record.value)?))
+        Ok(Some(DirBucketRef::new(record.value)?))
     }
 
-    async fn load_directory_fragments(
-        &mut self,
-        sub_bucket_start: u64,
-    ) -> Result<&[LogDirFragment]> {
+    async fn load_directory_fragments(&mut self, sub_bucket_start: u64) -> Result<&[DirByBlock]> {
         if let std::collections::hash_map::Entry::Vacant(entry) =
             self.directory_fragment_cache.entry(sub_bucket_start)
         {
             let page = self
                 .meta_store
-                .list_prefix(
-                    &log_directory_fragment_prefix(sub_bucket_start),
-                    None,
-                    usize::MAX,
-                )
+                .list_prefix(&log_dir_by_block_prefix(sub_bucket_start), None, usize::MAX)
                 .await?;
             let mut fragments = Vec::with_capacity(page.keys.len());
             for key in page.keys {
                 let Some(record) = self.meta_store.get(&key).await? else {
                     continue;
                 };
-                fragments.push(decode_log_dir_fragment(&record.value)?);
+                fragments.push(decode_dir_by_block(&record.value)?);
             }
             fragments.sort_by_key(|fragment| fragment.block_num);
             entry.insert(fragments);
@@ -113,7 +106,7 @@ impl<'a, M: MetaStore, B: BlobStore, C: BytesCache> LogMaterializer<'a, M, B, C>
     }
 }
 
-fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Option<usize> {
+fn containing_bucket_entry_ref(bucket: &DirBucketRef, id: LogId) -> Option<usize> {
     if bucket.count() < 2 {
         return None;
     }
@@ -131,7 +124,7 @@ fn containing_bucket_entry_ref(bucket: &LogDirectoryBucketRef, id: LogId) -> Opt
 }
 
 fn resolved_location_from_bucket_ref(
-    bucket: &LogDirectoryBucketRef,
+    bucket: &DirBucketRef,
     entry_index: usize,
     id: LogId,
 ) -> Result<Option<ResolvedLogLocation>> {
