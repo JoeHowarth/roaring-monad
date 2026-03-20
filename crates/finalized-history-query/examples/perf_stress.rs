@@ -12,7 +12,7 @@ use finalized_history_query::domain::types::{Block, Log};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{FenceStore, PublicationStore};
+use finalized_history_query::store::publication::PublicationStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
 use finalized_history_query::{Clause, LogFilter, WriteAuthority};
 use futures::executor::block_on;
@@ -82,11 +82,7 @@ fn percentile_micros(sorted_micros: &[u128], pct: f64) -> u128 {
     sorted_micros[idx]
 }
 
-async fn ingest_blocks<
-    A: WriteAuthority,
-    M: MetaStore + PublicationStore + FenceStore,
-    B: BlobStore,
->(
+async fn ingest_blocks<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>(
     svc: &FinalizedHistoryService<A, M, B>,
     blocks: u64,
     logs_per_block: u32,
@@ -108,11 +104,7 @@ async fn ingest_blocks<
     }
 }
 
-async fn run_queries<
-    A: WriteAuthority,
-    M: MetaStore + PublicationStore + FenceStore,
-    B: BlobStore,
->(
+async fn run_queries<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>(
     svc: &FinalizedHistoryService<A, M, B>,
     blocks: u64,
     queries: usize,
@@ -194,11 +186,7 @@ async fn run_queries<
     (latencies, total_returned, query_start.elapsed())
 }
 
-async fn run_stress<
-    A: WriteAuthority,
-    M: MetaStore + PublicationStore + FenceStore,
-    B: BlobStore,
->(
+async fn run_stress<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>(
     svc: &FinalizedHistoryService<A, M, B>,
     blocks: u64,
     logs_per_block: u32,

@@ -69,7 +69,6 @@ Backend implementations have their own configuration that is not part of the mai
 | `max_retries` | `10` | Maximum retry attempts for retryable errors |
 | `base_delay_ms` | `50` | Base delay for exponential backoff |
 | `max_delay_ms` | `5000` | Maximum backoff delay |
-| `fence_check_interval_ms` | `1000` | Minimum interval between remote fence checks (cached locally between checks) |
 
 ### MinioBlobStore
 

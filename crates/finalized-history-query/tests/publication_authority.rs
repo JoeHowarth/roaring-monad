@@ -19,8 +19,8 @@ use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{FenceStore, PublicationStore};
-use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::publication::PublicationStore;
+use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use finalized_history_query::{Error, WriteAuthority};
 use futures::executor::block_on;
 
@@ -129,41 +129,6 @@ fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
 }
 
 #[test]
-fn retrying_same_session_takeover_rearms_the_backend_fence() {
-    block_on(async {
-        let inner = Arc::new(InMemoryMetaStore::with_min_epoch(1));
-        assert!(matches!(
-            inner
-                .create_if_absent(&seeded_publication_state_with_valid_through(
-                    7, [1u8; 16], 1, 0, 150,
-                ))
-                .await
-                .expect("seed publication state"),
-            finalized_history_query::store::publication::CasOutcome::Applied(_)
-        ));
-        let meta = FailAdvanceFenceOnceMetaStore {
-            inner: inner.clone(),
-            failed: Arc::new(AtomicBool::new(false)),
-        };
-        let authority = LeaseAuthority::new(meta.clone(), 9, 50, 0);
-
-        let err = authority
-            .acquire(Some(151))
-            .await
-            .expect_err("first takeover should surface injected fence failure");
-        assert!(matches!(err, Error::Backend(_)));
-
-        let token = authority
-            .acquire(Some(151))
-            .await
-            .expect("retry should succeed after re-arming fence");
-
-        assert_eq!(token.epoch, 2);
-        assert_eq!(meta.current_fence().await.expect("current fence"), 2);
-    });
-}
-
-#[test]
 fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
@@ -209,7 +174,6 @@ fn readers_use_only_publication_state() {
                 count: 1,
             }),
             PutCond::Any,
-            FenceToken(0),
         )
         .await
         .expect("seed block meta");
@@ -234,7 +198,6 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
                 &seeded_publication_state(1, [1u8; 16], 2, 3),
             ),
             PutCond::Any,
-            FenceToken(0),
         )
         .await
         .expect("write publication state");
@@ -246,28 +209,6 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
             .expect("publication state");
         let decoded = decode_publication_state(&record.value).expect("decode");
         assert_eq!(decoded.indexed_finalized_head, 3);
-    });
-}
-
-#[test]
-fn ingest_uses_publication_epoch_for_fenced_writes() {
-    block_on(async {
-        let meta = InMemoryMetaStore::with_min_epoch(5);
-        let blob = InMemoryBlobStore::default();
-        assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 5, 0, 0,
-            ))
-            .await
-            .expect("seed publication state"),
-            finalized_history_query::store::publication::CasOutcome::Applied(_)
-        ));
-
-        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
-        svc.startup().await.expect("startup");
-        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
-            .await
-            .expect("ingest should use publication epoch as fence token");
     });
 }
 
@@ -308,7 +249,7 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
 }
 
 #[test]
-fn takeover_should_fence_stale_writer_before_artifact_writes() {
+fn stale_writer_cannot_start_new_ingest_after_takeover() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -342,7 +283,7 @@ fn takeover_should_fence_stale_writer_before_artifact_writes() {
                 .await
                 .expect("read block meta")
                 .is_none(),
-            "stale writer should be fenced before writing block metadata"
+            "stale writer should not write block metadata after takeover"
         );
         assert!(
             engine
@@ -351,7 +292,7 @@ fn takeover_should_fence_stale_writer_before_artifact_writes() {
                 .await
                 .expect("read block blob")
                 .is_none(),
-            "stale writer should be fenced before writing block blobs"
+            "stale writer should not write block blobs after takeover"
         );
     });
 }

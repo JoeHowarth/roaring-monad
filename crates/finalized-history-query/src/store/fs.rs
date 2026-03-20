@@ -3,7 +3,6 @@ use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
@@ -11,15 +10,14 @@ use bytes::Bytes;
 use crate::codec::finalized_state::{decode_publication_state, encode_publication_state};
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use crate::store::publication::{CasOutcome, PublicationStore};
 use crate::store::traits::{
-    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
 
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
     root: PathBuf,
-    min_epoch: Arc<AtomicU64>,
 }
 
 impl FsMetaStore {
@@ -27,10 +25,8 @@ impl FsMetaStore {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(root.join("meta"))
             .map_err(|e| Error::Backend(format!("create fs meta dir: {e}")))?;
-        Ok(Self {
-            root,
-            min_epoch: Arc::new(AtomicU64::new(min_epoch)),
-        })
+        let _ = min_epoch;
+        Ok(Self { root })
     }
 
     fn key_path(&self, key: &[u8]) -> PathBuf {
@@ -55,13 +51,6 @@ impl FsMetaStore {
         self.root.join("meta").join("publication_state.ver")
     }
 
-    fn validate_fence(&self, fence: FenceToken) -> Result<()> {
-        if fence.0 < self.min_epoch.load(Ordering::Relaxed) {
-            return Err(Error::LeaseLost);
-        }
-        Ok(())
-    }
-
     fn publication_state_lock(&self) -> Result<Arc<Mutex<()>>> {
         static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
         let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -72,21 +61,6 @@ impl FsMetaStore {
             .entry(self.publication_state_path())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone())
-    }
-}
-
-impl FenceStore for FsMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
-        let _ = self
-            .min_epoch
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.max(min_epoch))
-            });
-        Ok(())
-    }
-
-    async fn current_fence(&self) -> Result<u64> {
-        Ok(self.min_epoch.load(Ordering::Relaxed))
     }
 }
 
@@ -188,14 +162,7 @@ impl MetaStore for FsMetaStore {
         }))
     }
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult> {
-        self.validate_fence(fence)?;
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
         let current = self.get(key).await?;
 
         let allowed = match (cond, current.as_ref()) {
@@ -229,8 +196,7 @@ impl MetaStore for FsMetaStore {
         })
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
-        self.validate_fence(fence)?;
+    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
         let current = self.get(key).await?;
         let allowed = match (cond, current.as_ref()) {
             (DelCond::Any, Some(_)) => true,
@@ -579,7 +545,7 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{BlobStore, MetaStore, PutCond};
     use bytes::Bytes;
     use futures::executor::block_on;
 
@@ -689,7 +655,7 @@ mod tests {
             for index in 0..1_025u64 {
                 let key = format!("list-prefix/{index:04}").into_bytes();
                 meta_store
-                    .put(&key, Bytes::from_static(b"v"), PutCond::Any, FenceToken(0))
+                    .put(&key, Bytes::from_static(b"v"), PutCond::Any)
                     .await
                     .expect("seed meta key");
                 blob_store

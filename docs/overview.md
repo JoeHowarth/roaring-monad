@@ -75,7 +75,7 @@ The shared layer owns:
 - shard-streaming indexed execution on primary IDs
 - immutable-bytes cache policy for immutable read artifacts (see [caching.md](caching.md))
 - runtime degraded / throttled state
-- write-authority policy and fencing (see [write-authority.md](write-authority.md))
+- write-authority policy (see [write-authority.md](write-authority.md))
 - publication-state reads
 - shared finalized-state and block-identity reads
 
@@ -259,12 +259,12 @@ The crate intentionally does not implement:
 26. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
 27. `src/ingest/authority/lease/` — lease-backed multi-writer authority
 28. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
-29. `src/recovery/mod.rs` — startup view, cleanup, marker repair
+29. `src/recovery/mod.rs` — startup view and next-position derivation
 
 ### Pass 6: End-to-end behavior
 
-30. `tests/publication_authority.rs` — publication state, lease authority, fencing
-31. `tests/startup_recovery.rs` — startup, recovery, session reuse, roles
+30. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
+31. `tests/startup_recovery.rs` — startup, session reuse, roles
 32. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
 33. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
 34. `tests/cache_behavior.rs` — point log payload caching, range read coalescing

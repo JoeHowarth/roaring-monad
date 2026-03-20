@@ -17,7 +17,7 @@ use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
-use finalized_history_query::store::traits::{FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::traits::{MetaStore, PutCond};
 use futures::executor::block_on;
 
 use helpers::*;
@@ -168,7 +168,6 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
                 count: 1,
             }),
             PutCond::Any,
-            FenceToken(0),
         )
         .await
         .expect("seed block meta");
@@ -219,7 +218,7 @@ fn startup_plan_should_not_take_publication_ownership() {
 #[test]
 fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
     block_on(async {
-        let inner = Arc::new(InMemoryMetaStore::default());
+        let inner = InMemoryMetaStore::default();
         inner
             .put(
                 &block_meta_key(1),
@@ -230,71 +229,26 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
                     count: 0,
                 }),
                 PutCond::Any,
-                FenceToken(0),
             )
             .await
             .expect("seed unpublished block meta");
-
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
-            FailDeleteOnceMetaStore {
-                inner,
-                failed: Arc::new(AtomicBool::new(false)),
-            },
+            inner.clone(),
             InMemoryBlobStore::default(),
             7,
         );
 
-        let err = svc
-            .startup()
-            .await
-            .expect_err("first startup should fail after ownership is acquired");
-        assert!(matches!(err, Error::Backend(_)));
-
         svc.startup()
             .await
-            .expect("retry startup should reuse the same session");
-    });
-}
-
-#[test]
-fn startup_cleanup_uses_publication_epoch_for_fenced_deletes() {
-    block_on(async {
-        let meta = InMemoryMetaStore::with_min_epoch(5);
-        let blob = InMemoryBlobStore::default();
-        assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 5, 0, 0,
-            ))
-            .await
-            .expect("seed publication state"),
-            finalized_history_query::store::publication::CasOutcome::Applied(_)
-        ));
-        meta.put(
-            &block_meta_key(1),
-            encode_block_meta(&BlockMeta {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_log_id: 0,
-                count: 0,
-            }),
-            PutCond::Any,
-            FenceToken(5),
-        )
-        .await
-        .expect("seed unpublished block meta");
-
-        let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
-        svc.startup()
-            .await
-            .expect("startup cleanup should use publication epoch as fence token");
+            .expect("startup should ignore unpublished suffix artifacts");
         assert!(
             svc.ingest
                 .meta_store
                 .get(&block_meta_key(1))
                 .await
                 .expect("read block meta after startup")
-                .is_none()
+                .is_some()
         );
     });
 }

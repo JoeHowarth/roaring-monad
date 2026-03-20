@@ -1,16 +1,18 @@
 # Write Authority
 
-This document describes the write-authority model: leases, fencing, epochs, service roles, and startup/recovery behavior.
+This document describes the write-authority model: leases, epochs, service roles, and startup behavior.
 
 ## Service Roles
 
 Three roles are available at the `FinalizedHistoryService` constructor layer:
 
-| Role | Constructor | Writes | Lease | Upstream observation required |
-|------|-----------|--------|-------|------------------------------|
-| Reader-only | `new_reader_only(...)` | No | No | No |
-| Reader+writer | `new_reader_writer(...)` | Yes | LeaseAuthority | Yes |
-| Single-writer | `new_single_writer(...)` | Yes | SingleWriterAuthority | No |
+
+| Role          | Constructor              | Writes | Lease                 | Upstream observation required |
+| ------------- | ------------------------ | ------ | --------------------- | ----------------------------- |
+| Reader-only   | `new_reader_only(...)`   | No     | No                    | No                            |
+| Reader+writer | `new_reader_writer(...)` | Yes    | LeaseAuthority        | Yes                           |
+| Single-writer | `new_single_writer(...)` | Yes    | SingleWriterAuthority | No                            |
+
 
 Reader-only nodes load `startup_plan(...)` state observationally and never attempt ownership.
 
@@ -21,7 +23,6 @@ Leadership is behind `WriteAuthority`. That boundary owns:
 - acquisition — obtaining write ownership
 - renewal — extending lease validity
 - publish / head advancement — advancing `indexed_finalized_head`
-- fence-token derivation — producing `FenceToken` from `WriteToken`
 
 The ingest engine owns:
 
@@ -38,7 +39,7 @@ WriteToken {
 }
 ```
 
-The `epoch` is the fencing clock for write-side artifact mutation and cleanup.
+The `epoch` is the ownership/version clock for lease acquisition and publish.
 
 ## PublicationState
 
@@ -46,7 +47,7 @@ The `epoch` is the fencing clock for write-side artifact mutation and cleanup.
 PublicationState {
     owner_id: u64,          // stable node identity
     session_id: [u8; 16],   // process instance identity
-    epoch: u64,             // fencing and ownership version
+    epoch: u64,             // ownership version
     indexed_finalized_head: u64,  // only reader-visible publication head
     lease_valid_through_block: u64,  // inclusive external-block lease validity bound
 }
@@ -76,17 +77,14 @@ Required invariant: `publication_lease_renew_threshold_blocks < publication_leas
 
 Renewal rule: renew when the observed upstream finalized block enters the renew window; otherwise reuse the current lease.
 
-## Acquire / Authorize / Publish / Fence Lifecycle
+## Acquire / Authorize / Publish Lifecycle
 
 ### Acquisition
 
 1. load current `publication_state`
 2. if absent, `create_if_absent` with the initial state
 3. if present and lease expired (or same owner), CAS to claim ownership with `epoch + 1`
-4. advance backend fence to the new epoch
-5. return `WriteToken`
-
-If the ownership CAS succeeds but fence advancement fails, retrying the same session re-arms the backend fence before acquisition succeeds.
+4. return `WriteToken`
 
 ### Authorization (cached writer re-auth)
 
@@ -107,10 +105,6 @@ After all artifacts for a block batch are durable:
 1. CAS `publication_state` with `indexed_finalized_head = new_head`
 2. renewal piggybacks on publish when needed
 
-### Fencing
-
-Every `MetaStore.put` and `MetaStore.delete` call carries a `FenceToken(epoch)`. The store rejects operations where the token's epoch is below the stored minimum epoch. This prevents stale-epoch writers from mutating artifacts after a takeover.
-
 ## Hard Expiry
 
 Once a lease has expired, ownership must be reacquired with an epoch bump — even if the same session attempts to renew. There is no silent same-session renewal after expiry.
@@ -118,7 +112,6 @@ Once a lease has expired, ownership must be reacquired with an epoch bump — ev
 This ensures:
 
 - any gap in liveness is visible in the epoch sequence
-- `advance_fence` invalidates stale-epoch writes from before the gap
 
 The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing re-acquisition through the service layer.
 
@@ -130,16 +123,13 @@ The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing
 async def startup_reader_writer(owner_id, observed_upstream_finalized_block, cached_lease=None):
     if cached_lease is not None:
         lease = authorize_cached_publication(cached_lease, observed_upstream_finalized_block)
-        # still runs cleanup and repair before returning
         return recovery_plan_from(lease)
 
     lease = acquire_publication(owner_id, observed_upstream_finalized_block)
-    cleanup_unpublished_suffix(lease.indexed_finalized_head)
-    repair_open_stream_page_markers(derive_next_log_id(lease.indexed_finalized_head))
     return recovery_plan_from(lease)
 ```
 
-Cleanup, marker repair, and next-position derivation run on both the cached and fresh paths. A cached writer re-authorization still cleans partial artifacts left by a failed ingest.
+Startup derives the next write position from the published head. It does not delete unpublished suffix artifacts.
 
 ### Reader-only
 
@@ -164,7 +154,7 @@ async def startup_reader_only():
 4. if the observed block is still within the validity window, standby remains passive
 5. once the observed block is past the validity bound, standby attempts takeover by CAS
 6. the winning CAS writes: standby's `owner_id`, fresh `session_id`, `epoch = current.epoch + 1`, unchanged `indexed_finalized_head`, new `lease_valid_through_block`
-7. after acquisition, the new primary: advances backend fence, cleans unpublished suffix, repairs stale markers, derives next sequencing state
+7. after acquisition, the new primary derives next sequencing state from the published head and resumes ingest
 
 If the takeover CAS fails, the standby reloads `publication_state` and re-evaluates rather than retrying blindly.
 
@@ -193,9 +183,8 @@ Use `SingleWriterAuthority` (`new_single_writer`) when:
 
 ### Safety properties deliberately absent
 
-- no lease-based expiry or takeover — a second writer is not fenced by lease freshness
+- no lease-based expiry or takeover — a second writer is not gated by lease freshness
 - `publish` uses `PutCond::Any` rather than `compare_and_set` — concurrent writers would silently overwrite each other's heads
-- the backend fence is the only protection against stale-epoch writes; there is no lease-level guard against split-brain
 
 Single-writer mode relies entirely on the deployment preventing concurrent writers.
 

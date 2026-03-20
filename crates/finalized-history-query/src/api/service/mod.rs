@@ -14,7 +14,7 @@ use crate::ingest::authority::{
 use crate::ingest::engine::IngestEngine;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::HealthReport;
-use crate::store::publication::{FenceStore, PublicationStore};
+use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
@@ -114,7 +114,7 @@ fn reader_only_mode_error() -> Error {
 
 impl<M, B> FinalizedHistoryService<LeaseAuthority<M>, M, B>
 where
-    M: MetaStore + PublicationStore + FenceStore + Clone,
+    M: MetaStore + PublicationStore + Clone,
     B: BlobStore,
 {
     pub fn new_reader_writer(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
@@ -152,7 +152,7 @@ where
 
 impl<M, B> FinalizedHistoryService<SingleWriterAuthority<M>, M, B>
 where
-    M: MetaStore + PublicationStore + FenceStore + Clone,
+    M: MetaStore + PublicationStore + Clone,
     B: BlobStore,
 {
     pub fn new_single_writer(config: Config, meta_store: M, blob_store: B) -> Self {

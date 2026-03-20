@@ -13,11 +13,10 @@ use crate::codec::finalized_state::{decode_publication_state, encode_publication
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
-use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::traits::{DelCond, MetaStore, Page, PutCond, PutResult, Record};
 
 const DEFAULT_FENCE_KEY: &str = "global";
-const DEFAULT_FENCE_CHECK_INTERVAL_MS: u64 = 1000;
 const META_BUCKETS: u16 = 256;
 const KNOWN_GROUPS: &[&str] = &[
     "meta",
@@ -108,9 +107,7 @@ pub struct ScyllaMetaStore {
     max_retries: u32,
     base_delay_ms: u64,
     max_delay_ms: u64,
-    fence_check_interval_ms: u64,
     cached_min_epoch: Arc<AtomicU64>,
-    last_fence_check_ms: Arc<AtomicU64>,
     telemetry: Arc<ScyllaTelemetry>,
     stmts: Arc<ScyllaStatements>,
 }
@@ -118,7 +115,6 @@ pub struct ScyllaMetaStore {
 #[derive(Debug)]
 struct ScyllaStatements {
     set_min_epoch: PreparedStatement,
-    get_min_epoch: PreparedStatement,
     get: PreparedStatement,
     put_any: PreparedStatement,
     put_if_absent: PreparedStatement,
@@ -195,12 +191,6 @@ impl ScyllaMetaStore {
                 "set_min_epoch",
             )
             .await?,
-            get_min_epoch: prepare_statement(
-                &session,
-                format!("SELECT min_epoch FROM {fence_table} WHERE id = ?"),
-                "get_min_epoch",
-            )
-            .await?,
             get: prepare_statement(
                 &session,
                 format!("SELECT v, version FROM {table} WHERE grp = ? AND bucket = ? AND k = ?"),
@@ -259,9 +249,7 @@ impl ScyllaMetaStore {
             max_retries: 10,
             base_delay_ms: 50,
             max_delay_ms: 5000,
-            fence_check_interval_ms: DEFAULT_FENCE_CHECK_INTERVAL_MS,
             cached_min_epoch: Arc::new(AtomicU64::new(0)),
-            last_fence_check_ms: Arc::new(AtomicU64::new(0)),
             telemetry: Arc::new(ScyllaTelemetry::default()),
             stmts: Arc::new(statements),
         })
@@ -294,39 +282,6 @@ impl ScyllaMetaStore {
         })
         .await?;
         self.cached_min_epoch.store(min_epoch, Ordering::Relaxed);
-        self.last_fence_check_ms
-            .store(now_millis_u64(), Ordering::Relaxed);
-        Ok(())
-    }
-
-    async fn validate_fence(&self, fence: FenceToken) -> Result<()> {
-        let cached_min_epoch = self.cached_min_epoch.load(Ordering::Relaxed);
-        if fence.0 < cached_min_epoch {
-            return Err(Error::LeaseLost);
-        }
-
-        let now_ms = now_millis_u64();
-        let last_check_ms = self.last_fence_check_ms.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(last_check_ms) < self.fence_check_interval_ms {
-            return Ok(());
-        }
-
-        let stmt = self.stmts.get_min_epoch.clone();
-        let res = self
-            .with_retry("validate_fence", || async {
-                self.session
-                    .execute_unpaged(&stmt, (self.fence_key.as_str(),))
-                    .await
-                    .map_err(|e| Error::Backend(format!("get min epoch: {e}")))
-            })
-            .await?;
-
-        let min_epoch = first_col_i64(res).map(|v| v as u64).unwrap_or(0);
-        self.cached_min_epoch.store(min_epoch, Ordering::Relaxed);
-        self.last_fence_check_ms.store(now_ms, Ordering::Relaxed);
-        if fence.0 < min_epoch {
-            return Err(Error::LeaseLost);
-        }
         Ok(())
     }
 }
@@ -353,15 +308,7 @@ impl MetaStore for ScyllaMetaStore {
         }))
     }
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult> {
-        self.validate_fence(fence).await?;
-
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
         let grp = extract_group(key);
         let key_vec = key.to_vec();
         let bucket = key_bucket(&key_vec);
@@ -449,9 +396,7 @@ impl MetaStore for ScyllaMetaStore {
         }
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
-        self.validate_fence(fence).await?;
-
+    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
         let grp = extract_group(key);
         let bucket = key_bucket(key);
         match cond {
@@ -583,12 +528,6 @@ async fn prepare_statement(
         .map_err(|e| Error::Backend(format!("prepare statement {label}: {e}")))
 }
 
-fn first_col_i64(res: scylla::QueryResult) -> Option<i64> {
-    let rows_result = res.into_rows_result().ok()?;
-    let mut it = rows_result.rows::<(i64,)>().ok()?;
-    it.next().and_then(|r| r.ok()).map(|x| x.0)
-}
-
 fn first_row_v_version(res: scylla::QueryResult) -> Option<(Vec<u8>, i64)> {
     let rows_result = res.into_rows_result().ok()?;
     let mut it = rows_result.rows::<(Vec<u8>, i64)>().ok()?;
@@ -632,7 +571,6 @@ impl PublicationStore for ScyllaMetaStore {
                 PUBLICATION_STATE_KEY,
                 encode_publication_state(initial),
                 PutCond::IfAbsent,
-                FenceToken(initial.epoch),
             )
             .await?;
         if result.applied {
@@ -663,7 +601,6 @@ impl PublicationStore for ScyllaMetaStore {
                 PUBLICATION_STATE_KEY,
                 encode_publication_state(next),
                 PutCond::IfVersion(current.version),
-                FenceToken(next.epoch),
             )
             .await?;
         if result.applied {
@@ -673,19 +610,6 @@ impl PublicationStore for ScyllaMetaStore {
         Ok(CasOutcome::Failed {
             current: self.load().await?,
         })
-    }
-}
-
-impl FenceStore for ScyllaMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
-        if min_epoch <= self.cached_min_epoch.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        self.set_min_epoch(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> Result<u64> {
-        Ok(self.cached_min_epoch.load(Ordering::Relaxed))
     }
 }
 

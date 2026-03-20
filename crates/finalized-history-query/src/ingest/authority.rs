@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::store::traits::FenceToken;
 
 pub mod lease;
 pub mod read_only;
@@ -24,8 +23,6 @@ pub trait WriteAuthority: Send + Sync {
     ) -> Result<WriteToken>;
 
     async fn publish(&self, current: &WriteToken, new_head: u64) -> Result<WriteToken>;
-
-    fn fence(&self, token: &WriteToken) -> FenceToken;
 
     async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken>;
 }

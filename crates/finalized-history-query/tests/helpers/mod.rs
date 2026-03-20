@@ -11,9 +11,9 @@ use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
 
@@ -126,7 +126,7 @@ where
     .await
 }
 
-pub async fn acquire_lease_token<P: PublicationStore + FenceStore + Clone>(
+pub async fn acquire_lease_token<P: PublicationStore + Clone>(
     publication_store: P,
     owner_id: u64,
     observed_upstream_finalized_block: u64,
@@ -140,154 +140,6 @@ pub async fn acquire_lease_token<P: PublicationStore + FenceStore + Clone>(
 
 pub fn controlled_observed_finalized_block() -> Option<u64> {
     Some(CONTROLLED_OBSERVED_FINALIZED_BLOCK.load(Ordering::Relaxed))
-}
-
-#[derive(Clone)]
-pub struct FailDeleteOnceMetaStore {
-    pub inner: Arc<InMemoryMetaStore>,
-    pub failed: Arc<AtomicBool>,
-}
-
-impl MetaStore for FailDeleteOnceMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
-        self.inner.get(key).await
-    }
-
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<PutResult> {
-        self.inner.put(key, value, cond, fence).await
-    }
-
-    async fn delete(
-        &self,
-        key: &[u8],
-        cond: DelCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<()> {
-        if key == block_meta_key(1).as_slice() && !self.failed.swap(true, Ordering::Relaxed) {
-            return Err(Error::Backend("injected startup retry failure".to_string()));
-        }
-        self.inner.delete(key, cond, fence).await
-    }
-
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-    ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
-    }
-}
-
-impl PublicationStore for FailDeleteOnceMetaStore {
-    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.inner.load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.compare_and_set(expected, next).await
-    }
-}
-
-impl FenceStore for FailDeleteOnceMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
-        self.inner.current_fence().await
-    }
-}
-
-#[derive(Clone)]
-pub struct FailAdvanceFenceOnceMetaStore {
-    pub inner: Arc<InMemoryMetaStore>,
-    pub failed: Arc<AtomicBool>,
-}
-
-impl MetaStore for FailAdvanceFenceOnceMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
-        self.inner.get(key).await
-    }
-
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<PutResult> {
-        self.inner.put(key, value, cond, fence).await
-    }
-
-    async fn delete(
-        &self,
-        key: &[u8],
-        cond: DelCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<()> {
-        self.inner.delete(key, cond, fence).await
-    }
-
-    async fn list_prefix(
-        &self,
-        prefix: &[u8],
-        cursor: Option<Vec<u8>>,
-        limit: usize,
-    ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
-    }
-}
-
-impl PublicationStore for FailAdvanceFenceOnceMetaStore {
-    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.inner.load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.compare_and_set(expected, next).await
-    }
-}
-
-impl FenceStore for FailAdvanceFenceOnceMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
-        if !self.failed.swap(true, Ordering::Relaxed) {
-            return Err(Error::Backend("injected advance_fence failure".to_string()));
-        }
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
-        self.inner.current_fence().await
-    }
 }
 
 #[derive(Clone)]
@@ -306,9 +158,8 @@ impl MetaStore for ExpireBeforePublishMetaStore {
         key: &[u8],
         value: Bytes,
         cond: PutCond,
-        fence: FenceToken,
     ) -> finalized_history_query::Result<PutResult> {
-        let result = self.inner.put(key, value, cond, fence).await?;
+        let result = self.inner.put(key, value, cond).await?;
         if key != PUBLICATION_STATE_KEY && !self.advanced.swap(true, Ordering::Relaxed) {
             let publication_state = self
                 .inner
@@ -325,13 +176,8 @@ impl MetaStore for ExpireBeforePublishMetaStore {
         Ok(result)
     }
 
-    async fn delete(
-        &self,
-        key: &[u8],
-        cond: DelCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<()> {
-        self.inner.delete(key, cond, fence).await
+    async fn delete(&self, key: &[u8], cond: DelCond) -> finalized_history_query::Result<()> {
+        self.inner.delete(key, cond).await
     }
 
     async fn list_prefix(
@@ -373,16 +219,6 @@ impl PublicationStore for ExpireBeforePublishMetaStore {
     }
 }
 
-impl FenceStore for ExpireBeforePublishMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
-        self.inner.current_fence().await
-    }
-}
-
 #[derive(Clone)]
 pub struct PublishConflictOnceMetaStore {
     pub inner: Arc<InMemoryMetaStore>,
@@ -399,18 +235,12 @@ impl MetaStore for PublishConflictOnceMetaStore {
         key: &[u8],
         value: Bytes,
         cond: PutCond,
-        fence: FenceToken,
     ) -> finalized_history_query::Result<PutResult> {
-        self.inner.put(key, value, cond, fence).await
+        self.inner.put(key, value, cond).await
     }
 
-    async fn delete(
-        &self,
-        key: &[u8],
-        cond: DelCond,
-        fence: FenceToken,
-    ) -> finalized_history_query::Result<()> {
-        self.inner.delete(key, cond, fence).await
+    async fn delete(&self, key: &[u8], cond: DelCond) -> finalized_history_query::Result<()> {
+        self.inner.delete(key, cond).await
     }
 
     async fn list_prefix(
@@ -453,16 +283,6 @@ impl PublicationStore for PublishConflictOnceMetaStore {
             }
         }
         self.inner.compare_and_set(expected, next).await
-    }
-}
-
-impl FenceStore for PublishConflictOnceMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> finalized_history_query::Result<()> {
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> finalized_history_query::Result<u64> {
-        self.inner.current_fence().await
     }
 }
 

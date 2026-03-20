@@ -328,9 +328,7 @@ mod tests {
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{
-        BlobStore, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
-    };
+    use crate::store::traits::{BlobStore, MetaStore, Page, PutCond, PutResult, Record};
     use crate::streams::chunk::{ChunkBlob, encode_chunk};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
@@ -349,23 +347,16 @@ mod tests {
             self.inner.get(key).await
         }
 
-        async fn put(
-            &self,
-            key: &[u8],
-            value: Bytes,
-            cond: PutCond,
-            fence: FenceToken,
-        ) -> crate::Result<PutResult> {
-            self.inner.put(key, value, cond, fence).await
+        async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> crate::Result<PutResult> {
+            self.inner.put(key, value, cond).await
         }
 
         async fn delete(
             &self,
             key: &[u8],
             cond: crate::store::traits::DelCond,
-            fence: FenceToken,
         ) -> crate::Result<()> {
-            self.inner.delete(key, cond, fence).await
+            self.inner.delete(key, cond).await
         }
 
         async fn list_prefix(
@@ -446,7 +437,6 @@ mod tests {
                     max_local: 11,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write stream fragment meta");
@@ -466,7 +456,6 @@ mod tests {
                     max_local: 11,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write stream page meta");
@@ -513,7 +502,6 @@ mod tests {
                         max_local: 11,
                     }),
                     PutCond::Any,
-                    FenceToken(1),
                 )
                 .await
                 .expect("write stream page meta");
@@ -591,7 +579,6 @@ mod tests {
                         max_local: 11,
                     }),
                     PutCond::Any,
-                    FenceToken(1),
                 )
                 .await
                 .expect("write stream page meta");

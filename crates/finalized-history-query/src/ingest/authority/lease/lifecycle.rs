@@ -1,11 +1,10 @@
 use crate::error::{Error, Result};
 use crate::ingest::authority::{WriteAuthority, WriteToken};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
-use crate::store::traits::FenceToken;
+use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};
 
-impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
+impl<P: PublicationStore> LeaseAuthority<P> {
     async fn renew_if_needed(
         &self,
         lease: PublicationLease,
@@ -64,7 +63,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
     }
 }
 
-impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
+impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
     async fn authorize(
         &self,
         current: &WriteToken,
@@ -125,10 +124,6 @@ impl<P: PublicationStore + FenceStore> WriteAuthority for LeaseAuthority<P> {
             }
             CasOutcome::Failed { current: None } => Err(Error::PublicationConflict),
         }
-    }
-
-    fn fence(&self, token: &WriteToken) -> FenceToken {
-        FenceToken(token.epoch)
     }
 
     async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken> {

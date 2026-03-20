@@ -6,7 +6,7 @@ use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::ingest::authority::WriteAuthority;
 use crate::store::meta::InMemoryMetaStore;
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::LeaseAuthority;
 
@@ -58,16 +58,6 @@ impl PublicationStore for BootstrapRaceStore {
             }),
             None => Ok(CasOutcome::Failed { current: None }),
         }
-    }
-}
-
-impl FenceStore for BootstrapRaceStore {
-    async fn advance_fence(&self, _min_epoch: u64) -> Result<()> {
-        Ok(())
-    }
-
-    async fn current_fence(&self) -> Result<u64> {
-        Ok(0)
     }
 }
 

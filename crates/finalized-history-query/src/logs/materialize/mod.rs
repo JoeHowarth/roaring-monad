@@ -64,7 +64,7 @@ mod tests {
     use crate::domain::types::{BlockLogHeader, Log, LogDirFragment, LogDirectoryBucket};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{BlobStore, CreateOutcome, FenceToken, MetaStore, Page, PutCond};
+    use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, Page, PutCond};
     use futures::executor::block_on;
 
     struct CountingBlobStore {
@@ -133,7 +133,6 @@ mod tests {
                     first_log_ids: vec![11, 13],
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write directory bucket");
@@ -169,7 +168,6 @@ mod tests {
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write directory fragment");
@@ -209,7 +207,6 @@ mod tests {
                     ],
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write directory bucket");
@@ -266,7 +263,6 @@ mod tests {
                     end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write directory fragment");
@@ -276,7 +272,6 @@ mod tests {
                     offsets: vec![0, encoded.len() as u32],
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write block log header");
@@ -363,7 +358,6 @@ mod tests {
                 &block_log_header_key(block_num),
                 encode_block_log_header(&BlockLogHeader { offsets }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write block log header");

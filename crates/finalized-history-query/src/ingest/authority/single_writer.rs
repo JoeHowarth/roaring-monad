@@ -3,8 +3,8 @@ use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::{PublicationState, SessionId};
 use crate::error::{Error, Result};
 use crate::ingest::authority::{WriteAuthority, WriteToken};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
-use crate::store::traits::{FenceToken, MetaStore, PutCond};
+use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::traits::{MetaStore, PutCond};
 
 const SINGLE_WRITER_OWNER_ID: u64 = 0;
 const SINGLE_WRITER_SESSION_ID: SessionId = *b"single-writer-v1";
@@ -24,7 +24,7 @@ impl<P> SingleWriterAuthority<P> {
     }
 }
 
-impl<P: MetaStore + PublicationStore + FenceStore> SingleWriterAuthority<P> {
+impl<P: MetaStore + PublicationStore> SingleWriterAuthority<P> {
     fn sentinel_state(epoch: u64, indexed_finalized_head: u64) -> PublicationState {
         PublicationState {
             owner_id: SINGLE_WRITER_OWNER_ID,
@@ -46,7 +46,7 @@ impl<P: MetaStore + PublicationStore + FenceStore> SingleWriterAuthority<P> {
     }
 }
 
-impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWriterAuthority<P> {
+impl<P: MetaStore + PublicationStore> WriteAuthority for SingleWriterAuthority<P> {
     async fn authorize(
         &self,
         current: &WriteToken,
@@ -90,7 +90,6 @@ impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWrit
                 PUBLICATION_STATE_KEY,
                 encode_publication_state(&next),
                 PutCond::Any,
-                FenceToken(current.epoch),
             )
             .await?;
         if !result.applied {
@@ -105,19 +104,13 @@ impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWrit
         Ok(next_token)
     }
 
-    fn fence(&self, token: &WriteToken) -> FenceToken {
-        FenceToken(token.epoch)
-    }
-
     async fn acquire(&self, _observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken> {
         loop {
-            let current_fence = self.publication_store.current_fence().await?.max(1);
             match self.publication_store.load().await? {
                 None => {
-                    let initial = Self::sentinel_state(current_fence, 0);
+                    let initial = Self::sentinel_state(1, 0);
                     match self.publication_store.create_if_absent(&initial).await? {
                         CasOutcome::Applied(state) => {
-                            self.publication_store.advance_fence(state.epoch).await?;
                             let token = WriteToken {
                                 epoch: state.epoch,
                                 indexed_finalized_head: state.indexed_finalized_head,
@@ -136,33 +129,8 @@ impl<P: MetaStore + PublicationStore + FenceStore> WriteAuthority for SingleWrit
                         return Err(Self::mode_conflict());
                     }
 
-                    let epoch = state.epoch.max(current_fence);
-                    if state.epoch != epoch {
-                        let next = Self::sentinel_state(epoch, state.indexed_finalized_head);
-                        match self
-                            .publication_store
-                            .compare_and_set(&state, &next)
-                            .await?
-                        {
-                            CasOutcome::Applied(state) => {
-                                self.publication_store.advance_fence(state.epoch).await?;
-                                let token = WriteToken {
-                                    epoch: state.epoch,
-                                    indexed_finalized_head: state.indexed_finalized_head,
-                                };
-                                *self.token.lock().await = Some(token);
-                                return Ok(token);
-                            }
-                            CasOutcome::Failed { current: Some(_) } => continue,
-                            CasOutcome::Failed { current: None } => {
-                                return Err(Error::PublicationConflict);
-                            }
-                        }
-                    }
-
-                    self.publication_store.advance_fence(epoch).await?;
                     let token = WriteToken {
-                        epoch,
+                        epoch: state.epoch.max(1),
                         indexed_finalized_head: state.indexed_finalized_head,
                     };
                     *self.token.lock().await = Some(token);
@@ -234,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn acquire_after_prior_lease_run_picks_up_the_higher_fence_epoch() {
+    fn acquire_after_prior_lease_run_keeps_existing_epoch() {
         block_on(async {
             let store = InMemoryMetaStore::default();
             let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
@@ -262,7 +230,7 @@ mod tests {
                 .await
                 .expect("single writer acquire");
 
-            assert_eq!(token.epoch, 2);
+            assert_eq!(token.epoch, 1);
         });
     }
 
@@ -280,17 +248,6 @@ mod tests {
                 .await
                 .expect_err("publish should reject regression");
             assert!(matches!(err, Error::PublicationConflict));
-        });
-    }
-
-    #[test]
-    fn fence_returns_the_acquired_epoch() {
-        block_on(async {
-            let store = InMemoryMetaStore::default();
-            let authority = SingleWriterAuthority::new(store);
-            let token = authority.acquire(None).await.expect("acquire");
-
-            assert_eq!(authority.fence(&token).0, token.epoch);
         });
     }
 

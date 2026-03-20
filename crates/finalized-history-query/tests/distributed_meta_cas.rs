@@ -1,7 +1,7 @@
 #![cfg(feature = "distributed-stores")]
 
 use finalized_history_query::store::scylla::ScyllaMetaStore;
-use finalized_history_query::store::traits::{FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::traits::{MetaStore, PutCond};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lwt_if_absent_has_single_winner() {
@@ -14,8 +14,6 @@ async fn lwt_if_absent_has_single_winner() {
     let store = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
         .expect("connect scylla");
-    store.set_min_epoch(1).await.expect("set min epoch");
-
     let key = b"meta/cas_race".to_vec();
     let s1 = store.clone();
     let s2 = store.clone();
@@ -25,7 +23,6 @@ async fn lwt_if_absent_has_single_winner() {
             &key,
             bytes::Bytes::from_static(b"writer1"),
             PutCond::IfAbsent,
-            FenceToken(1),
         )
         .await
         .expect("put1")
@@ -38,7 +35,6 @@ async fn lwt_if_absent_has_single_winner() {
             &key2,
             bytes::Bytes::from_static(b"writer2"),
             PutCond::IfAbsent,
-            FenceToken(1),
         )
         .await
         .expect("put2")
@@ -69,14 +65,11 @@ async fn lwt_if_version_has_single_winner() {
     let store = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
         .expect("connect scylla");
-    store.set_min_epoch(1).await.expect("set min epoch");
-
     let seed = store
         .put(
             b"meta/ver_race",
             bytes::Bytes::from_static(b"seed"),
             PutCond::IfAbsent,
-            FenceToken(1),
         )
         .await
         .expect("seed put");
@@ -91,7 +84,6 @@ async fn lwt_if_version_has_single_winner() {
             b"meta/ver_race",
             bytes::Bytes::from_static(b"writer1"),
             PutCond::IfVersion(expected_version),
-            FenceToken(1),
         )
         .await
         .expect("put1")
@@ -103,7 +95,6 @@ async fn lwt_if_version_has_single_winner() {
             b"meta/ver_race",
             bytes::Bytes::from_static(b"writer2"),
             PutCond::IfVersion(expected_version),
-            FenceToken(1),
         )
         .await
         .expect("put2")

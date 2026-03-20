@@ -16,7 +16,6 @@ All read-path data artifacts are immutable once published. The only shared mutab
 
 - `publication_state` — ownership, epoch, indexed finalized head
 - `open_stream_page/*` — write/recovery inventory markers
-- backend fence state where applicable
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.
 
@@ -114,16 +113,16 @@ A stream ID encodes the index kind, the indexed value, and the shard:
 
 | Tier | Key pattern | Scope | Written by |
 |------|------------|-------|------------|
-| Fragment meta | `stream_frag_meta/<stream_id>/<page_start>/<block_num>` | One block's bitmap contribution | Ingest |
-| Fragment blob | `stream_frag_blob/<stream_id>/<page_start>/<block_num>` | Roaring bitmap blob | Ingest |
-| Page meta | `stream_page_meta/<stream_id>/<page_start>` | Compacted page bitmap meta | Compaction |
-| Page blob | `stream_page_blob/<stream_id>/<page_start>` | Compacted roaring bitmap | Compaction |
+| Fragment meta | `stream_frag_meta/<stream_id>/<page_start_local>/<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
+| Fragment blob | `stream_frag_blob/<stream_id>/<page_start_local>/<block_num>` | Roaring bitmap blob for one shard-local page | Ingest |
+| Page meta | `stream_page_meta/<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
+| Page blob | `stream_page_blob/<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
 
 Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 
 ### Open-Page Markers
 
-`open_stream_page/<shard>/<page_start>/<stream_id>` markers track which stream pages have active (unsealed) fragments. They are used during:
+`open_stream_page/<shard>/<page_start_local>/<stream_id>` markers track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
 
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
 - startup repair: to clean up stale markers left by interrupted ingest

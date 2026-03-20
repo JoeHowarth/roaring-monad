@@ -10,7 +10,7 @@ use crate::domain::keys::{
 use crate::error::{Error, Result};
 use crate::logs::ingest::compact_stream_page;
 use crate::store::traits::BlobStore;
-use crate::store::traits::{DelCond, FenceToken, MetaStore, PutCond};
+use crate::store::traits::{DelCond, MetaStore, PutCond};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenStreamPage {
@@ -63,14 +63,12 @@ impl OpenStreamPage {
 pub async fn mark_open_stream_page_if_absent<M: MetaStore>(
     meta_store: &M,
     page: &OpenStreamPage,
-    fence: FenceToken,
 ) -> Result<()> {
     let _ = meta_store
         .put(
             &open_stream_page_key(page.shard, page.page_start_local, &page.stream_id),
             Bytes::new(),
             PutCond::IfAbsent,
-            fence,
         )
         .await?;
     Ok(())
@@ -79,13 +77,11 @@ pub async fn mark_open_stream_page_if_absent<M: MetaStore>(
 pub async fn delete_open_stream_page<M: MetaStore>(
     meta_store: &M,
     page: &OpenStreamPage,
-    fence: FenceToken,
 ) -> Result<()> {
     meta_store
         .delete(
             &open_stream_page_key(page.shard, page.page_start_local, &page.stream_id),
             DelCond::Any,
-            fence,
         )
         .await
 }
@@ -212,7 +208,6 @@ pub async fn repair_open_stream_page_markers<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     next_log_id: u64,
-    fence: FenceToken,
 ) -> Result<()> {
     for page in list_all_open_stream_pages(meta_store)
         .await?
@@ -224,10 +219,10 @@ pub async fn repair_open_stream_page_markers<M: MetaStore, B: BlobStore>(
             blob_store,
             &page.stream_id,
             page.page_start_local,
-            fence.0,
+            0,
         )
         .await?;
-        delete_open_stream_page(meta_store, &page, fence).await?;
+        delete_open_stream_page(meta_store, &page).await?;
     }
     Ok(())
 }

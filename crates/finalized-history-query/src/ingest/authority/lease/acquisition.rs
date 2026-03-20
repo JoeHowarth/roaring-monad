@@ -1,15 +1,10 @@
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};
 
-impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
-    async fn ensure_fence_for(&self, lease: PublicationLease) -> Result<PublicationLease> {
-        self.publication_store.advance_fence(lease.epoch).await?;
-        Ok(lease)
-    }
-
+impl<P: PublicationStore> LeaseAuthority<P> {
     pub(super) fn lease_valid_through_block(&self, observed_upstream_finalized_block: u64) -> u64 {
         observed_upstream_finalized_block.saturating_add(self.lease_blocks - 1)
     }
@@ -32,7 +27,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                         .lease_valid_through_block(observed_upstream_finalized_block),
                 };
                 match self.publication_store.create_if_absent(&initial).await? {
-                    CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
+                    CasOutcome::Applied(state) => return Ok(state.into()),
                     CasOutcome::Failed {
                         current: Some(state),
                     } => state,
@@ -57,7 +52,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                         .lease_valid_through_block(observed_upstream_finalized_block),
                 };
                 if next.lease_valid_through_block <= current.lease_valid_through_block {
-                    return self.ensure_fence_for(current.into()).await;
+                    return Ok(current.into());
                 }
 
                 match self
@@ -65,7 +60,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                     .compare_and_set(&current, &next)
                     .await?
                 {
-                    CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
+                    CasOutcome::Applied(state) => return Ok(state.into()),
                     CasOutcome::Failed {
                         current: Some(state),
                     } => {
@@ -98,7 +93,7 @@ impl<P: PublicationStore + FenceStore> LeaseAuthority<P> {
                 .compare_and_set(&current, &next)
                 .await?
             {
-                CasOutcome::Applied(state) => return self.ensure_fence_for(state.into()).await,
+                CasOutcome::Applied(state) => return Ok(state.into()),
                 CasOutcome::Failed {
                     current: Some(state),
                 } => current = state,

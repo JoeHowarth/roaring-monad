@@ -1,8 +1,6 @@
 use crate::core::state::{derive_next_log_id, load_finalized_head_state};
 use crate::error::Result;
 use crate::ingest::authority::{WriteAuthority, WriteToken};
-use crate::ingest::open_pages::repair_open_stream_page_markers;
-use crate::ingest::recovery::cleanup_unpublished_suffix;
 use crate::recovery::{RecoveryPlan, build_recovery_plan, startup_plan};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -85,23 +83,8 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     }
 
     async fn recover_and_plan(&self, token: WriteToken) -> Result<RecoveryPlan> {
-        let fence = self.ingest.authority.fence(&token);
-        let _cleaned = cleanup_unpublished_suffix(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            token.indexed_finalized_head,
-            fence,
-        )
-        .await?;
         let next_log_id =
             derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
-        repair_open_stream_page_markers(
-            &self.ingest.meta_store,
-            &self.ingest.blob_store,
-            next_log_id,
-            fence,
-        )
-        .await?;
         Ok(build_recovery_plan(
             token.indexed_finalized_head,
             token.epoch,

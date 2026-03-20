@@ -12,7 +12,7 @@ use crate::domain::keys::{
 use crate::domain::types::{BlockLogHeader, BlockMeta, Log, LogDirFragment};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, CreateOutcome, FenceToken, MetaStore, PutCond};
+use crate::store::traits::{BlobStore, CreateOutcome, MetaStore, PutCond};
 
 #[derive(Clone, Copy)]
 pub(in crate::logs) enum ImmutableClass {
@@ -27,8 +27,9 @@ pub(in crate::logs) async fn put_immutable_meta<M: MetaStore>(
     epoch: u64,
     class: ImmutableClass,
 ) -> Result<()> {
+    let _ = epoch;
     let result = meta_store
-        .put(key, value.clone(), PutCond::IfAbsent, FenceToken(epoch))
+        .put(key, value.clone(), PutCond::IfAbsent)
         .await?;
     if result.applied {
         return Ok(());

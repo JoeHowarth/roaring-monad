@@ -18,9 +18,9 @@ use finalized_history_query::error::{Error, Result};
 use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
+use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, CreateOutcome, DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, CreateOutcome, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
 use futures::executor::block_on;
 
@@ -100,19 +100,13 @@ impl MetaStore for FaultyMetaStore {
         self.inner.get(key).await
     }
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult> {
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
         self.injector.maybe_fail(FaultOp::MetaPut, key)?;
-        self.inner.put(key, value, cond, fence).await
+        self.inner.put(key, value, cond).await
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
-        self.inner.delete(key, cond, fence).await
+    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
+        self.inner.delete(key, cond).await
     }
 
     async fn list_prefix(
@@ -147,16 +141,6 @@ impl PublicationStore for FaultyMetaStore {
         self.injector
             .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
         self.inner.compare_and_set(expected, next).await
-    }
-}
-
-impl FenceStore for FaultyMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
-        self.inner.advance_fence(min_epoch).await
-    }
-
-    async fn current_fence(&self) -> Result<u64> {
-        self.inner.current_fence().await
     }
 }
 
@@ -392,7 +376,7 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
 }
 
 #[test]
-fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
+fn takeover_without_cleanup_rejects_different_retry_payload_for_same_block() {
     block_on(async {
         let injector = Arc::new(FaultInjector::default());
         let meta = Arc::new(InMemoryMetaStore::default());
@@ -420,7 +404,6 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
                 count: 0,
             }),
             PutCond::Any,
-            FenceToken(1),
         )
         .await
         .expect("seed block 1 meta");
@@ -484,7 +467,10 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
         ));
         let takeover_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 2);
-        takeover_writer.startup().await.expect("startup cleanup");
+        takeover_writer
+            .startup()
+            .await
+            .expect("startup without cleanup");
 
         let retry_block = mk_block(
             2,
@@ -496,10 +482,11 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
                 mk_log(7, 10, 23, 2, 0, 3),
             ],
         );
-        takeover_writer
+        let err = takeover_writer
             .ingest_finalized_block(retry_block)
             .await
-            .expect("retry after cleanup");
+            .expect_err("retry with different immutable artifacts should conflict");
+        assert!(matches!(err, Error::ArtifactConflict));
 
         let plan = startup_plan(
             &takeover_writer.ingest.meta_store,
@@ -507,7 +494,7 @@ fn startup_cleanup_removes_prepublish_summaries_before_takeover_retry() {
             0,
         )
         .await
-        .expect("post retry startup plan");
-        assert_eq!(plan.head_state.indexed_finalized_head, 2);
+        .expect("post conflict startup plan");
+        assert_eq!(plan.head_state.indexed_finalized_head, 1);
     });
 }

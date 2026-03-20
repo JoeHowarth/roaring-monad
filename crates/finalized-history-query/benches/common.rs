@@ -33,7 +33,7 @@ use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
-use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use finalized_history_query::{
     Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
 };
@@ -739,7 +739,7 @@ pub fn materializer<'a>(
 
 async fn put_meta_record(meta_store: &InMemoryMetaStore, key: &[u8], value: Bytes) {
     meta_store
-        .put(key, value, PutCond::Any, FenceToken(DEFAULT_WRITER_EPOCH))
+        .put(key, value, PutCond::Any)
         .await
         .expect("put meta record");
 }

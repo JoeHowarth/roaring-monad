@@ -64,8 +64,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             derive_next_log_id(&self.meta_store, token.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenStreamPage>::new();
-        let fence = self.authority.fence(&token);
-        let epoch = fence.0;
+        let epoch = token.epoch;
 
         for block in blocks {
             persist_log_artifacts(
@@ -111,7 +110,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id))
         {
-            mark_open_stream_page_if_absent(&self.meta_store, page, fence).await?;
+            mark_open_stream_page_if_absent(&self.meta_store, page).await?;
         }
 
         compact_newly_sealed_directory(&self.meta_store, from_next_log_id, next_log_id, epoch)
@@ -133,7 +132,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
                 epoch,
             )
             .await?;
-            delete_open_stream_page(&self.meta_store, &page, fence).await?;
+            delete_open_stream_page(&self.meta_store, &page).await?;
         }
 
         let publish_token = self

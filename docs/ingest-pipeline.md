@@ -1,6 +1,6 @@
 # Ingest Pipeline
 
-This document describes the block ingestion flow, artifact writes, compaction triggers, and recovery behavior.
+This document describes the block ingestion flow, artifact writes, compaction triggers, and startup behavior.
 
 ## Block Ingestion Flow
 
@@ -65,39 +65,17 @@ When `next_log_id` crosses a stream page boundary (see [storage-model.md](storag
 
 ## Open-Page Markers
 
-`open_stream_page/<shard>/<page_start>/<stream_id>` markers serve two purposes:
+`open_stream_page/<shard>/<page_start_local>/<stream_id>` markers serve two purposes:
 
 ### During ingest
 
 When a stream fragment is written to a page for the first time in a batch, an open-page marker is created. After the batch completes, markers for pages that remain open (not sealed by the batch) are retained.
 
-### During startup repair
-
-At startup, stale open-page markers may exist from interrupted ingest. The repair process:
-
-1. list all `open_stream_page/*` markers
-2. for each marker, check whether the page is actually sealed (the current `next_log_id` is past the page boundary)
-3. if sealed, compact the page and remove the marker
-4. if not sealed, the marker is valid and kept
-
-## Recovery: cleanup_unpublished_suffix
-
-When a writer acquires ownership (fresh or after takeover), it cleans any artifacts above the published head that may have been written by a previous writer that failed before publishing:
-
-- deletes `block_meta/<block_num>` for blocks above `indexed_finalized_head`
-- deletes `block_log_headers/<block_num>` for those blocks
-- deletes `block_logs/<block_num>` blobs for those blocks
-- deletes `block_hash_to_num/<hash>` entries for those blocks
-- deletes directory fragments (`log_dir_frag/...`) for those blocks
-- deletes stream fragments (`stream_frag_meta/...`, `stream_frag_blob/...`) for those blocks
-
-This runs before any new ingest, ensuring the write position is clean.
-
 ## Important Boundaries
 
-- `api/service.rs` startup: re-authorizes cached writer or acquires ownership, then runs cleanup-first recovery
+- `api/service.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
 - `ingest/engine.rs`: validates finalized sequencing, orchestrates publication from current head to new tail
 - `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 
-See [write-authority.md](write-authority.md) for the lease and fencing model.
+See [write-authority.md](write-authority.md) for the lease and publication model.

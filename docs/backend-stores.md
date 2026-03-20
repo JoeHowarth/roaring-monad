@@ -4,13 +4,13 @@ This document describes the store trait abstractions and their implementations.
 
 ## MetaStore
 
-The `MetaStore` trait provides key-value storage with conditional writes and fencing:
+The `MetaStore` trait provides key-value storage with conditional writes:
 
 ```rust
 pub trait MetaStore: Send + Sync {
     async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond, fence: FenceToken) -> Result<PutResult>;
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()>;
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult>;
+    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()>;
     async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page>;
 }
 ```
@@ -18,7 +18,6 @@ pub trait MetaStore: Send + Sync {
 - `Record { value: Bytes, version: u64 }` — every stored value carries a monotonic version
 - `PutCond` — `Any`, `IfAbsent`, or `IfVersion(u64)` for conditional writes
 - `DelCond` — `Any` or `IfVersion(u64)` for conditional deletes
-- `FenceToken(u64)` — epoch-based fencing; operations with a token below the stored minimum epoch return `LeaseLost`. See [write-authority.md](write-authority.md) for the fencing model.
 
 ## BlobStore
 
@@ -37,20 +36,15 @@ pub trait BlobStore: Send + Sync {
 
 `read_range` has a default implementation that loads the full blob and slices locally. Backends with native range-read support can override this.
 
-## PublicationStore + FenceStore
+## PublicationStore
 
-Separate traits for publication-state CAS and fence management:
+Separate trait for publication-state CAS:
 
 ```rust
 pub trait PublicationStore: Send + Sync {
     async fn load(&self) -> Result<Option<PublicationState>>;
     async fn create_if_absent(&self, initial: &PublicationState) -> Result<CasOutcome<PublicationState>>;
     async fn compare_and_set(&self, expected: &PublicationState, next: &PublicationState) -> Result<CasOutcome<PublicationState>>;
-}
-
-pub trait FenceStore: Send + Sync {
-    async fn advance_fence(&self, min_epoch: u64) -> Result<()>;
-    async fn current_fence(&self) -> Result<u64>;
 }
 ```
 
@@ -60,10 +54,8 @@ pub trait FenceStore: Send + Sync {
 
 Test doubles backed by in-memory collections.
 
-- `InMemoryMetaStore` — `BTreeMap<Vec<u8>, Record>` behind `RwLock`, implements `MetaStore` + `PublicationStore` + `FenceStore`
+- `InMemoryMetaStore` — `BTreeMap<Vec<u8>, Record>` behind `RwLock`, implements `MetaStore` + `PublicationStore`
 - `InMemoryBlobStore` — `HashMap<Vec<u8>, Bytes>` behind `RwLock`, implements `BlobStore`
-
-Fence enforcement uses `AtomicU64` for the minimum epoch.
 
 ## FsMetaStore / FsBlobStore
 
@@ -76,18 +68,18 @@ File-system backed stores for local development and testing.
 - `PublicationStore` CAS operations are serialized via a per-path mutex to prevent races
 - `PublicationStore` CAS writes use temp-file + rename for crash safety; regular `MetaStore::put` writes directly (non-atomic)
 
-Implements `MetaStore` + `PublicationStore` + `FenceStore` (meta) and `BlobStore` (blob).
+Implements `MetaStore` + `PublicationStore` (meta) and `BlobStore` (blob).
 
 ## ScyllaMetaStore
 
-Scylla (Cassandra-compatible) implementation for `MetaStore` + `PublicationStore` + `FenceStore`.
+Scylla (Cassandra-compatible) implementation for `MetaStore` + `PublicationStore`.
 
 ### Schema
 
-Two tables:
+Two metadata tables are created:
 
 - `meta_kv (grp text, bucket smallint, k blob, v blob, version bigint, PRIMARY KEY ((grp, bucket), k))` — main key-value store
-- `meta_fence (id text PRIMARY KEY, min_epoch bigint)` — fence state
+- `meta_fence (id text PRIMARY KEY, min_epoch bigint)` — auxiliary compatibility/operations state
 
 ### Key partitioning
 
@@ -101,10 +93,6 @@ This distributes load across partitions while keeping related keys in the same g
 ### CAS operations
 
 `PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions. `PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and conflicts in telemetry.
-
-### Fence validation
-
-The fence is checked against a cached `min_epoch` value. The cached value is refreshed from Scylla at most once per `fence_check_interval_ms` (default: 1000ms) to avoid excessive reads.
 
 ### Retry policy
 

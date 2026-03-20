@@ -12,7 +12,7 @@ use finalized_history_query::domain::types::BlockMeta;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;
-use finalized_history_query::store::traits::{BlobStore, FenceToken, MetaStore, PutCond};
+use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use futures::executor::block_on;
 
 use helpers::*;
@@ -39,7 +39,6 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
                 count: 0,
             }),
             PutCond::Any,
-            FenceToken(1),
         )
         .await
         .expect("seed block meta");
@@ -83,7 +82,6 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
                 count: 0,
             }),
             PutCond::Any,
-            FenceToken(1),
         )
         .await
         .expect("seed block meta");
@@ -143,7 +141,6 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
                 count: 0,
             }),
             PutCond::Any,
-            FenceToken(1),
         )
         .await
         .expect("seed block meta");

@@ -33,7 +33,7 @@ mod tests {
     use crate::domain::keys::block_meta_key;
     use crate::domain::types::BlockMeta;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{MetaStore, PutCond};
     use futures::executor::block_on;
 
     #[test]
@@ -49,7 +49,6 @@ mod tests {
                     count: 3,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write block meta");

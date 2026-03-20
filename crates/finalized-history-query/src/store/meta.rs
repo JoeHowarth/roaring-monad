@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
@@ -8,33 +7,19 @@ use crate::codec::finalized_state::{decode_publication_state, encode_publication
 use crate::domain::keys::PUBLICATION_STATE_KEY;
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, FenceStore, PublicationStore};
-use crate::store::traits::{DelCond, FenceToken, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::traits::{DelCond, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
     inner: Arc<RwLock<BTreeMap<Vec<u8>, Record>>>,
-    min_epoch: Arc<AtomicU64>,
 }
 
 impl InMemoryMetaStore {
-    pub fn with_min_epoch(min_epoch: u64) -> Self {
+    pub fn with_min_epoch(_min_epoch: u64) -> Self {
         Self {
             inner: Arc::new(RwLock::new(BTreeMap::new())),
-            min_epoch: Arc::new(AtomicU64::new(min_epoch)),
         }
-    }
-
-    pub fn set_min_epoch(&self, min_epoch: u64) {
-        self.min_epoch.store(min_epoch, Ordering::Relaxed);
-    }
-
-    fn validate_fence(&self, fence: FenceToken) -> Result<()> {
-        let required = self.min_epoch.load(Ordering::Relaxed);
-        if fence.0 < required {
-            return Err(Error::LeaseLost);
-        }
-        Ok(())
     }
 }
 
@@ -53,14 +38,7 @@ impl MetaStore for InMemoryMetaStore {
         Ok(guard.get(key).cloned())
     }
 
-    async fn put(
-        &self,
-        key: &[u8],
-        value: Bytes,
-        cond: PutCond,
-        fence: FenceToken,
-    ) -> Result<PutResult> {
-        self.validate_fence(fence)?;
+    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
         let mut guard = self
             .inner
             .write()
@@ -96,8 +74,7 @@ impl MetaStore for InMemoryMetaStore {
         })
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond, fence: FenceToken) -> Result<()> {
-        self.validate_fence(fence)?;
+    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
         let mut guard = self
             .inner
             .write()
@@ -219,28 +196,13 @@ impl PublicationStore for InMemoryMetaStore {
     }
 }
 
-impl FenceStore for InMemoryMetaStore {
-    async fn advance_fence(&self, min_epoch: u64) -> Result<()> {
-        let _ = self
-            .min_epoch
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.max(min_epoch))
-            });
-        Ok(())
-    }
-
-    async fn current_fence(&self) -> Result<u64> {
-        Ok(self.min_epoch.load(Ordering::Relaxed))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
     use futures::executor::block_on;
 
     use super::InMemoryMetaStore;
-    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{MetaStore, PutCond};
 
     #[test]
     fn list_prefix_pagination_does_not_repeat_cursor_entry() {
@@ -249,7 +211,7 @@ mod tests {
             for index in 0..1_025u64 {
                 let key = format!("list-prefix/{index:04}").into_bytes();
                 store
-                    .put(&key, Bytes::from_static(b"v"), PutCond::Any, FenceToken(0))
+                    .put(&key, Bytes::from_static(b"v"), PutCond::Any)
                     .await
                     .expect("seed key");
             }

@@ -99,7 +99,7 @@ mod tests {
     use crate::domain::types::{BlockMeta, PublicationState};
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::publication::{CasOutcome, PublicationStore};
-    use crate::store::traits::{FenceToken, MetaStore, PutCond};
+    use crate::store::traits::{MetaStore, PutCond};
     use futures::executor::block_on;
 
     #[test]
@@ -139,7 +139,6 @@ mod tests {
                     count: 2,
                 }),
                 PutCond::Any,
-                FenceToken(1),
             )
             .await
             .expect("write block meta");
