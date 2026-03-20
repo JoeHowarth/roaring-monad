@@ -1,6 +1,6 @@
 use roaring::RoaringBitmap;
 
-use crate::api::query_logs::{ExecutionBudget, QueryLogsRequest};
+use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::cache::{BytesCache, NoopBytesCache};
 use crate::codec::log_ref::LogRef;
 use crate::config::Config;

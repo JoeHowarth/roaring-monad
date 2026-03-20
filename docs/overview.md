@@ -33,8 +33,7 @@ The crate is organized in three layers.
 
 ### Method boundary
 
-- `src/api/query_logs.rs`
-- `src/api/write.rs`
+- `src/api/mod.rs`
 - `src/api/service/*`
 
 ### Shared finalized-history substrate
@@ -143,6 +142,13 @@ class BlockIdentity:
     parent_hash: bytes32
 
 
+class BlockMeta:
+    block_hash: bytes32
+    parent_hash: bytes32
+    first_log_id: int
+    count: u32
+
+
 class LogSequencingState:
     next_log_id: LogId
 
@@ -159,22 +165,22 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 Shared metadata:
 
 - `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_valid_through_block }`
-- `block_meta/<block_num> -> BlockMeta`
+- `block_meta/<block_num> -> BlockMeta { block_hash, parent_hash, first_log_id, count }`
 - `block_hash_to_num/<block_hash> -> block_num`
-- `block_log_headers/<block_num> -> BlockLogHeader`
+- `block_log_headers/<block_num> -> BlockLogHeader { offsets }`
 
 Directory metadata:
 
-- `log_dir_frag/<sub_bucket_start>/<block_num> -> LogDirFragment`
-- `log_dir_sub/<sub_bucket_start> -> LogDirectoryBucket`
-- optional `log_dir/<bucket_start> -> LogDirectoryBucket`
+- `log_dir_frag/<sub_bucket_start>/<block_num> -> LogDirFragment { block_num, first_log_id, end_log_id_exclusive }`
+- `log_dir_sub/<sub_bucket_start> -> LogDirectoryBucket { start_block, first_log_ids }`
+- optional `log_dir/<bucket_start> -> LogDirectoryBucket { start_block, first_log_ids }`
 
 Stream index metadata/blob pairs:
 
-- `open_stream_page/<shard>/<page_start>/<stream_id> -> marker`
-- `stream_frag_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta`
+- `open_stream_page/<shard>/<page_start_local>/<stream_id> -> marker`
+- `stream_frag_meta/<stream_id>/<page_start_local>/<block_num> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
 - `stream_frag_blob/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
-- `stream_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta`
+- `stream_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
 - `stream_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
 
 Payload blobs:
@@ -214,56 +220,55 @@ The crate intentionally does not implement:
 ### Pass 1: Public surface
 
 1. `src/lib.rs` — crate boundary, re-exports
-2. `src/api/query_logs.rs` — transport-free query surface
-3. `src/api/write.rs` — write-side public boundary
-4. `src/api/service/` — service behavior: query, ingest, health
+2. `src/api/mod.rs` — transport-free query surface and write-side public boundary
+3. `src/api/service/` — service behavior: query, ingest, health
 
 ### Pass 2: Shared substrate
 
-5. `src/cache/mod.rs` — immutable-bytes cache boundary, table IDs, byte-budget config
-6. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
-7. `src/core/page.rs` — pagination/result vocabulary
-8. `src/core/refs.rs` — shared `BlockRef` type
-9. `src/core/state.rs` — shared state projections
-10. `src/core/range.rs` — block-range validation and clipping
-11. `src/core/execution.rs` — matched-primary vocabulary
-12. `src/core/runtime.rs` — degraded/throttled state machine
-13. `src/domain/keys.rs` — immutable-frontier key layout
-14. `src/streams/chunk.rs` — roaring bitmap blob format
+4. `src/cache/mod.rs` — immutable-bytes cache boundary, table IDs, byte-budget config
+5. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
+6. `src/core/page.rs` — pagination/result vocabulary
+7. `src/core/refs.rs` — shared `BlockRef` type
+8. `src/core/state.rs` — shared state projections
+9. `src/core/range.rs` — block-range validation and clipping
+10. `src/core/execution.rs` — matched-primary vocabulary
+11. `src/core/runtime.rs` — degraded/throttled state machine
+12. `src/domain/keys.rs` — immutable-frontier key layout
+13. `src/streams/chunk.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
 
-15. `src/logs/filter.rs` — log matching semantics, indexed clauses
-16. `src/logs/types.rs` — logs-family aliases and projections
-17. `src/logs/state.rs` — `BlockMeta` helpers, log-window fields
-18. `src/logs/window.rs` — block range to primary-ID range bridge
-19. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
-20. `src/logs/query/` — main query engine
-21. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
+14. `src/logs/filter.rs` — log matching semantics, indexed clauses
+15. `src/logs/types.rs` — logs-family aliases and projections
+16. `src/logs/state.rs` — `BlockMeta` helpers, log-window fields
+17. `src/logs/window.rs` — block range to primary-ID range bridge
+18. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
+19. `src/logs/query/` — main query engine
+20. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
 ### Pass 4: Storage and codecs
 
-22. `src/domain/types.rs` — core persisted/data model structs
-23. `src/codec/finalized_state.rs` — `PublicationState`, `BlockMeta` encoding
-24. `src/codec/log.rs` — log, directory bucket, block log header encodings
-25. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
+21. `src/domain/types.rs` — core persisted/data model structs
+22. `src/codec/finalized_state.rs` — `PublicationState`, `BlockMeta` encoding
+23. `src/codec/log.rs` — log, directory bucket, block log header encodings
+24. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 
 ### Pass 5: Ingest orchestration
 
-26. `src/ingest/engine.rs` — ingest orchestrator
-27. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
-28. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-29. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
-30. `src/recovery/startup.rs` — startup view, cleanup, marker repair
+25. `src/ingest/engine.rs` — ingest orchestrator
+26. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
+27. `src/ingest/authority/lease/` — lease-backed multi-writer authority
+28. `src/ingest/authority/single_writer.rs` — fail-closed single-writer authority
+29. `src/recovery/mod.rs` — startup view, cleanup, marker repair
 
 ### Pass 6: End-to-end behavior
 
-31. `tests/publication_authority.rs` — publication state, lease authority, fencing
-32. `tests/startup_recovery.rs` — startup, recovery, session reuse, roles
-33. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-34. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-35. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-36. `tests/crash_injection_matrix.rs` — crash-retry behavior
-37. `tests/differential_and_gc.rs` — differential correctness, recovery
+30. `tests/publication_authority.rs` — publication state, lease authority, fencing
+31. `tests/startup_recovery.rs` — startup, recovery, session reuse, roles
+32. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+33. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+34. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+35. `tests/crash_injection_matrix.rs` — crash-retry behavior
+36. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

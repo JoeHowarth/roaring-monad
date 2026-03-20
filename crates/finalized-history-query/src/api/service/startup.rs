@@ -3,7 +3,7 @@ use crate::error::Result;
 use crate::ingest::authority::{WriteAuthority, WriteToken};
 use crate::ingest::open_pages::repair_open_stream_page_markers;
 use crate::ingest::recovery::cleanup_unpublished_suffix;
-use crate::recovery::startup::{RecoveryPlan, build_recovery_plan, startup_plan};
+use crate::recovery::{RecoveryPlan, build_recovery_plan, startup_plan};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 

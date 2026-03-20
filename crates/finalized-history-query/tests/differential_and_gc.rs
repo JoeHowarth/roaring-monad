@@ -6,7 +6,7 @@ use finalized_history_query::api::{
 use finalized_history_query::config::Config;
 use finalized_history_query::core::ids::LogId;
 use finalized_history_query::domain::types::{Block, Log};
-use finalized_history_query::recovery::startup::startup_plan;
+use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};

@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::api::query_logs::{ExecutionBudget, FinalizedLogQueries, QueryLogsRequest};
-use crate::api::write::FinalizedHistoryWriter;
+use crate::api::{ExecutionBudget, FinalizedHistoryWriter, FinalizedLogQueries, QueryLogsRequest};
 use crate::error::{Error, Result};
 use crate::ingest::authority::WriteAuthority;
 use crate::logs::types::{Block, IngestOutcome, Log};

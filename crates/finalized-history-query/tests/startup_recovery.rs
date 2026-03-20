@@ -13,7 +13,7 @@ use finalized_history_query::config::Config;
 use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_meta_key};
 use finalized_history_query::domain::types::BlockMeta;
-use finalized_history_query::recovery::startup::startup_plan;
+use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationStore;

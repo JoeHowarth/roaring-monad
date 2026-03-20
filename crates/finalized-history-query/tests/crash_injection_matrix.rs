@@ -15,7 +15,7 @@ use finalized_history_query::domain::keys::{
 };
 use finalized_history_query::domain::types::{Block, BlockMeta, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
-use finalized_history_query::recovery::startup::startup_plan;
+use finalized_history_query::recovery::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{CasOutcome, FenceStore, PublicationStore};
