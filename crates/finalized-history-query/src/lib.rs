@@ -12,10 +12,7 @@ pub mod store;
 pub mod streams;
 pub mod tables;
 
-pub use api::{
-    ExecutionBudget, FinalizedHistoryService, FinalizedHistoryWriter, FinalizedLogQueries,
-    QueryLogsRequest,
-};
+pub use api::{ExecutionBudget, FinalizedHistoryService, QueryLogsRequest};
 pub use config::Config;
 pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};

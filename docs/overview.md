@@ -217,7 +217,7 @@ The crate intentionally does not implement:
 ### Pass 1: Public surface
 
 1. `src/lib.rs` — crate boundary, re-exports
-2. `src/api/mod.rs` — transport-free query surface and write-side public boundary
+2. `src/api/mod.rs` — transport-free request/result surface and service export
 3. `src/api/service/` — service behavior: query, ingest, health
 
 ### Pass 2: Shared substrate
