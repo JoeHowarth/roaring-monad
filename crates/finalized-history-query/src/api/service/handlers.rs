@@ -36,19 +36,14 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             return Err(reader_only_mode_error());
         }
 
-        let mut writer = self.writer.lock().await;
-        if !*writer {
-            let _ = self.startup_locked(&mut writer).await?;
-        }
+        let _write_guard = self.write_guard.lock().await;
+        let _ = self.startup_locked().await?;
 
         match self.ingest.ingest_finalized_blocks(&blocks).await {
-            Ok(outcome) => {
-                *writer = true;
-                Ok(outcome)
-            }
+            Ok(outcome) => Ok(outcome),
             Err(error) => {
                 if should_clear_writer(&error) {
-                    *writer = false;
+                    self.ingest.authority.clear().await;
                 }
                 Err(error)
             }

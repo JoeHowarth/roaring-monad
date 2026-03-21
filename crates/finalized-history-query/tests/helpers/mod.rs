@@ -130,8 +130,9 @@ pub async fn acquire_lease<P: PublicationStore + Clone>(
 ) -> finalized_history_query::Result<u64> {
     let authority = LeaseAuthority::new(publication_store, owner_id, lease_blocks, 0);
     authority
-        .acquire(Some(observed_upstream_finalized_block))
+        .ensure_writer(Some(observed_upstream_finalized_block))
         .await
+        .map(|state| state.indexed_finalized_head)
 }
 
 pub fn controlled_observed_finalized_block() -> Option<u64> {

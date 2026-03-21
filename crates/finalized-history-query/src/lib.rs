@@ -21,6 +21,6 @@ pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use core::refs::BlockRef;
 pub use error::{Error, Result};
-pub use ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
+pub use ingest::authority::{AuthorityState, LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
 pub use logs::filter::LogFilter;
 pub use logs::types::{Block, HealthReport, IngestOutcome, Log};

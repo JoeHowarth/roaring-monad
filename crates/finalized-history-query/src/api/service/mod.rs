@@ -22,7 +22,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     config: Config,
     state: Arc<RuntimeState>,
     allows_writes: bool,
-    writer: Arc<futures::lock::Mutex<bool>>,
+    write_guard: Arc<futures::lock::Mutex<()>>,
 }
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
@@ -51,7 +51,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             config,
             state: Arc::new(RuntimeState::default()),
             allows_writes,
-            writer: Arc::new(futures::lock::Mutex::new(false)),
+            write_guard: Arc::new(futures::lock::Mutex::new(())),
         }
     }
 

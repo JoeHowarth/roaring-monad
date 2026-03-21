@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::ingest::authority::WriteAuthority;
+use crate::ingest::authority::{AuthorityState, WriteAuthority};
 use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};
@@ -60,15 +60,25 @@ impl<P: PublicationStore> LeaseAuthority<P> {
 }
 
 impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
-    async fn authorize(&self, observed_upstream_finalized_block: Option<u64>) -> Result<u64> {
+    async fn ensure_writer(
+        &self,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<AuthorityState> {
         let mut guard = self.lease.lock().await;
-        let lease = (*guard).ok_or(Error::PublicationConflict)?;
-
-        let renewed = self
-            .renew_if_needed(lease, observed_upstream_finalized_block)
-            .await?;
-        *guard = Some(renewed);
-        Ok(renewed.indexed_finalized_head)
+        let next_lease = match *guard {
+            Some(lease) => {
+                self.renew_if_needed(lease, observed_upstream_finalized_block)
+                    .await?
+            }
+            None => {
+                self.acquire_publication_with_session(observed_upstream_finalized_block)
+                    .await?
+            }
+        };
+        *guard = Some(next_lease);
+        Ok(AuthorityState {
+            indexed_finalized_head: next_lease.indexed_finalized_head,
+        })
     }
 
     async fn publish(&self, new_head: u64) -> Result<()> {
@@ -104,11 +114,7 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
         }
     }
 
-    async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<u64> {
-        let lease = self
-            .acquire_publication_with_session(observed_upstream_finalized_block)
-            .await?;
-        *self.lease.lock().await = Some(lease);
-        Ok(lease.indexed_finalized_head)
+    async fn clear(&self) {
+        *self.lease.lock().await = None;
     }
 }

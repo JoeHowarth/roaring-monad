@@ -17,8 +17,8 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             return result;
         }
 
-        let mut writer = self.writer.lock().await;
-        let result = self.startup_locked(&mut writer).await;
+        let _write_guard = self.write_guard.lock().await;
+        let result = self.startup_locked().await;
         self.update_backend_state(&result);
         result
     }
@@ -37,45 +37,35 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         result
     }
 
-    pub(super) async fn startup_locked(&self, writer: &mut bool) -> Result<StartupPlan>
+    pub(super) async fn startup_locked(&self) -> Result<StartupPlan>
     where
         M: PublicationStore,
     {
         debug_assert!(self.allows_writes);
-        if *writer {
-            let result = self
-                .ingest
-                .authority
-                .authorize(self.config.observe_upstream_finalized_block.as_ref()())
-                .await;
-            let indexed_finalized_head = match result {
-                Ok(indexed_finalized_head) => indexed_finalized_head,
-                Err(error) => {
-                    if should_clear_writer(&error) {
-                        *writer = false;
-                    }
-                    return Err(error);
-                }
-            };
-            match self.recover_and_plan(indexed_finalized_head).await {
-                Ok(plan) => return Ok(plan),
-                Err(error) => {
-                    if should_clear_writer(&error) {
-                        *writer = false;
-                    }
-                    return Err(error);
-                }
-            }
-        }
-
-        let indexed_finalized_head = self
+        let state = match self
             .ingest
             .authority
-            .acquire(self.config.observe_upstream_finalized_block.as_ref()())
-            .await?;
-        let plan = self.recover_and_plan(indexed_finalized_head).await?;
-        *writer = true;
-        Ok(plan)
+            .ensure_writer(self.config.observe_upstream_finalized_block.as_ref()())
+            .await
+        {
+            Ok(state) => state,
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    self.ingest.authority.clear().await;
+                }
+                return Err(error);
+            }
+        };
+
+        match self.recover_and_plan(state.indexed_finalized_head).await {
+            Ok(plan) => Ok(plan),
+            Err(error) => {
+                if should_clear_writer(&error) {
+                    self.ingest.authority.clear().await;
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {

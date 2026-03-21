@@ -34,15 +34,17 @@ The ingest engine owns:
 
 ```rust
 trait WriteAuthority {
-    async fn acquire(observed_upstream_finalized_block: Option<u64>) -> Result<u64>;
-    async fn authorize(observed_upstream_finalized_block: Option<u64>) -> Result<u64>;
+    async fn ensure_writer(
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<AuthorityState>;
     async fn publish(new_head: u64) -> Result<()>;
+    async fn clear();
 }
 ```
 
-`acquire(...)` and `authorize(...)` return the current `indexed_finalized_head`.
-The authority keeps the active writer session internally rather than exposing a
-separate token type.
+`ensure_writer(...)` returns the current `indexed_finalized_head` in a small
+named state object. The authority keeps the active writer session internally
+rather than exposing a separate token type.
 
 ## PublicationState
 
@@ -79,20 +81,20 @@ Required invariant: `publication_lease_renew_threshold_blocks < publication_leas
 
 Renewal rule: renew when the observed upstream finalized block enters the renew window; otherwise reuse the current lease.
 
-## Acquire / Authorize / Publish Lifecycle
+## Ensure / Publish Lifecycle
 
-### Acquisition
+### `ensure_writer(...)`
+
+If the authority does not have a cached lease:
 
 1. load current `publication_state`
 2. if absent, `create_if_absent` with the initial state
 3. if present and lease expired (or same owner), CAS to claim ownership with a fresh `session_id`
 4. cache the acquired lease internally and return the current `indexed_finalized_head`
 
-### Authorization (cached writer re-auth)
+If the authority already has a cached lease:
 
-When the service has already acquired writer state:
-
-1. use the authority's cached `session_id` and head
+1. use the cached `session_id` and head
 2. check them against the current `publication_state`
 3. verify the lease is still valid against the current upstream observation
 4. if valid, return the current `indexed_finalized_head`
@@ -123,17 +125,11 @@ The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing
 ### Lease-backed reader+writer
 
 ```python
-async def startup_reader_writer(owner_id, observed_upstream_finalized_block, has_writer=False):
-    if has_writer:
-        indexed_finalized_head = authorize_cached_publication(
-            observed_upstream_finalized_block
-        )
-        return recovery_plan_from(indexed_finalized_head)
-
-    indexed_finalized_head = acquire_publication(
-        owner_id, observed_upstream_finalized_block
+async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
+    authority_state = ensure_writer(
+        observed_upstream_finalized_block
     )
-    return recovery_plan_from(indexed_finalized_head)
+    return recovery_plan_from(authority_state.indexed_finalized_head)
 ```
 
 Startup derives the next write position from the published head. It does not delete unpublished suffix artifacts.
