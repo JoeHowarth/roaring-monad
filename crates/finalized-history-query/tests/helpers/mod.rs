@@ -47,6 +47,8 @@ pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block 
         block_hash: [block_num as u8; 32],
         parent_hash,
         logs,
+        txs: Vec::new(),
+        traces: Vec::new(),
     }
 }
 

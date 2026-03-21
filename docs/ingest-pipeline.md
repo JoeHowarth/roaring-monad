@@ -8,9 +8,11 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 async def ingest_finalized_blocks(blocks, lease):
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
 
-    log_state = logs.load_startup_state(lease.indexed_finalized_head)
+    family_states = load_family_startup_states(lease.indexed_finalized_head)
     for block in blocks:
-        await logs.ingest_block(block, log_state)
+        await logs.ingest_block(block, family_states.logs)
+        await txs.ingest_block(block, family_states.txs)
+        await traces.ingest_block(block, family_states.traces)
 
     await compare_and_set_publication_state(
         expected=lease,
@@ -18,11 +20,23 @@ async def ingest_finalized_blocks(blocks, lease):
     )
 ```
 
-The `IngestEngine` orchestrates this flow. It owns finalized sequencing validation, publication, and the shared block loop. Families derive their startup state from the published head and then ingest one shared finalized block at a time.
+The `IngestEngine` orchestrates this flow. It owns finalized sequencing validation, publication, and the shared block loop. Families derive their startup state from the published head and then ingest one shared `FinalizedBlock` at a time.
+
+The current family set is:
+
+- logs: fully implemented and persists artifacts
+- txs: startup-state scaffold plus ingest slot, currently rejects non-empty tx payloads
+- traces: startup-state scaffold plus ingest slot, currently rejects non-empty trace payloads
 
 ## Artifact Write Order
 
 For each block in the batch:
+
+1. **Logs family ingest** — logs artifacts are written through the shared runtime
+2. **Txs family ingest** — reserved slot in the coordinator; currently accepts only empty tx payloads
+3. **Traces family ingest** — reserved slot in the coordinator; currently accepts only empty trace payloads
+
+Within the logs family step, artifact writes remain:
 
 1. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
 2. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
@@ -31,7 +45,7 @@ For each block in the batch:
 5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
 6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
 
-All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary. Writes flow through the service-owned typed `Tables` runtime so ingest also warms the same per-table caches that queries read.
+All family artifacts for the block batch must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary. Writes flow through the service-owned typed `Tables` runtime so ingest also warms the same per-table caches that queries read.
 
 ## Directory Compaction
 
@@ -62,10 +76,13 @@ When a stream fragment is written to a page for the first time in a batch, an op
 ## Important Boundaries
 
 - `api.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
-- `family.rs`: generic per-block family boundary between the concrete API and family-owned logic
+- `block.rs`: shared finalized block envelope carrying block identity plus family payloads
+- `family.rs`: generic per-block family boundary plus the concrete `Families { logs, txs, traces }` set used by startup and ingest
 - `runtime.rs`: shared store-handle + typed-table runtime used by query/startup/ingest
 - `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
 - `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing
+- `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
+- `traces/family.rs`: trace-family scaffold that currently rejects non-empty trace payloads
 - `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 

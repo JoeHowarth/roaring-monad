@@ -63,6 +63,8 @@ mod tests {
             block_hash: [seed; 32],
             parent_hash: [seed.wrapping_add(1); 32],
             logs,
+            txs: Vec::new(),
+            traces: Vec::new(),
         }
     }
 

@@ -47,6 +47,8 @@ mod tests {
                     block_hash: [1; 32],
                 },
             ],
+            txs: Vec::new(),
+            traces: Vec::new(),
         };
         let stats = estimate_stream_appends(&b);
         assert_eq!(stats.addressed, 2);

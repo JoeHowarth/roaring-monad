@@ -1,4 +1,4 @@
-pub use crate::block::Block;
+pub use crate::block::{Block, FinalizedBlock};
 use crate::core::ids::LogId;
 pub use crate::domain::types::PublicationState;
 
@@ -49,18 +49,6 @@ pub struct BlockRecord {
     pub parent_hash: Hash32,
     pub first_log_id: u64,
     pub count: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct IngestOutcome {
-    pub indexed_finalized_head: u64,
-    pub written_logs: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct HealthReport {
-    pub healthy: bool,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,21 +1,23 @@
-use crate::block::Block;
+use crate::block::FinalizedBlock;
 use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::family::BlockFamily;
+use crate::family::Families;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::family::LogsFamily;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
-use crate::logs::types::{HealthReport, IngestOutcome, Log};
+use crate::logs::types::Log;
 use crate::runtime::Runtime;
 pub use crate::startup::StartupPlan;
 use crate::startup::startup_plan;
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::BytesCacheMetrics;
+use crate::traces::family::TracesFamily;
+use crate::txs::family::TxsFamily;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryLogsRequest {
@@ -32,8 +34,22 @@ pub struct ExecutionBudget {
     pub max_results: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct IngestOutcome {
+    pub indexed_finalized_head: u64,
+    pub written_logs: usize,
+    pub written_txs: usize,
+    pub written_traces: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct HealthReport {
+    pub healthy: bool,
+    pub message: String,
+}
+
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A, LogsFamily>,
+    pub ingest: IngestEngine<A, LogsFamily, TxsFamily, TracesFamily>,
     publication_store: MetaPublicationStore<M>,
     query: LogsQueryEngine,
     runtime: Runtime<M, B>,
@@ -49,10 +65,9 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         allows_writes: bool,
     ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
-        let family = LogsFamily;
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
         let publication_store = MetaPublicationStore::new(runtime.meta_store().clone());
-        let ingest = IngestEngine::new(config, authority, family);
+        let ingest = IngestEngine::new(config, authority, Families::default());
         Self {
             ingest,
             publication_store,
@@ -100,11 +115,14 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .await
     }
 
-    pub async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
+    pub async fn ingest_finalized_block(&self, block: FinalizedBlock) -> Result<IngestOutcome> {
         self.ingest_finalized_blocks(vec![block]).await
     }
 
-    pub async fn ingest_finalized_blocks(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
+    pub async fn ingest_finalized_blocks(
+        &self,
+        blocks: Vec<FinalizedBlock>,
+    ) -> Result<IngestOutcome> {
         self.ingest_blocks_with_startup(blocks).await
     }
 
@@ -123,7 +141,10 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .map(|state| state.indexed_finalized_head)
     }
 
-    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
+    async fn ingest_blocks_with_startup(
+        &self,
+        blocks: Vec<FinalizedBlock>,
+    ) -> Result<IngestOutcome> {
         if !self.allows_writes {
             return Err(reader_only_mode_error());
         }
@@ -145,16 +166,18 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        let log_state = self
+        let family_states = self
             .ingest
-            .family
+            .families
             .load_startup_state(self.runtime(), indexed_finalized_head)
             .await?;
         Ok(StartupPlan {
             head_state: crate::store::publication::FinalizedHeadState {
                 indexed_finalized_head,
             },
-            log_state,
+            log_state: family_states.logs,
+            tx_state: family_states.txs,
+            trace_state: family_states.traces,
             warm_streams: 0,
         })
     }

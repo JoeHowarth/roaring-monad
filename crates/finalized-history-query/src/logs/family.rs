@@ -1,8 +1,9 @@
+use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
-use crate::family::BlockFamily;
+use crate::family::Family;
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
@@ -11,17 +12,15 @@ use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
 };
-use crate::logs::types::{Block, IngestOutcome, LogSequencingState};
+use crate::logs::types::LogSequencingState;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogsFamily;
 
-impl<M: MetaStore, B: BlobStore> BlockFamily<M, B> for LogsFamily {
-    type Block = Block;
+impl<M: MetaStore, B: BlobStore> Family<M, B> for LogsFamily {
     type State = LogSequencingState;
-    type Outcome = IngestOutcome;
 
     async fn load_startup_state(
         &self,
@@ -39,8 +38,8 @@ impl<M: MetaStore, B: BlobStore> BlockFamily<M, B> for LogsFamily {
         config: &Config,
         runtime: &Runtime<M, B>,
         state: &mut Self::State,
-        block: &Self::Block,
-    ) -> Result<()> {
+        block: &FinalizedBlock,
+    ) -> Result<usize> {
         let from_next_log_id = state.next_log_id.get();
         let mut opened_during = Vec::<OpenBitmapPage>::new();
 
@@ -104,18 +103,6 @@ impl<M: MetaStore, B: BlobStore> BlockFamily<M, B> for LogsFamily {
         }
 
         state.next_log_id = LogId::new(next_log_id);
-        Ok(())
-    }
-
-    fn finish_outcome(
-        &self,
-        indexed_finalized_head: u64,
-        blocks: &[Self::Block],
-        _state: &Self::State,
-    ) -> Self::Outcome {
-        IngestOutcome {
-            indexed_finalized_head,
-            written_logs: blocks.iter().map(|block| block.logs.len()).sum(),
-        }
+        Ok(block.logs.len())
     }
 }

@@ -6,21 +6,23 @@ Topic-based docs live alongside this file. Historical design docs and migration 
 
 ## Scope
 
-The crate implements finalized history queries for the logs family.
+The crate implements finalized history queries for the logs family and a shared ingest substrate for the logs, txs, and traces families.
 
 The main path:
 
-1. a finalized block is ingested
-2. logs receive monotonic finalized `log_id`
-3. immutable log-directory fragments and immutable stream-page fragments are written
-4. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for the block exist
-5. `query_logs` resolves a finalized block window
-6. the logs family maps that block window to a log-ID window
-7. query, startup, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
-8. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
-9. ingest writes seed those same typed caches immediately
-10. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
-11. the query returns `QueryPage<Log>` with exact resume metadata
+1. a shared finalized block envelope is ingested
+2. the ingest coordinator validates finalized block continuity once for the whole batch
+3. family-specific ingest handlers process their slice of the block in logs, txs, then traces order
+4. logs receive monotonic finalized `log_id`
+5. immutable log-directory fragments and immutable stream-page fragments are written
+6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
+7. `query_logs` resolves a finalized block window
+8. the logs family maps that block window to a log-ID window
+9. query, startup, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
+10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
+11. ingest writes seed those same typed caches immediately
+12. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
+13. the query returns `QueryPage<Log>` with exact resume metadata
 
 ## Crate Layout
 
@@ -37,21 +39,23 @@ The crate is organized in three layers.
 
 - `src/api.rs`
 - `src/block.rs`
-- `src/family.rs`
-- `src/runtime.rs`
 
 ### Shared finalized-history substrate
 
 - `src/core/*`
+- `src/family.rs`
 - `src/ingest/authority.rs`
 - `src/ingest/authority/*`
 - `src/ingest/engine.rs`
+- `src/runtime.rs`
 - `src/streams/*`
 - `src/tables/*`
 
-### Logs family adapter
+### Family adapters
 
 - `src/logs/*`
+- `src/txs/*`
+- `src/traces/*`
 
 The RPC crate stays outside this boundary. It owns transport concerns such as JSON-RPC parsing, tag policy, field selection, envelope formatting, and error mapping.
 
@@ -78,6 +82,7 @@ The shared layer owns:
 - the explicit family boundary used by generic startup/ingest machinery
 - the shared finalized block envelope used by concrete ingest entrypoints
 - the long-lived runtime that shares store handles and typed tables across query/startup/ingest
+- the multi-family ingest coordinator that validates sequence once and publishes once per batch
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
@@ -100,6 +105,15 @@ The logs layer owns:
 - immutable stream fragment writes and page compaction
 - stream fanout for address/topic indexes
 - logs-specific sequencing state (`next_log_id`) and per-block ingest behavior
+
+### Txs and traces families
+
+The txs and traces layers already participate in the shared family boundary:
+
+- `src/txs/*`
+- `src/traces/*`
+
+Today they provide startup-state scaffolds and concrete family slots in the shared ingest coordinator. Non-empty tx or trace payloads are rejected until those families grow real storage, codecs, and ingest behavior.
 
 ## Main Types
 
@@ -140,6 +154,25 @@ class QueryPage[T]:
     meta: QueryPageMeta
 
 
+class Tx:
+    tx_idx: int
+    tx_hash: bytes32
+
+
+class Trace:
+    tx_idx: int
+    trace_idx: int
+
+
+class FinalizedBlock:
+    block_num: int
+    block_hash: bytes32
+    parent_hash: bytes32
+    logs: list[Log]
+    txs: list[Tx]
+    traces: list[Trace]
+
+
 class FinalizedHeadState:
     indexed_finalized_head: int
 
@@ -164,6 +197,14 @@ class LogSequencingState:
 class LogBlockWindow:
     first_log_id: LogId
     count: u32
+
+
+class StartupPlan:
+    head_state: FinalizedHeadState
+    log_state: LogSequencingState
+    tx_state: TxStartupState
+    trace_state: TraceStartupState
+    warm_streams: int
 ```
 
 ## Persisted Key Schema
@@ -196,14 +237,16 @@ Payload blobs:
 
 Numeric key components use big-endian encoded u64. `block_hash_index` uses the raw 32-byte hash as its suffix key. Blob-table suffix keys follow the same conventions.
 
+Today only the logs family persists finalized-history artifacts. The shared ingest coordinator already reserves concrete family slots for txs and traces, but those families do not yet write storage artifacts.
+
 ## Top-Level Service Boundary
 
 ```python
 class FinalizedHistoryService:
     async def startup(self) -> StartupPlan
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
-    async def ingest_finalized_block(self, block: Block) -> IngestOutcome
-    async def ingest_finalized_blocks(self, blocks: list[Block]) -> IngestOutcome
+    async def ingest_finalized_block(self, block: FinalizedBlock) -> IngestOutcome
+    async def ingest_finalized_blocks(self, blocks: list[FinalizedBlock]) -> IngestOutcome
 ```
 
 This boundary is transport-free:
