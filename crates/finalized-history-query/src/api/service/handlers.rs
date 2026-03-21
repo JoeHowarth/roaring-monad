@@ -71,9 +71,6 @@ where
         if self.state.degraded.load(Ordering::Relaxed) {
             return Err(Error::Degraded(self.state.reason()));
         }
-        if self.state.throttled.load(Ordering::Relaxed) {
-            return Err(Error::Throttled(self.state.reason()));
-        }
 
         let result = self.ingest_blocks_with_startup(blocks).await;
         self.update_backend_state(&result);

@@ -57,14 +57,11 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 
     pub async fn health(&self) -> HealthReport {
         let degraded = self.state.degraded.load(Ordering::Relaxed);
-        let throttled = self.state.throttled.load(Ordering::Relaxed);
         let message = self.state.reason();
         HealthReport {
-            healthy: !degraded && !throttled,
+            healthy: !degraded,
             degraded,
-            message: if throttled {
-                format!("throttled: {message}")
-            } else if degraded {
+            message: if degraded {
                 format!("degraded: {message}")
             } else {
                 "ok".to_string()
@@ -83,11 +80,9 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     fn update_backend_state<T>(&self, result: &Result<T>) {
         match result {
             Ok(_) => self.state.on_backend_success(),
-            Err(Error::Backend(message)) => self.state.on_backend_error(
-                message.clone(),
-                self.config.backend_error_throttle_after,
-                self.config.backend_error_degraded_after,
-            ),
+            Err(Error::Backend(message)) => self
+                .state
+                .on_backend_error(message.clone(), self.config.backend_error_degraded_after),
             _ => {}
         }
     }

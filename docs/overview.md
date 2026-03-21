@@ -74,7 +74,7 @@ The shared layer owns:
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - typed immutable-artifact table reads with per-table bytes cache policy (see [caching.md](caching.md))
-- runtime degraded / throttled state
+- runtime degraded state
 - write-authority policy (see [write-authority.md](write-authority.md))
 - publication-state reads
 - shared finalized-state and block-identity reads
@@ -231,7 +231,7 @@ The crate intentionally does not implement:
 8. `src/core/state.rs` — shared state projections
 9. `src/core/range.rs` — block-range validation and clipping
 10. `src/core/execution.rs` — matched-primary vocabulary
-11. `src/core/runtime.rs` — degraded/throttled state machine
+11. `src/core/runtime.rs` — degraded state machine
 12. `src/domain/keys.rs` — immutable-frontier key layout
 13. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 

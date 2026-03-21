@@ -22,8 +22,6 @@ pub enum Error {
     FinalityViolation,
     #[error("service degraded: {0}")]
     Degraded(String),
-    #[error("service throttled: {0}")]
-    Throttled(String),
     #[error("invalid params: {0}")]
     InvalidParams(&'static str),
     #[error("decode error: {0}")]
