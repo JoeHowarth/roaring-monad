@@ -16,6 +16,20 @@ pub struct StartupPlan {
     pub warm_streams: usize,
 }
 
+fn build_startup_plan(
+    head_state: FinalizedHeadState,
+    family_states: crate::family::FamilyStates,
+    warm_streams: usize,
+) -> StartupPlan {
+    StartupPlan {
+        head_state,
+        log_state: family_states.logs,
+        tx_state: family_states.txs,
+        trace_state: family_states.traces,
+        warm_streams,
+    }
+}
+
 pub async fn startup_plan<M: MetaStore, P: PublicationStore, B: BlobStore>(
     runtime: &Runtime<M, B>,
     publication_store: &P,
@@ -23,16 +37,14 @@ pub async fn startup_plan<M: MetaStore, P: PublicationStore, B: BlobStore>(
     warm_streams: usize,
 ) -> Result<StartupPlan> {
     let state = startup_state(runtime, publication_store, families, warm_streams).await?;
-    Ok(StartupPlan {
-        head_state: state.head_state,
-        log_state: state.family_states.logs,
-        tx_state: state.family_states.txs,
-        trace_state: state.family_states.traces,
-        warm_streams: state.warm_streams,
-    })
+    Ok(build_startup_plan(
+        state.head_state,
+        state.family_states,
+        state.warm_streams,
+    ))
 }
 
-pub async fn startup_plan_at_head<M: MetaStore, B: BlobStore>(
+pub async fn startup_plan_from_head<M: MetaStore, B: BlobStore>(
     runtime: &Runtime<M, B>,
     families: &Families,
     indexed_finalized_head: u64,
@@ -41,13 +53,11 @@ pub async fn startup_plan_at_head<M: MetaStore, B: BlobStore>(
     let family_states = families
         .load_startup_state(runtime, indexed_finalized_head)
         .await?;
-    Ok(StartupPlan {
-        head_state: FinalizedHeadState {
+    Ok(build_startup_plan(
+        FinalizedHeadState {
             indexed_finalized_head,
         },
-        log_state: family_states.logs,
-        tx_state: family_states.txs,
-        trace_state: family_states.traces,
+        family_states,
         warm_streams,
-    })
+    ))
 }

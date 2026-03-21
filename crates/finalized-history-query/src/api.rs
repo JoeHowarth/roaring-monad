@@ -11,7 +11,7 @@ use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::Log;
 use crate::runtime::Runtime;
 pub use crate::startup::StartupPlan;
-use crate::startup::{startup_plan, startup_plan_at_head};
+use crate::startup::{startup_plan, startup_plan_from_head};
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::BytesCacheMetrics;
@@ -169,7 +169,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        startup_plan_at_head(
+        startup_plan_from_head(
             self.runtime(),
             &self.ingest.families,
             indexed_finalized_head,

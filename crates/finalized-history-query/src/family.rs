@@ -40,25 +40,6 @@ impl core::ops::AddAssign for FamilyBlockWrites {
     }
 }
 
-#[allow(async_fn_in_trait)]
-pub trait Family<M: MetaStore, B: BlobStore>: Send + Sync {
-    type State;
-
-    async fn load_startup_state(
-        &self,
-        runtime: &Runtime<M, B>,
-        indexed_finalized_head: u64,
-    ) -> Result<Self::State>;
-
-    async fn ingest_block(
-        &self,
-        config: &Config,
-        runtime: &Runtime<M, B>,
-        state: &mut Self::State,
-        block: &FinalizedBlock,
-    ) -> Result<usize>;
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Families {
     pub logs: LogsFamily,

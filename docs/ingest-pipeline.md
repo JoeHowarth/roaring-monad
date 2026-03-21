@@ -77,7 +77,7 @@ When a stream fragment is written to a page for the first time in a batch, an op
 
 - `api.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
 - `block.rs`: shared finalized block envelope carrying block identity plus family payloads
-- `family.rs`: per-block family boundary plus the concrete `Families { logs, txs, traces }` set used by startup and ingest
+- `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared startup/write aggregation
 - `runtime.rs`: shared store-handle + typed-table runtime used by query/startup/ingest
 - `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
 - `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing

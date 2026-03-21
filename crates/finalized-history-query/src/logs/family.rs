@@ -3,7 +3,6 @@ use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
-use crate::family::Family;
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
@@ -19,25 +18,23 @@ use crate::store::traits::{BlobStore, MetaStore};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogsFamily;
 
-impl<M: MetaStore, B: BlobStore> Family<M, B> for LogsFamily {
-    type State = LogSequencingState;
-
-    async fn load_startup_state(
+impl LogsFamily {
+    pub async fn load_startup_state<M: MetaStore, B: BlobStore>(
         &self,
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
-    ) -> Result<Self::State> {
+    ) -> Result<LogSequencingState> {
         let next_log_id = derive_next_log_id(runtime.tables(), indexed_finalized_head).await?;
         Ok(LogSequencingState {
             next_log_id: LogId::new(next_log_id),
         })
     }
 
-    async fn ingest_block(
+    pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
         config: &Config,
         runtime: &Runtime<M, B>,
-        state: &mut Self::State,
+        state: &mut LogSequencingState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_log_id = state.next_log_id.get();

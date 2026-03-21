@@ -293,7 +293,7 @@ The crate intentionally does not implement:
 16. `src/logs/table_specs.rs` — logs-family table specs and key helpers
 17. `src/logs/codec.rs` — log, directory bucket, block log header, and block record encodings
 18. `src/logs/log_ref.rs` — zero-copy log and bucket views
-19. `src/logs/family.rs` — logs implementation of the explicit family boundary
+19. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
 20. `src/logs/filter.rs` — log matching semantics, indexed clauses
 21. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
 22. `src/logs/window.rs` — block range to primary-ID range bridge
@@ -308,7 +308,7 @@ The crate intentionally does not implement:
 
 ### Pass 5: Ingest orchestration
 
-28. `src/ingest/engine.rs` — generic ingest orchestration over a family implementation
+28. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
 29. `src/ingest/authority.rs` — `WriteAuthority` contract
 30. `src/ingest/authority/lease/` — lease-backed multi-writer authority
 31. `src/startup.rs` — concrete logs startup view built on the family boundary
