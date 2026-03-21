@@ -10,7 +10,7 @@ use finalized_history_query::api::{
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
     BITMAP_PAGE_META_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_KEY,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX,
     bitmap_page_meta_suffix, block_record_suffix, log_dir_sub_bucket_suffix, stream_id,
     stream_page_start_local,
 };
@@ -108,8 +108,8 @@ impl FaultyMetaStore {
         out
     }
 
-    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
-        MetaPublicationStore::new(Arc::clone(&self.inner))
+    fn publication_state_logical_key() -> Vec<u8> {
+        Self::logical_key(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
     }
 }
 
@@ -147,33 +147,6 @@ impl MetaStore for FaultyMetaStore {
         limit: usize,
     ) -> Result<Page> {
         self.inner.list_prefix(family, prefix, cursor, limit).await
-    }
-}
-
-impl PublicationStore for FaultyMetaStore {
-    async fn load(&self) -> Result<Option<PublicationState>> {
-        self.publication_store().load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        self.injector
-            .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
-        self.publication_store().create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        self.injector
-            .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
-        self.publication_store()
-            .compare_and_set(expected, next)
-            .await
     }
 }
 
@@ -312,37 +285,37 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
             (
                 "block_log_blob_put",
                 FaultOp::BlobPut,
-                b"block_log_blob/".as_slice(),
+                b"block_log_blob/".to_vec(),
             ),
             (
                 "block_log_header_put",
                 FaultOp::MetaPut,
-                b"block_log_header/".as_slice(),
+                b"block_log_header/".to_vec(),
             ),
             (
                 "block_record_put",
                 FaultOp::MetaPut,
-                b"block_record/".as_slice(),
+                b"block_record/".to_vec(),
             ),
             (
                 "block_hash_index_put",
                 FaultOp::MetaPut,
-                b"block_hash_index/".as_slice(),
+                b"block_hash_index/".to_vec(),
             ),
             (
                 "log_dir_by_block_put",
                 FaultOp::MetaPut,
-                b"log_dir_by_block/".as_slice(),
+                b"log_dir_by_block/".to_vec(),
             ),
             (
                 "bitmap_by_block_put",
                 FaultOp::MetaPut,
-                b"bitmap_by_block/".as_slice(),
+                b"bitmap_by_block/".to_vec(),
             ),
             (
                 "publication_state_cas",
                 FaultOp::PublicationCas,
-                PUBLICATION_STATE_KEY,
+                FaultyMetaStore::publication_state_logical_key(),
             ),
         ];
 
@@ -357,7 +330,7 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
                 vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 11, 21, 1, 0, 1)],
             );
 
-            injector.arm(op, prefix, 1);
+            injector.arm(op, &prefix, 1);
             let err = svc
                 .ingest_finalized_block(block.clone())
                 .await
@@ -388,7 +361,8 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
             vec![mk_log(7, 10, 20, 1, 0, 0), mk_log(8, 11, 21, 1, 0, 1)],
         );
 
-        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 1);
+        let publication_state_key = FaultyMetaStore::publication_state_logical_key();
+        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
@@ -455,7 +429,8 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             ],
         );
 
-        injector.arm(FaultOp::PublicationCas, PUBLICATION_STATE_KEY, 1);
+        let publication_state_key = FaultyMetaStore::publication_state_logical_key();
+        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
         let err = crashing_writer
             .ingest_finalized_block(first_attempt)
             .await

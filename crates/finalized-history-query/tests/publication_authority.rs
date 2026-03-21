@@ -8,17 +8,15 @@ use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
     BITMAP_BY_BLOCK_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, PUBLICATION_STATE_FAMILY,
-    bitmap_by_block_suffix, block_log_blob_key, block_record_suffix, log_dir_by_block_suffix,
-    stream_id, stream_page_start_local,
+    PUBLICATION_STATE_SUFFIX, bitmap_by_block_suffix, block_log_blob_key, block_record_suffix,
+    log_dir_by_block_suffix, stream_id, stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{
-    MetaPublicationStore, PUBLICATION_STATE_SUFFIX, PublicationStore,
-};
+use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use finalized_history_query::{Error, WriteAuthority};
 use futures::executor::block_on;
@@ -250,7 +248,8 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
             advanced: Arc::new(AtomicBool::new(false)),
         };
         let blob = InMemoryBlobStore::default();
-        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let authority =
+            LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
         let engine = IngestEngine::new(config, authority, meta, blob);
 
         let lease = engine

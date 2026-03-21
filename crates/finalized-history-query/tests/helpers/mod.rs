@@ -6,14 +6,12 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_FAMILY, block_record_key};
+use finalized_history_query::domain::keys::PUBLICATION_STATE_FAMILY;
 use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{
-    CasOutcome, MetaPublicationStore, PublicationStore,
-};
+use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{
     BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
 };
@@ -147,8 +145,8 @@ pub struct ExpireBeforePublishMetaStore {
 }
 
 impl ExpireBeforePublishMetaStore {
-    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
-        MetaPublicationStore::new(Arc::clone(&self.inner))
+    fn publication_store(&self) -> MetaPublicationStore<Self> {
+        MetaPublicationStore::new(Arc::new(self.clone()))
     }
 }
 
@@ -168,6 +166,22 @@ impl MetaStore for ExpireBeforePublishMetaStore {
         value: Bytes,
         cond: PutCond,
     ) -> finalized_history_query::Result<PutResult> {
+        if family == PUBLICATION_STATE_FAMILY && matches!(cond, PutCond::IfVersion(_)) {
+            let Some(current) = self.inner.get(family, key).await? else {
+                return self.inner.put(family, key, value, cond).await;
+            };
+            let current_state = PublicationState::decode(&current.value)?;
+            let next_state = PublicationState::decode(&value)?;
+            if next_state.indexed_finalized_head > current_state.indexed_finalized_head
+                && current_state.lease_valid_through_block
+                    < CONTROLLED_OBSERVED_FINALIZED_BLOCK.load(Ordering::Relaxed)
+            {
+                return Ok(PutResult {
+                    applied: false,
+                    version: Some(current.version),
+                });
+            }
+        }
         let result = self.inner.put(family, key, value, cond).await?;
         if family != PUBLICATION_STATE_FAMILY && !self.advanced.swap(true, Ordering::Relaxed) {
             let publication_state = self
@@ -205,47 +219,10 @@ impl MetaStore for ExpireBeforePublishMetaStore {
     }
 }
 
-impl PublicationStore for ExpireBeforePublishMetaStore {
-    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.publication_store().load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.publication_store().create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        if next.indexed_finalized_head > expected.indexed_finalized_head
-            && expected.lease_valid_through_block
-                < CONTROLLED_OBSERVED_FINALIZED_BLOCK.load(Ordering::Relaxed)
-        {
-            return Ok(CasOutcome::Failed {
-                current: Some(expected.clone()),
-            });
-        }
-        self.publication_store()
-            .compare_and_set(expected, next)
-            .await
-    }
-}
-
 #[derive(Clone)]
 pub struct PublishConflictOnceMetaStore {
     pub inner: Arc<InMemoryMetaStore>,
     pub conflicted: Arc<AtomicBool>,
-}
-
-impl PublishConflictOnceMetaStore {
-    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
-        MetaPublicationStore::new(Arc::clone(&self.inner))
-    }
 }
 
 impl MetaStore for PublishConflictOnceMetaStore {
@@ -294,45 +271,6 @@ impl MetaStore for PublishConflictOnceMetaStore {
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
         self.inner.list_prefix(family, prefix, cursor, limit).await
-    }
-}
-
-impl PublicationStore for PublishConflictOnceMetaStore {
-    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.publication_store().load().await
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.publication_store().create_if_absent(initial).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        if next.indexed_finalized_head > expected.indexed_finalized_head
-            && !self.conflicted.swap(true, Ordering::Relaxed)
-        {
-            match self
-                .publication_store()
-                .compare_and_set(expected, next)
-                .await?
-            {
-                CasOutcome::Applied(state) => {
-                    return Ok(CasOutcome::Failed {
-                        current: Some(state),
-                    });
-                }
-                outcome => return Ok(outcome),
-            }
-        }
-        self.publication_store()
-            .compare_and_set(expected, next)
-            .await
     }
 }
 

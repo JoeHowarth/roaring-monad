@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::keys::PUBLICATION_STATE_FAMILY;
+use crate::domain::keys::{PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX};
 use crate::domain::types::PublicationState;
 use crate::error::Result;
 use crate::store::traits::{KvTable, MetaStore, PutCond};
@@ -21,17 +21,11 @@ pub struct MetaPublicationStore<M> {
     table: KvTable<M>,
 }
 
-pub const PUBLICATION_STATE_SUFFIX: &[u8] = b"state";
-
 impl<M: MetaStore> MetaPublicationStore<M> {
     pub fn new(meta_store: Arc<M>) -> Self {
         Self {
             table: meta_store.table(PUBLICATION_STATE_FAMILY),
         }
-    }
-
-    fn publication_key() -> &'static [u8] {
-        PUBLICATION_STATE_SUFFIX
     }
 }
 
@@ -62,7 +56,7 @@ pub trait PublicationStore: Send + Sync {
 
 impl<M: MetaStore> PublicationStore for MetaPublicationStore<M> {
     async fn load(&self) -> Result<Option<PublicationState>> {
-        let Some(record) = self.table.get(Self::publication_key()).await? else {
+        let Some(record) = self.table.get(PUBLICATION_STATE_SUFFIX).await? else {
             return Ok(None);
         };
         Ok(Some(PublicationState::decode(&record.value)?))
@@ -74,7 +68,11 @@ impl<M: MetaStore> PublicationStore for MetaPublicationStore<M> {
     ) -> Result<CasOutcome<PublicationState>> {
         let result = self
             .table
-            .put(Self::publication_key(), initial.encode(), PutCond::IfAbsent)
+            .put(
+                PUBLICATION_STATE_SUFFIX,
+                initial.encode(),
+                PutCond::IfAbsent,
+            )
             .await?;
         if result.applied {
             return Ok(CasOutcome::Applied(initial.clone()));
@@ -89,7 +87,7 @@ impl<M: MetaStore> PublicationStore for MetaPublicationStore<M> {
         expected: &PublicationState,
         next: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>> {
-        let Some(current) = self.table.get(Self::publication_key()).await? else {
+        let Some(current) = self.table.get(PUBLICATION_STATE_SUFFIX).await? else {
             return Ok(CasOutcome::Failed { current: None });
         };
         let current_state = PublicationState::decode(&current.value)?;
@@ -102,7 +100,7 @@ impl<M: MetaStore> PublicationStore for MetaPublicationStore<M> {
         let result = self
             .table
             .put(
-                Self::publication_key(),
+                PUBLICATION_STATE_SUFFIX,
                 next.encode(),
                 PutCond::IfVersion(current.version),
             )

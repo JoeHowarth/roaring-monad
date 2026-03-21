@@ -8,15 +8,13 @@ use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    BLOCK_RECORD_FAMILY, PUBLICATION_STATE_FAMILY, block_record_suffix,
+    BLOCK_RECORD_FAMILY, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX, block_record_suffix,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{
-    MetaPublicationStore, PUBLICATION_STATE_SUFFIX, PublicationStore,
-};
+use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 use futures::executor::block_on;
 

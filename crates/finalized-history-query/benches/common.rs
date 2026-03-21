@@ -17,8 +17,9 @@ use finalized_history_query::core::ids::{
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
     BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BUCKET_FAMILY, MAX_LOCAL_ID,
-    PUBLICATION_STATE_FAMILY, block_log_blob_key, block_log_header_suffix, block_record_suffix,
-    log_dir_bucket_start, log_dir_bucket_suffix, stream_id,
+    PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX, block_log_blob_key,
+    block_log_header_suffix, block_record_suffix, log_dir_bucket_start, log_dir_bucket_suffix,
+    stream_id,
 };
 use finalized_history_query::domain::types::{
     Block, BlockRecord, DirBucket, Log, PublicationState,
@@ -26,7 +27,7 @@ use finalized_history_query::domain::types::{
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{MetaPublicationStore, PUBLICATION_STATE_SUFFIX};
+use finalized_history_query::store::publication::MetaPublicationStore;
 use finalized_history_query::store::traits::{BlobStore, FamilyId, MetaStore, PutCond};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
