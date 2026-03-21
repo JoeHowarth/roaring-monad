@@ -138,7 +138,7 @@ async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
     session = begin_write(
         observed_upstream_finalized_block
     )
-    return recovery_plan_from(session.state.indexed_finalized_head)
+    return recovery_plan_from(session.state().indexed_finalized_head)
 ```
 
 Startup derives the next write position from the published head. It does not delete unpublished suffix artifacts.

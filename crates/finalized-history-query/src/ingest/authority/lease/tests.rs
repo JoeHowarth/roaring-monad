@@ -176,7 +176,7 @@ fn same_owner_restart_before_expiry_uses_new_session() {
 }
 
 #[test]
-fn authorize_returns_lease_lost_after_external_takeover() {
+fn begin_write_returns_lease_lost_after_external_takeover() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 10);
@@ -187,7 +187,7 @@ fn authorize_returns_lease_lost_after_external_takeover() {
         let err = authority
             .begin_write(Some(151))
             .await
-            .expect_err("authorize should observe takeover");
+            .expect_err("begin_write should observe takeover");
 
         assert!(matches!(err, Error::LeaseLost));
     });
@@ -257,7 +257,7 @@ fn same_session_reacquire_after_expiry_keeps_session() {
         authority
             .begin_write(Some(150))
             .await
-            .expect("re-acquire after expiry");
+            .expect("reacquire after expiry");
         let second_session = authority
             .publication_store
             .load()
@@ -291,7 +291,7 @@ fn same_session_acquire_before_expiry_keeps_session() {
         authority
             .begin_write(Some(140))
             .await
-            .expect("re-acquire before expiry");
+            .expect("reuse before expiry");
         let second_session = authority
             .publication_store
             .load()
