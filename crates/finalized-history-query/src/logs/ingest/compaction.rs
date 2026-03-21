@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, log_dir_bucket_key, log_dir_bucket_start,
-    log_dir_by_block_prefix, log_dir_sub_bucket_key, log_dir_sub_bucket_start,
+    LOG_DIR_BUCKET_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, log_dir_bucket_start, log_dir_bucket_suffix,
+    log_dir_by_block_prefix_suffix, log_dir_sub_bucket_start, log_dir_sub_bucket_suffix,
 };
 use crate::domain::types::{DirBucket, DirByBlock};
 use crate::error::{Error, Result};
@@ -100,11 +101,16 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
     sub_bucket_start: u64,
 ) -> Result<()> {
     let page = meta_store
-        .list_prefix(&log_dir_by_block_prefix(sub_bucket_start), None, usize::MAX)
+        .list_prefix(
+            LOG_DIR_BY_BLOCK_FAMILY,
+            &log_dir_by_block_prefix_suffix(sub_bucket_start),
+            None,
+            usize::MAX,
+        )
         .await?;
     let mut fragments = Vec::with_capacity(page.keys.len());
     for key in page.keys {
-        let Some(record) = meta_store.get(&key).await? else {
+        let Some(record) = meta_store.get(LOG_DIR_BY_BLOCK_FAMILY, &key).await? else {
             continue;
         };
         fragments.push(DirByBlock::decode(&record.value)?);
@@ -130,7 +136,8 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
     };
     put_artifact_meta(
         meta_store,
-        &log_dir_sub_bucket_key(sub_bucket_start),
+        LOG_DIR_SUB_BUCKET_FAMILY,
+        &log_dir_sub_bucket_suffix(sub_bucket_start),
         bucket.encode(),
     )
     .await?;
@@ -145,7 +152,10 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
 
     while sub_bucket_start < bucket_end {
         let Some(record) = meta_store
-            .get(&log_dir_sub_bucket_key(sub_bucket_start))
+            .get(
+                LOG_DIR_SUB_BUCKET_FAMILY,
+                &log_dir_sub_bucket_suffix(sub_bucket_start),
+            )
             .await?
         else {
             sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
@@ -197,7 +207,8 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
 
     put_artifact_meta(
         meta_store,
-        &log_dir_bucket_key(bucket_start),
+        LOG_DIR_BUCKET_FAMILY,
+        &log_dir_bucket_suffix(bucket_start),
         DirBucket {
             start_block,
             first_log_ids,

@@ -4,8 +4,9 @@ use roaring::RoaringBitmap;
 
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    bitmap_by_block_key, bitmap_by_block_prefix, bitmap_page_blob_key, bitmap_page_meta_key,
-    log_local, log_shard, stream_id, stream_page_start_local,
+    BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_prefix_suffix,
+    bitmap_by_block_suffix, bitmap_page_blob_key, bitmap_page_meta_suffix, log_local, log_shard,
+    stream_id, stream_page_start_local,
 };
 use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
@@ -80,7 +81,8 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 
             put_artifact_meta(
                 meta_store,
-                &bitmap_by_block_key(&stream, page_start, block.block_num),
+                BITMAP_BY_BLOCK_FAMILY,
+                &bitmap_by_block_suffix(&stream, page_start, block.block_num),
                 encode_bitmap_blob(&bitmap_blob)?,
             )
             .await?;
@@ -115,7 +117,8 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
 ) -> Result<bool> {
     let page = meta_store
         .list_prefix(
-            &bitmap_by_block_prefix(stream_id, page_start),
+            BITMAP_BY_BLOCK_FAMILY,
+            &bitmap_by_block_prefix_suffix(stream_id, page_start),
             None,
             usize::MAX,
         )
@@ -123,7 +126,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     let mut merged = RoaringBitmap::new();
     for key in page.keys {
         let _block_num = read_u64_suffix(&key)?;
-        let Some(record) = meta_store.get(&key).await? else {
+        let Some(record) = meta_store.get(BITMAP_BY_BLOCK_FAMILY, &key).await? else {
             continue;
         };
         merged |= &decode_bitmap_blob(&record.value)?.bitmap;
@@ -157,7 +160,8 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     .await?;
     put_artifact_meta(
         meta_store,
-        &bitmap_page_meta_key(stream_id, page_start),
+        BITMAP_PAGE_META_FAMILY,
+        &bitmap_page_meta_suffix(stream_id, page_start),
         meta.encode(),
     )
     .await?;

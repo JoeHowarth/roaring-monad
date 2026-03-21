@@ -9,6 +9,7 @@ use finalized_history_query::domain::types::{Block, Log};
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::MetaPublicationStore;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
 use futures::executor::block_on;
 
@@ -71,7 +72,7 @@ fn naive_query(
 
 async fn query_range(
     svc: &FinalizedHistoryService<
-        LeaseAuthority<InMemoryMetaStore>,
+        LeaseAuthority<MetaPublicationStore<InMemoryMetaStore>>,
         InMemoryMetaStore,
         InMemoryBlobStore,
     >,
@@ -208,7 +209,10 @@ fn recovery_startup_smoke_check() {
             std::sync::Arc::new(meta.clone()),
             std::sync::Arc::new(blob.clone()),
         );
-        let rec = startup_plan(&tables, 0).await.expect("startup plan");
+        let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta));
+        let rec = startup_plan(&tables, &publication_store, 0)
+            .await
+            .expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
         assert_eq!(rec.log_state.next_log_id, LogId::new(0));
     });

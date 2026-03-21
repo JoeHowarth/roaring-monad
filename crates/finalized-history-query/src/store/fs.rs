@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
@@ -5,12 +6,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use bytes::Bytes;
-
-use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
-use crate::store::traits::{BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::traits::{
+    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
+};
 
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
@@ -26,120 +25,44 @@ impl FsMetaStore {
         Ok(Self { root })
     }
 
-    fn key_path(&self, key: &[u8]) -> PathBuf {
+    fn family_dir(&self, family: FamilyId) -> PathBuf {
         let mut p = self.root.join("meta");
-        p.push(extract_group(key));
+        p.push(family.as_str());
+        p
+    }
+
+    fn key_path(&self, family: FamilyId, key: &[u8]) -> PathBuf {
+        let mut p = self.family_dir(family);
         p.push(hex(key));
         p
     }
 
-    fn version_path(&self, key: &[u8]) -> PathBuf {
-        let mut p = self.root.join("meta");
-        p.push(extract_group(key));
+    fn version_path(&self, family: FamilyId, key: &[u8]) -> PathBuf {
+        let mut p = self.family_dir(family);
         p.push(format!("{}.ver", hex(key)));
         p
     }
 
-    fn publication_state_path(&self) -> PathBuf {
-        self.root.join("meta").join("publication_state")
-    }
-
-    fn publication_state_version_path(&self) -> PathBuf {
-        self.root.join("meta").join("publication_state.ver")
-    }
-
-    fn publication_state_lock(&self) -> Result<Arc<Mutex<()>>> {
+    fn key_lock(&self, family: FamilyId, key: &[u8]) -> Result<Arc<Mutex<()>>> {
         static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
         let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
         let mut guard = locks
             .lock()
-            .map_err(|_| Error::Backend("poisoned publication lock map".to_string()))?;
+            .map_err(|_| Error::Backend("poisoned fs key lock map".to_string()))?;
         Ok(guard
-            .entry(self.publication_state_path())
+            .entry(self.key_path(family, key))
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone())
     }
 }
 
-impl PublicationStore for FsMetaStore {
-    async fn load(&self) -> Result<Option<PublicationState>> {
-        load_publication_state_from_path(&self.publication_state_path())
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let lock = self.publication_state_lock()?;
-        let _guard = lock
-            .lock()
-            .map_err(|_| Error::Backend("poisoned publication state lock".to_string()))?;
-        let path = self.publication_state_path();
-        let version_path = self.publication_state_version_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::Backend(format!("create fs publication dir: {e}")))?;
-        }
-        match write_file_bytes_create_new(&path, &initial.encode()) {
-            Ok(()) => {
-                write_file_bytes_atomic(&version_path, &1u64.to_be_bytes())?;
-                Ok(CasOutcome::Applied(initial.clone()))
-            }
-            Err(Error::Backend(message)) if message.contains("exists") => Ok(CasOutcome::Failed {
-                current: load_publication_state_from_path(&path)?,
-            }),
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let lock = self.publication_state_lock()?;
-        let _guard = lock
-            .lock()
-            .map_err(|_| Error::Backend("poisoned publication state lock".to_string()))?;
-        let path = self.publication_state_path();
-        if !path.exists() {
-            return Ok(CasOutcome::Failed { current: None });
-        }
-        let current = PublicationState::decode(&read_file_bytes(&path)?)?;
-        if current != *expected {
-            return Ok(CasOutcome::Failed {
-                current: Some(current),
-            });
-        }
-
-        write_file_bytes_atomic(&path, &next.encode())?;
-        let version_path = self.publication_state_version_path();
-        let next_version = if version_path.exists() {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&read_file_bytes(&version_path)?);
-            u64::from_be_bytes(bytes).saturating_add(1)
-        } else {
-            1
-        };
-        write_file_bytes_atomic(&version_path, &next_version.to_be_bytes())?;
-        Ok(CasOutcome::Applied(next.clone()))
-    }
-}
-
-fn load_publication_state_from_path(path: &Path) -> Result<Option<PublicationState>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    Ok(Some(PublicationState::decode(&read_file_bytes(path)?)?))
-}
-
 impl MetaStore for FsMetaStore {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        let kp = self.key_path(key);
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
+        let kp = self.key_path(family, key);
         if !kp.exists() {
             return Ok(None);
         }
-        let vp = self.version_path(key);
+        let vp = self.version_path(family, key);
         let value = read_file_bytes(&kp)?;
         let version = if vp.exists() {
             let b = read_file_bytes(&vp)?;
@@ -159,8 +82,27 @@ impl MetaStore for FsMetaStore {
         }))
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        let current = self.get(key).await?;
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let lock = if matches!(cond, PutCond::Any) {
+            None
+        } else {
+            Some(self.key_lock(family, key)?)
+        };
+        let _guard = if let Some(lock) = lock.as_ref() {
+            Some(
+                lock.lock()
+                    .map_err(|_| Error::Backend("poisoned fs key lock".to_string()))?,
+            )
+        } else {
+            None
+        };
+        let current = self.get(family, key).await?;
 
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
@@ -176,11 +118,11 @@ impl MetaStore for FsMetaStore {
             });
         }
 
-        let kp = self.key_path(key);
-        let vp = self.version_path(key);
+        let kp = self.key_path(family, key);
+        let vp = self.version_path(family, key);
         if let Some(parent) = kp.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| Error::Backend(format!("create fs meta group dir: {e}")))?;
+                .map_err(|e| Error::Backend(format!("create fs meta family dir: {e}")))?;
         }
         write_file_bytes(&kp, &value)?;
 
@@ -193,8 +135,21 @@ impl MetaStore for FsMetaStore {
         })
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        let current = self.get(key).await?;
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+        let lock = if matches!(cond, DelCond::Any) {
+            None
+        } else {
+            Some(self.key_lock(family, key)?)
+        };
+        let _guard = if let Some(lock) = lock.as_ref() {
+            Some(
+                lock.lock()
+                    .map_err(|_| Error::Backend("poisoned fs key lock".to_string()))?,
+            )
+        } else {
+            None
+        };
+        let current = self.get(family, key).await?;
         let allowed = match (cond, current.as_ref()) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
@@ -202,39 +157,28 @@ impl MetaStore for FsMetaStore {
             (DelCond::IfVersion(_), None) => false,
         };
         if allowed {
-            let _ = fs::remove_file(self.key_path(key));
-            let _ = fs::remove_file(self.version_path(key));
+            let _ = fs::remove_file(self.key_path(family, key));
+            let _ = fs::remove_file(self.version_path(family, key));
         }
         Ok(())
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let base = self.root.join("meta");
-        if !base.exists() {
+        let family_dir = self.family_dir(family);
+        if !family_dir.exists() {
             return Ok(Page {
                 keys: Vec::new(),
                 next_cursor: None,
             });
         }
-        if let Some(group) = extract_group_from_prefix(prefix) {
-            collect_keys_from_group_dir(&base.join(group), true, prefix, &mut all)?;
-        } else {
-            for entry in
-                fs::read_dir(&base).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))?
-            {
-                let entry = entry.map_err(|e| Error::Backend(format!("fs dir entry: {e}")))?;
-                if !entry.path().is_dir() {
-                    continue;
-                }
-                collect_keys_from_group_dir(&entry.path(), true, prefix, &mut all)?;
-            }
-        }
+        collect_keys_from_family_dir(&family_dir, true, prefix, &mut all)?;
         all.sort();
 
         let has_cursor = cursor.is_some();
@@ -379,37 +323,6 @@ fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_file_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Err(Error::Backend("path missing parent".to_string()));
-    };
-    fs::create_dir_all(parent).map_err(|e| Error::Backend(format!("fs atomic parent: {e}")))?;
-    let temp_name = format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| Error::Backend(format!("fs atomic time: {e}")))?
-            .as_nanos()
-    );
-    let temp_path = parent.join(temp_name);
-    write_file_bytes_create_new(&temp_path, bytes)?;
-    fs::rename(&temp_path, path).map_err(|e| Error::Backend(format!("fs atomic rename: {e}")))?;
-    Ok(())
-}
-
-fn write_file_bytes_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| Error::Backend(format!("fs create_new open: {e}")))?;
-    set_no_cache(&file)?;
-    file.write_all(bytes)
-        .map_err(|e| Error::Backend(format!("fs create_new write: {e}")))?;
-    Ok(())
-}
-
 #[cfg(target_os = "macos")]
 fn set_no_cache(file: &File) -> Result<()> {
     use std::os::fd::AsRawFd;
@@ -490,6 +403,33 @@ fn extract_group(key: &[u8]) -> String {
     }
 }
 
+fn collect_keys_from_family_dir(
+    dir: &Path,
+    skip_ver: bool,
+    prefix: &[u8],
+    out: &mut Vec<Vec<u8>>,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).map_err(|e| Error::Backend(format!("fs read_dir: {e}")))? {
+        let entry = entry.map_err(|e| Error::Backend(format!("fs dir entry: {e}")))?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if skip_ver && name.ends_with(".ver") {
+            continue;
+        }
+        let key = unhex(&name)?;
+        if key.starts_with(prefix) {
+            out.push(key);
+        }
+    }
+    Ok(())
+}
+
 fn extract_group_from_prefix(prefix: &[u8]) -> Option<String> {
     if prefix.is_empty() {
         return None;
@@ -527,9 +467,13 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::keys::BLOCK_RECORD_FAMILY;
+    use crate::domain::types::PublicationState;
+    use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{BlobStore, MetaStore, PutCond};
     use bytes::Bytes;
     use futures::executor::block_on;
+    use std::sync::Arc;
 
     fn unique_temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -546,6 +490,7 @@ mod tests {
     fn create_if_absent_allows_only_one_creator() {
         let root = unique_temp_root("fs-create");
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
+        let publication_store = Arc::new(MetaPublicationStore::new(Arc::clone(&store)));
         let state = PublicationState {
             owner_id: 1,
             session_id: [1u8; 16],
@@ -555,7 +500,7 @@ mod tests {
 
         let handles = (0..2)
             .map(|_| {
-                let store = Arc::clone(&store);
+                let store = Arc::clone(&publication_store);
                 let state = state.clone();
                 std::thread::spawn(move || block_on(store.create_if_absent(&state)))
             })
@@ -579,13 +524,14 @@ mod tests {
     fn compare_and_set_is_serialized() {
         let root = unique_temp_root("fs-cas");
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
+        let publication_store = Arc::new(MetaPublicationStore::new(Arc::clone(&store)));
         let initial = PublicationState {
             owner_id: 1,
             session_id: [1u8; 16],
             indexed_finalized_head: 0,
             lease_valid_through_block: u64::MAX,
         };
-        block_on(store.create_if_absent(&initial)).expect("seed publication state");
+        block_on(publication_store.create_if_absent(&initial)).expect("seed publication state");
 
         let next_a = PublicationState {
             owner_id: 1,
@@ -600,8 +546,8 @@ mod tests {
             lease_valid_through_block: u64::MAX,
         };
 
-        let store_a = Arc::clone(&store);
-        let store_b = store;
+        let store_a = Arc::clone(&publication_store);
+        let store_b = publication_store;
         let initial_a = initial.clone();
         let initial_b = initial;
         let handles = vec![
@@ -631,13 +577,19 @@ mod tests {
 
         block_on(async {
             for index in 0..1_025u64 {
-                let key = format!("list-prefix/{index:04}").into_bytes();
+                let key = format!("{index:04}").into_bytes();
                 meta_store
-                    .put(&key, Bytes::from_static(b"v"), PutCond::Any)
+                    .put(
+                        BLOCK_RECORD_FAMILY,
+                        &key,
+                        Bytes::from_static(b"v"),
+                        PutCond::Any,
+                    )
                     .await
                     .expect("seed meta key");
+                let blob_key = format!("list-prefix/{index:04}").into_bytes();
                 blob_store
-                    .put_blob(&key, Bytes::from_static(b"v"))
+                    .put_blob(&blob_key, Bytes::from_static(b"v"))
                     .await
                     .expect("seed blob key");
             }
@@ -646,9 +598,9 @@ mod tests {
             let mut meta_seen = Vec::new();
             loop {
                 let page = meta_store
-                    .list_prefix(b"list-prefix/", meta_cursor.take(), 1_024)
+                    .list_prefix(BLOCK_RECORD_FAMILY, b"", meta_cursor.take(), 1_024)
                     .await
-                    .expect("list meta prefix");
+                    .expect("list meta");
                 meta_seen.extend(page.keys.iter().cloned());
                 if page.next_cursor.is_none() {
                     break;

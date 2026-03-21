@@ -1,8 +1,9 @@
 use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, bitmap_page_meta_key,
-    local_range_for_shard, log_shard, stream_id, stream_page_start_local,
+    BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
+    bitmap_by_block_prefix_suffix, bitmap_page_meta_suffix, local_range_for_shard, log_shard,
+    stream_id, stream_page_start_local,
 };
 use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
@@ -161,7 +162,10 @@ async fn estimate_stream_overlap<M: MetaStore>(
 
     loop {
         if let Some(record) = meta_store
-            .get(&bitmap_page_meta_key(stream_id, page_start))
+            .get(
+                BITMAP_PAGE_META_FAMILY,
+                &bitmap_page_meta_suffix(stream_id, page_start),
+            )
             .await?
         {
             let meta = StreamBitmapMeta::decode(&record.value)?;
@@ -178,13 +182,14 @@ async fn estimate_stream_overlap<M: MetaStore>(
         } else {
             let page = meta_store
                 .list_prefix(
-                    &bitmap_by_block_prefix(stream_id, page_start),
+                    BITMAP_BY_BLOCK_FAMILY,
+                    &bitmap_by_block_prefix_suffix(stream_id, page_start),
                     None,
                     usize::MAX,
                 )
                 .await?;
             for key in page.keys {
-                let Some(record) = meta_store.get(&key).await? else {
+                let Some(record) = meta_store.get(BITMAP_BY_BLOCK_FAMILY, &key).await? else {
                     continue;
                 };
                 let meta = decode_bitmap_blob(&record.value)?;

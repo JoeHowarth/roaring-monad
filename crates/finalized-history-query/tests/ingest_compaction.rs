@@ -1,16 +1,19 @@
 #[allow(dead_code, unused_imports)]
 mod helpers;
 
+use std::sync::Arc;
+
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::domain::keys::{
+    BITMAP_PAGE_META_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_page_blob_key,
-    bitmap_page_meta_key, block_record_key, log_dir_by_block_key, stream_id,
+    bitmap_page_meta_suffix, block_record_suffix, log_dir_by_block_suffix, stream_id,
     stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::PublicationStore;
+use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use futures::executor::block_on;
 
@@ -21,16 +24,19 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 0,
-            ))
-            .await
-            .expect("seed publication state"),
+            publication_store
+                .create_if_absent(&seeded_publication_state_with_valid_through(
+                    1, [1u8; 16], 1, 0,
+                ))
+                .await
+                .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(1),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -65,16 +71,19 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 1);
+        let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 0,
-            ))
-            .await
-            .expect("seed publication state"),
+            publication_store
+                .create_if_absent(&seeded_publication_state_with_valid_through(
+                    1, [1u8; 16], 1, 0,
+                ))
+                .await
+                .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(1),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -104,7 +113,10 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&bitmap_page_meta_key(&sid, page_start))
+                .get(
+                    BITMAP_PAGE_META_FAMILY,
+                    &bitmap_page_meta_suffix(&sid, page_start),
+                )
                 .await
                 .expect("stream page meta")
                 .is_some()
@@ -125,16 +137,19 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 0,
-            ))
-            .await
-            .expect("seed publication state"),
+            publication_store
+                .create_if_absent(&seeded_publication_state_with_valid_through(
+                    1, [1u8; 16], 1, 0,
+                ))
+                .await
+                .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(1),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -163,7 +178,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&log_dir_by_block_key(0, 2))
+                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 2))
                 .await
                 .expect("directory fragment")
                 .is_some()

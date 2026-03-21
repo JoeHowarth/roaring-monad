@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use futures::executor::block_on;
 
@@ -6,7 +6,7 @@ use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::ingest::authority::WriteAuthority;
 use crate::store::meta::InMemoryMetaStore;
-use crate::store::publication::{CasOutcome, PublicationStore};
+use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
 
 use super::LeaseAuthority;
 
@@ -61,6 +61,10 @@ impl PublicationStore for BootstrapRaceStore {
     }
 }
 
+fn publication_store(store: &InMemoryMetaStore) -> MetaPublicationStore<InMemoryMetaStore> {
+    MetaPublicationStore::new(Arc::new(store.clone()))
+}
+
 #[test]
 fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
     block_on(async {
@@ -86,8 +90,8 @@ fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
 fn fresh_lease_rejects_takeover_until_expiry() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
+        let first = LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
+        let second = LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 50, 0);
 
         let _ = first
             .acquire(Some(100))
@@ -106,8 +110,8 @@ fn fresh_lease_rejects_takeover_until_expiry() {
 fn same_owner_restart_after_expiry_uses_new_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        let second = LeaseAuthority::with_session(store, 7, [2u8; 16], 50, 0);
+        let first = LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
+        let second = LeaseAuthority::with_session(publication_store(&store), 7, [2u8; 16], 50, 0);
 
         let first_token = first
             .acquire(Some(100))
@@ -126,8 +130,8 @@ fn same_owner_restart_after_expiry_uses_new_session() {
 fn same_owner_restart_before_expiry_uses_new_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        let second = LeaseAuthority::with_session(store.clone(), 7, [2u8; 16], 50, 0);
+        let first = LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
+        let second = LeaseAuthority::with_session(publication_store(&store), 7, [2u8; 16], 50, 0);
 
         let first_token = first
             .acquire(Some(100))
@@ -140,7 +144,7 @@ fn same_owner_restart_before_expiry_uses_new_session() {
 
         assert_ne!(second_token.session_id, first_token.session_id);
 
-        let state = store
+        let state = publication_store(&store)
             .load()
             .await
             .expect("load")
@@ -154,9 +158,11 @@ fn same_owner_restart_before_expiry_uses_new_session() {
 fn authorize_returns_lease_lost_after_external_takeover() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 10);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 10);
         let token = authority.acquire(Some(100)).await.expect("acquire");
-        let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 10);
+        let takeover =
+            LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 50, 10);
         let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
         let err = authority
@@ -172,9 +178,10 @@ fn authorize_returns_lease_lost_after_external_takeover() {
 fn publish_returns_lease_lost_on_session_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
         let token = authority.acquire(Some(100)).await.expect("acquire");
-        let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
+        let takeover = LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 50, 0);
         let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
         let err = authority
@@ -190,14 +197,20 @@ fn publish_returns_lease_lost_on_session_mismatch() {
 fn publish_returns_publication_conflict_on_head_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
         let token = authority.acquire(Some(100)).await.expect("acquire");
-        let current = store.load().await.expect("load").expect("state");
+        let publication_store = publication_store(&store);
+        let current = publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state");
         let next = PublicationState {
             indexed_finalized_head: 9,
             ..current.clone()
         };
-        let _ = store
+        let _ = publication_store
             .compare_and_set(&current, &next)
             .await
             .expect("mutate state");
@@ -215,7 +228,8 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
 fn same_session_acquire_after_expiry_keeps_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
 
         let first = authority.acquire(Some(100)).await.expect("first acquire");
         // valid_through = 100 + 49 = 149; observed 150 > 149 -> expired
@@ -232,7 +246,8 @@ fn same_session_acquire_after_expiry_keeps_session() {
 fn same_session_acquire_before_expiry_keeps_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
 
         let first = authority.acquire(Some(100)).await.expect("first acquire");
         // valid_through = 149; observed 140 <= 149 -> still valid
@@ -249,7 +264,8 @@ fn same_session_acquire_before_expiry_keeps_session() {
 fn authorize_returns_lease_lost_after_own_expiry() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 10);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 10);
 
         let token = authority.acquire(Some(100)).await.expect("acquire");
         // valid_through = 149; observed 150 > 149 -> expired, no external takeover
@@ -266,8 +282,8 @@ fn authorize_returns_lease_lost_after_own_expiry() {
 fn lease_blocks_grants_exact_n_blocks() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 10, 0);
-        let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 10, 0);
+        let first = LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 10, 0);
+        let second = LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 10, 0);
 
         let _ = first.acquire(Some(100)).await.expect("bootstrap");
         // valid_through = 100 + 9 = 109; observed 109 <= 109 -> still fresh
@@ -290,7 +306,8 @@ fn lease_blocks_grants_exact_n_blocks() {
 fn acquire_fails_closed_without_observed_finalized_block() {
     block_on(async {
         let store = InMemoryMetaStore::default();
-        let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
+        let authority =
+            LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
 
         let err = authority
             .acquire(None)

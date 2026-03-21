@@ -35,9 +35,10 @@ impl ResolvedBlockRange {
 pub struct RangeResolver;
 
 impl RangeResolver {
-    pub async fn resolve<M: MetaStore + PublicationStore>(
+    pub async fn resolve<M: MetaStore, P: PublicationStore>(
         &self,
         tables: &Tables<M, impl BlobStore>,
+        publication_store: &P,
         from_block: u64,
         to_block: u64,
         order: QueryOrder,
@@ -52,8 +53,7 @@ impl RangeResolver {
             ));
         }
 
-        let finalized_head = tables
-            .meta_store()
+        let finalized_head = publication_store
             .load_finalized_head_state()
             .await?
             .indexed_finalized_head;

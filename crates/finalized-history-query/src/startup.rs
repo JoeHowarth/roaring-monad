@@ -13,11 +13,12 @@ pub struct StartupPlan {
     pub warm_streams: usize,
 }
 
-pub async fn startup_plan<M: MetaStore + PublicationStore, B: BlobStore>(
+pub async fn startup_plan<M: MetaStore, P: PublicationStore, B: BlobStore>(
     tables: &Tables<M, B>,
+    publication_store: &P,
     warm_streams: usize,
 ) -> Result<StartupPlan> {
-    let head_state = tables.meta_store().load_finalized_head_state().await?;
+    let head_state = publication_store.load_finalized_head_state().await?;
     let next_log_id = derive_next_log_id(tables, head_state.indexed_finalized_head).await?;
     Ok(build_startup_plan(
         head_state.indexed_finalized_head,

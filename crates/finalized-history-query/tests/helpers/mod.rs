@@ -6,14 +6,16 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_FAMILY, block_record_key};
 use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
+use finalized_history_query::store::publication::{
+    CasOutcome, MetaPublicationStore, PublicationStore,
+};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
 
@@ -105,7 +107,7 @@ pub async fn query_page<A, M, B>(
 ) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Log>>
 where
     A: WriteAuthority,
-    M: MetaStore + PublicationStore,
+    M: MetaStore,
     B: BlobStore,
 {
     svc.query_logs(
@@ -144,21 +146,32 @@ pub struct ExpireBeforePublishMetaStore {
     pub advanced: Arc<AtomicBool>,
 }
 
+impl ExpireBeforePublishMetaStore {
+    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
+        MetaPublicationStore::new(Arc::clone(&self.inner))
+    }
+}
+
 impl MetaStore for ExpireBeforePublishMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
-        self.inner.get(key).await
+    async fn get(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+    ) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(family, key).await
     }
 
     async fn put(
         &self,
+        family: FamilyId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> finalized_history_query::Result<PutResult> {
-        let result = self.inner.put(key, value, cond).await?;
-        if key != PUBLICATION_STATE_KEY && !self.advanced.swap(true, Ordering::Relaxed) {
+        let result = self.inner.put(family, key, value, cond).await?;
+        if family != PUBLICATION_STATE_FAMILY && !self.advanced.swap(true, Ordering::Relaxed) {
             let publication_state = self
-                .inner
+                .publication_store()
                 .load()
                 .await?
                 .expect("publication state should exist before artifact writes");
@@ -172,30 +185,36 @@ impl MetaStore for ExpireBeforePublishMetaStore {
         Ok(result)
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> finalized_history_query::Result<()> {
-        self.inner.delete(key, cond).await
+    async fn delete(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        cond: DelCond,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete(family, key, cond).await
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(family, prefix, cursor, limit).await
     }
 }
 
 impl PublicationStore for ExpireBeforePublishMetaStore {
     async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.inner.load().await
+        self.publication_store().load().await
     }
 
     async fn create_if_absent(
         &self,
         initial: &PublicationState,
     ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.create_if_absent(initial).await
+        self.publication_store().create_if_absent(initial).await
     }
 
     async fn compare_and_set(
@@ -211,7 +230,9 @@ impl PublicationStore for ExpireBeforePublishMetaStore {
                 current: Some(expected.clone()),
             });
         }
-        self.inner.compare_and_set(expected, next).await
+        self.publication_store()
+            .compare_and_set(expected, next)
+            .await
     }
 }
 
@@ -221,44 +242,71 @@ pub struct PublishConflictOnceMetaStore {
     pub conflicted: Arc<AtomicBool>,
 }
 
+impl PublishConflictOnceMetaStore {
+    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
+        MetaPublicationStore::new(Arc::clone(&self.inner))
+    }
+}
+
 impl MetaStore for PublishConflictOnceMetaStore {
-    async fn get(&self, key: &[u8]) -> finalized_history_query::Result<Option<Record>> {
-        self.inner.get(key).await
+    async fn get(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+    ) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.get(family, key).await
     }
 
     async fn put(
         &self,
+        family: FamilyId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> finalized_history_query::Result<PutResult> {
-        self.inner.put(key, value, cond).await
+        if family == PUBLICATION_STATE_FAMILY
+            && matches!(cond, PutCond::IfVersion(_))
+            && !self.conflicted.swap(true, Ordering::Relaxed)
+        {
+            let result = self.inner.put(family, key, value, cond).await?;
+            return Ok(PutResult {
+                applied: false,
+                version: result.version,
+            });
+        }
+        self.inner.put(family, key, value, cond).await
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> finalized_history_query::Result<()> {
-        self.inner.delete(key, cond).await
+    async fn delete(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        cond: DelCond,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete(family, key, cond).await
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(family, prefix, cursor, limit).await
     }
 }
 
 impl PublicationStore for PublishConflictOnceMetaStore {
     async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
-        self.inner.load().await
+        self.publication_store().load().await
     }
 
     async fn create_if_absent(
         &self,
         initial: &PublicationState,
     ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
-        self.inner.create_if_absent(initial).await
+        self.publication_store().create_if_absent(initial).await
     }
 
     async fn compare_and_set(
@@ -269,7 +317,11 @@ impl PublicationStore for PublishConflictOnceMetaStore {
         if next.indexed_finalized_head > expected.indexed_finalized_head
             && !self.conflicted.swap(true, Ordering::Relaxed)
         {
-            match self.inner.compare_and_set(expected, next).await? {
+            match self
+                .publication_store()
+                .compare_and_set(expected, next)
+                .await?
+            {
                 CasOutcome::Applied(state) => {
                     return Ok(CasOutcome::Failed {
                         current: Some(state),
@@ -278,7 +330,9 @@ impl PublicationStore for PublishConflictOnceMetaStore {
                 outcome => return Ok(outcome),
             }
         }
-        self.inner.compare_and_set(expected, next).await
+        self.publication_store()
+            .compare_and_set(expected, next)
+            .await
     }
 }
 

@@ -9,29 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
-use crate::domain::keys::PUBLICATION_STATE_KEY;
-use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
-use crate::store::traits::{DelCond, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::traits::{DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record};
 
 const DEFAULT_FENCE_KEY: &str = "global";
 const META_BUCKETS: u16 = 256;
-const KNOWN_GROUPS: &[&str] = &[
-    "meta",
-    "publication_state",
-    "block_record",
-    "block_log_header",
-    "block_hash_index",
-    "log_dir",
-    "log_dir_sub_bucket",
-    "log_dir_by_block",
-    "open_bitmap_page",
-    "bitmap_by_block",
-    "bitmap_page_meta",
-    "manifests",
-    "tails",
-];
 
 #[derive(Debug, Clone)]
 pub struct ScyllaTelemetrySnapshot {
@@ -286,15 +268,14 @@ impl ScyllaMetaStore {
 }
 
 impl MetaStore for ScyllaMetaStore {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        let grp = extract_group(key);
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
         let key_vec = key.to_vec();
         let bucket = key_bucket(&key_vec);
         let stmt = self.stmts.get.clone();
         let res = self
             .with_retry("get", || async {
                 self.session
-                    .execute_unpaged(&stmt, (grp.as_str(), bucket, key_vec.clone()))
+                    .execute_unpaged(&stmt, (family.as_str(), bucket, key_vec.clone()))
                     .await
                     .map_err(|e| Error::Backend(format!("scylla get: {e}")))
             })
@@ -307,8 +288,13 @@ impl MetaStore for ScyllaMetaStore {
         }))
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        let grp = extract_group(key);
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
         let key_vec = key.to_vec();
         let bucket = key_bucket(&key_vec);
 
@@ -320,7 +306,7 @@ impl MetaStore for ScyllaMetaStore {
                         .execute_unpaged(
                             &stmt,
                             (
-                                grp.as_str(),
+                                family.as_str(),
                                 bucket,
                                 key_vec.clone(),
                                 value.to_vec(),
@@ -338,7 +324,7 @@ impl MetaStore for ScyllaMetaStore {
                 })
             }
             PutCond::IfAbsent => {
-                let cas_op = format!("put_if_absent:{grp}");
+                let cas_op = format!("put_if_absent:{}", family.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
                 let stmt = self.stmts.put_if_absent.clone();
                 let res = self
@@ -346,7 +332,13 @@ impl MetaStore for ScyllaMetaStore {
                         self.session
                             .execute_unpaged(
                                 &stmt,
-                                (grp.as_str(), bucket, key_vec.clone(), value.to_vec(), 1_i64),
+                                (
+                                    family.as_str(),
+                                    bucket,
+                                    key_vec.clone(),
+                                    value.to_vec(),
+                                    1_i64,
+                                ),
                             )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))
@@ -362,7 +354,7 @@ impl MetaStore for ScyllaMetaStore {
                 })
             }
             PutCond::IfVersion(v) => {
-                let cas_op = format!("put_if_version:{grp}");
+                let cas_op = format!("put_if_version:{}", family.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
                 let stmt = self.stmts.put_if_version.clone();
                 let res = self
@@ -373,7 +365,7 @@ impl MetaStore for ScyllaMetaStore {
                                 (
                                     value.to_vec(),
                                     (v + 1) as i64,
-                                    grp.as_str(),
+                                    family.as_str(),
                                     bucket,
                                     key_vec.clone(),
                                     v as i64,
@@ -395,15 +387,14 @@ impl MetaStore for ScyllaMetaStore {
         }
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        let grp = extract_group(key);
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
         let bucket = key_bucket(key);
         match cond {
             DelCond::Any => {
                 let stmt = self.stmts.delete_any.clone();
                 self.with_retry("delete_any", || async {
                     self.session
-                        .execute_unpaged(&stmt, (grp.as_str(), bucket, key.to_vec()))
+                        .execute_unpaged(&stmt, (family.as_str(), bucket, key.to_vec()))
                         .await
                         .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
                     Ok(())
@@ -415,7 +406,10 @@ impl MetaStore for ScyllaMetaStore {
                 let _ = self
                     .with_retry("delete_if_version", || async {
                         self.session
-                            .execute_unpaged(&stmt, (grp.as_str(), bucket, key.to_vec(), v as i64))
+                            .execute_unpaged(
+                                &stmt,
+                                (family.as_str(), bucket, key.to_vec(), v as i64),
+                            )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))
                     })
@@ -427,55 +421,45 @@ impl MetaStore for ScyllaMetaStore {
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
-        let groups: Vec<String> = if prefix.is_empty() {
-            KNOWN_GROUPS.iter().map(|s| s.to_string()).collect()
-        } else {
-            vec![extract_group(prefix)]
-        };
-
         let mut keys = Vec::new();
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
-        for grp in groups {
-            for bucket in 0..META_BUCKETS {
-                if keys.len() >= limit {
-                    break;
-                }
-                let stmt = self.stmts.list_prefix.clone();
-                let res = self
-                    .with_retry("list_prefix", || async {
-                        self.session
-                            .execute_unpaged(&stmt, (grp.as_str(), bucket as i16))
-                            .await
-                            .map_err(|e| Error::Backend(format!("scylla list_prefix: {e}")))
-                    })
-                    .await?;
-
-                if let Ok(rows_result) = res.into_rows_result()
-                    && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
-                {
-                    for row in iter {
-                        let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
-                        if (has_cursor && k <= start)
-                            || (!has_cursor && k < start)
-                            || !k.starts_with(prefix)
-                        {
-                            continue;
-                        }
-                        keys.push(k);
-                        if keys.len() >= limit {
-                            break;
-                        }
-                    }
-                }
-            }
+        for bucket in 0..META_BUCKETS {
             if keys.len() >= limit {
                 break;
+            }
+            let stmt = self.stmts.list_prefix.clone();
+            let res = self
+                .with_retry("list_prefix", || async {
+                    self.session
+                        .execute_unpaged(&stmt, (family.as_str(), bucket as i16))
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla list prefix: {e}")))
+                })
+                .await?;
+
+            if let Ok(rows_result) = res.into_rows_result()
+                && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
+            {
+                for row in iter {
+                    let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
+                    if (has_cursor && k <= start) || (!has_cursor && k < start) {
+                        continue;
+                    }
+                    if !k.starts_with(prefix) {
+                        continue;
+                    }
+                    keys.push(k);
+                    if keys.len() >= limit {
+                        break;
+                    }
+                }
             }
         }
 
@@ -550,80 +534,6 @@ fn lwt_applied(res: scylla::QueryResult) -> Result<bool> {
     match first_col {
         CqlValue::Boolean(b) => Ok(*b),
         _ => Err(Error::Decode("invalid [applied] column type")),
-    }
-}
-
-impl PublicationStore for ScyllaMetaStore {
-    async fn load(&self) -> Result<Option<PublicationState>> {
-        let Some(record) = self.get(PUBLICATION_STATE_KEY).await? else {
-            return Ok(None);
-        };
-        Ok(Some(PublicationState::decode(&record.value)?))
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let result = self
-            .put(PUBLICATION_STATE_KEY, initial.encode(), PutCond::IfAbsent)
-            .await?;
-        if result.applied {
-            return Ok(CasOutcome::Applied(initial.clone()));
-        }
-        Ok(CasOutcome::Failed {
-            current: self.load().await?,
-        })
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let Some(current) = self.get(PUBLICATION_STATE_KEY).await? else {
-            return Ok(CasOutcome::Failed { current: None });
-        };
-        let current_state = PublicationState::decode(&current.value)?;
-        if current_state != *expected {
-            return Ok(CasOutcome::Failed {
-                current: Some(current_state),
-            });
-        }
-
-        let result = self
-            .put(
-                PUBLICATION_STATE_KEY,
-                next.encode(),
-                PutCond::IfVersion(current.version),
-            )
-            .await?;
-        if result.applied {
-            return Ok(CasOutcome::Applied(next.clone()));
-        }
-
-        Ok(CasOutcome::Failed {
-            current: self.load().await?,
-        })
-    }
-}
-
-fn extract_group(key: &[u8]) -> String {
-    let mut out = String::new();
-    for &b in key {
-        if b == b'/' {
-            break;
-        }
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
-            out.push(char::from(b));
-        } else {
-            break;
-        }
-    }
-    if out.is_empty() {
-        "misc".to_string()
-    } else {
-        out
     }
 }
 

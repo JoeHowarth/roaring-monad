@@ -1,8 +1,6 @@
 use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
-use crate::domain::keys::{
-    log_dir_bucket_start, log_dir_by_block_prefix, log_dir_sub_bucket_start,
-};
+use crate::domain::keys::{log_dir_bucket_start, log_dir_sub_bucket_start};
 use crate::domain::types::DirByBlock;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -59,20 +57,12 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         if let std::collections::hash_map::Entry::Vacant(entry) =
             self.directory_fragment_cache.entry(sub_bucket_start)
         {
-            let page = self
-                .tables
-                .meta_store()
-                .list_prefix(&log_dir_by_block_prefix(sub_bucket_start), None, usize::MAX)
-                .await?;
-            let mut fragments = Vec::with_capacity(page.keys.len());
-            for key in page.keys {
-                let Some(record) = self.tables.meta_store().get(&key).await? else {
-                    continue;
-                };
-                fragments.push(DirByBlock::decode(&record.value)?);
-            }
-            fragments.sort_by_key(|fragment| fragment.block_num);
-            entry.insert(fragments);
+            entry.insert(
+                self.tables
+                    .directory_fragments()
+                    .load_sub_bucket_fragments(sub_bucket_start)
+                    .await?,
+            );
         }
         Ok(self
             .directory_fragment_cache

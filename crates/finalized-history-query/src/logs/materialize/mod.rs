@@ -50,8 +50,7 @@ mod tests {
     use crate::core::ids::LogId;
     use crate::domain::keys::{
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_blob_key,
-        block_log_header_key, log_dir_bucket_key, log_dir_bucket_start, log_dir_by_block_key,
-        log_dir_sub_bucket_start,
+        log_dir_bucket_start, log_dir_sub_bucket_start,
     };
     use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
@@ -110,7 +109,8 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             meta.put(
-                &log_dir_bucket_key(0),
+                crate::domain::keys::LOG_DIR_BUCKET_FAMILY,
+                &crate::domain::keys::log_dir_bucket_suffix(0),
                 DirBucket {
                     start_block: 700,
                     first_log_ids: vec![11, 13],
@@ -146,7 +146,11 @@ mod tests {
             let blob = InMemoryBlobStore::default();
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.put(
-                &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), 700),
+                crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
+                &crate::domain::keys::log_dir_by_block_suffix(
+                    log_dir_sub_bucket_start(log_id),
+                    700,
+                ),
                 DirByBlock {
                     block_num: 700,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -184,7 +188,8 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
-                &log_dir_bucket_key(log_dir_bucket_start(log_id)),
+                crate::domain::keys::LOG_DIR_BUCKET_FAMILY,
+                &crate::domain::keys::log_dir_bucket_suffix(log_dir_bucket_start(log_id)),
                 DirBucket {
                     start_block: 700,
                     first_log_ids: vec![
@@ -241,7 +246,11 @@ mod tests {
             let encoded = log.encode();
 
             meta.put(
-                &log_dir_by_block_key(log_dir_sub_bucket_start(log_id), block_num),
+                crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
+                &crate::domain::keys::log_dir_by_block_suffix(
+                    log_dir_sub_bucket_start(log_id),
+                    block_num,
+                ),
                 DirByBlock {
                     block_num,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -253,7 +262,8 @@ mod tests {
             .await
             .expect("write directory fragment");
             meta.put(
-                &block_log_header_key(block_num),
+                crate::domain::keys::BLOCK_LOG_HEADER_FAMILY,
+                &crate::domain::keys::block_log_header_suffix(block_num),
                 BlockLogHeader {
                     offsets: vec![0, encoded.len() as u32],
                 }
@@ -348,7 +358,8 @@ mod tests {
             }
 
             meta.put(
-                &block_log_header_key(block_num),
+                crate::domain::keys::BLOCK_LOG_HEADER_FAMILY,
+                &crate::domain::keys::block_log_header_suffix(block_num),
                 BlockLogHeader { offsets }.encode(),
                 PutCond::Any,
             )

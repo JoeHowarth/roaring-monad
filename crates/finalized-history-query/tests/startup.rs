@@ -7,12 +7,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
+use finalized_history_query::domain::keys::{
+    BLOCK_RECORD_FAMILY, PUBLICATION_STATE_FAMILY, block_record_suffix,
+};
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::PublicationStore;
+use finalized_history_query::store::publication::{
+    MetaPublicationStore, PUBLICATION_STATE_SUFFIX, PublicationStore,
+};
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 use futures::executor::block_on;
 
@@ -53,9 +57,7 @@ fn service_startup_uses_configured_lease_blocks() {
         );
 
         svc.startup().await.expect("startup");
-        let publication_state = svc
-            .ingest
-            .meta_store
+        let publication_state = MetaPublicationStore::new(Arc::clone(&svc.ingest.meta_store))
             .load()
             .await
             .expect("load publication state")
@@ -122,14 +124,17 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
+            publication_store
+                .create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
                 .await
                 .expect("create publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(3),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(3),
             BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
@@ -144,7 +149,11 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
         let plan = svc.startup().await.expect("reader-only startup");
-        let state = meta.load().await.expect("load").expect("publication state");
+        let state = publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("publication state");
         let err = svc
             .ingest_finalized_block(mk_block(4, [3; 32], vec![mk_log(1, 10, 20, 4, 0, 0)]))
             .await
@@ -162,8 +171,10 @@ fn startup_plan_should_not_take_publication_ownership() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(7, [7u8; 16], 0))
+            publication_store
+                .create_if_absent(&seeded_publication_state(7, [7u8; 16], 0))
                 .await
                 .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
@@ -173,12 +184,12 @@ fn startup_plan_should_not_take_publication_ownership() {
             std::sync::Arc::new(meta.clone()),
             std::sync::Arc::new(blob.clone()),
         );
-        let _ = startup_plan(&tables, 0)
+        let _ = startup_plan(&tables, &publication_store, 0)
             .await
             .expect("startup plan should succeed");
 
         let publication_state = meta
-            .get(PUBLICATION_STATE_KEY)
+            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("read publication state")
             .expect("publication state present");
@@ -197,7 +208,8 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         let inner = InMemoryMetaStore::default();
         inner
             .put(
-                &block_record_key(1),
+                BLOCK_RECORD_FAMILY,
+                &block_record_suffix(1),
                 BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [0; 32],
@@ -222,7 +234,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&block_record_key(1))
+                .get(BLOCK_RECORD_FAMILY, &block_record_suffix(1))
                 .await
                 .expect("read block meta after startup")
                 .is_some()
@@ -249,8 +261,7 @@ fn service_can_publish_a_contiguous_batch() {
             svc.ingest_finalized_blocks(blocks)
                 .await
                 .expect("batched ingest"),
-            svc.ingest
-                .meta_store
+            MetaPublicationStore::new(Arc::clone(&svc.ingest.meta_store))
                 .load_finalized_head_state()
                 .await
                 .expect("head state"),

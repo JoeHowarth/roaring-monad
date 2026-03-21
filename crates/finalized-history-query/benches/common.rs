@@ -16,8 +16,9 @@ use finalized_history_query::core::ids::{
 };
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
-    MAX_LOCAL_ID, PUBLICATION_STATE_KEY, block_log_blob_key, block_log_header_key,
-    block_record_key, log_dir_bucket_key, log_dir_bucket_start, stream_id,
+    BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BUCKET_FAMILY, MAX_LOCAL_ID,
+    PUBLICATION_STATE_FAMILY, block_log_blob_key, block_log_header_suffix, block_record_suffix,
+    log_dir_bucket_start, log_dir_bucket_suffix, stream_id,
 };
 use finalized_history_query::domain::types::{
     Block, BlockRecord, DirBucket, Log, PublicationState,
@@ -25,8 +26,8 @@ use finalized_history_query::domain::types::{
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::PublicationStore;
-use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
+use finalized_history_query::store::publication::{MetaPublicationStore, PUBLICATION_STATE_SUFFIX};
+use finalized_history_query::store::traits::{BlobStore, FamilyId, MetaStore, PutCond};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
     Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
@@ -48,12 +49,12 @@ fn static_observed_finalized_block() -> Option<u64> {
 }
 
 pub type BenchService = FinalizedHistoryService<
-    LeaseAuthority<InMemoryMetaStore>,
+    LeaseAuthority<MetaPublicationStore<InMemoryMetaStore>>,
     InMemoryMetaStore,
     InMemoryBlobStore,
 >;
 pub type CountingBenchService = FinalizedHistoryService<
-    LeaseAuthority<InMemoryMetaStore>,
+    LeaseAuthority<MetaPublicationStore<InMemoryMetaStore>>,
     InMemoryMetaStore,
     CountingBlobStore,
 >;
@@ -308,7 +309,7 @@ pub fn query_page<A, M, B>(
 ) -> QueryPage<Log>
 where
     A: WriteAuthority,
-    M: MetaStore + PublicationStore,
+    M: MetaStore,
     B: BlobStore,
 {
     block_on(svc.query_logs(
@@ -334,7 +335,7 @@ pub fn query_len<A, M, B>(
 ) -> usize
 where
     A: WriteAuthority,
-    M: MetaStore + PublicationStore,
+    M: MetaStore,
     B: BlobStore,
 {
     query_page(svc, from_block, to_block, filter, limit, None)
@@ -613,7 +614,8 @@ pub fn seed_materialized_blocks(
 
             put_meta_record(
                 meta_store,
-                &block_record_key(block.block_num),
+                BLOCK_RECORD_FAMILY,
+                &block_record_suffix(block.block_num),
                 BlockRecord {
                     block_hash,
                     parent_hash,
@@ -627,7 +629,8 @@ pub fn seed_materialized_blocks(
             if !block.logs.is_empty() {
                 put_meta_record(
                     meta_store,
-                    &block_log_header_key(block.block_num),
+                    BLOCK_LOG_HEADER_FAMILY,
+                    &block_log_header_suffix(block.block_num),
                     finalized_history_query::domain::types::BlockLogHeader { offsets }.encode(),
                 )
                 .await;
@@ -674,7 +677,8 @@ pub fn seed_materialized_blocks(
             );
             put_meta_record(
                 meta_store,
-                &log_dir_bucket_key(bucket_start),
+                LOG_DIR_BUCKET_FAMILY,
+                &log_dir_bucket_suffix(bucket_start),
                 DirBucket {
                     start_block,
                     first_log_ids,
@@ -694,7 +698,8 @@ pub fn seed_publication_state(
     block_on(async {
         put_meta_record(
             meta_store,
-            PUBLICATION_STATE_KEY,
+            PUBLICATION_STATE_FAMILY,
+            PUBLICATION_STATE_SUFFIX,
             PublicationState {
                 owner_id: DEFAULT_WRITER_ID,
                 session_id: [0u8; 16],
@@ -726,9 +731,14 @@ pub fn materializer<'a>(
     LogMaterializer::new(tables)
 }
 
-async fn put_meta_record(meta_store: &InMemoryMetaStore, key: &[u8], value: Bytes) {
+async fn put_meta_record(
+    meta_store: &InMemoryMetaStore,
+    family: FamilyId,
+    key: &[u8],
+    value: Bytes,
+) {
     meta_store
-        .put(key, value, PutCond::Any)
+        .put(family, key, value, PutCond::Any)
         .await
         .expect("put meta record");
 }

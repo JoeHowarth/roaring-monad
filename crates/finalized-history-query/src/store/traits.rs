@@ -4,6 +4,19 @@ use bytes::Bytes;
 
 use crate::error::Result;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FamilyId(&'static str);
+
+impl FamilyId {
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Record {
     pub value: Bytes,
@@ -36,13 +49,125 @@ pub struct Page {
     pub next_cursor: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
+pub struct KvTable<M> {
+    store: Arc<M>,
+    family: FamilyId,
+}
+
+impl<M> KvTable<M> {
+    pub fn new(store: Arc<M>, family: FamilyId) -> Self {
+        Self { store, family }
+    }
+
+    pub fn family(&self) -> FamilyId {
+        self.family
+    }
+}
+
+impl<M> Clone for KvTable<M> {
+    fn clone(&self) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+            family: self.family,
+        }
+    }
+}
+
+impl<M: MetaStore> KvTable<M> {
+    pub async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
+        self.store.get(self.family, key).await
+    }
+
+    pub async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
+        self.store.put(self.family, key, value, cond).await
+    }
+
+    pub async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
+        self.store.delete(self.family, key, cond).await
+    }
+
+    pub async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page> {
+        self.store
+            .list_prefix(self.family, prefix, cursor, limit)
+            .await
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct KvTableRef<'a, M> {
+    store: &'a M,
+    family: FamilyId,
+}
+
+impl<'a, M> KvTableRef<'a, M> {
+    pub fn new(store: &'a M, family: FamilyId) -> Self {
+        Self { store, family }
+    }
+
+    pub fn family(&self) -> FamilyId {
+        self.family
+    }
+}
+
+impl<M: MetaStore> KvTableRef<'_, M> {
+    pub async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
+        self.store.get(self.family, key).await
+    }
+
+    pub async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
+        self.store.put(self.family, key, value, cond).await
+    }
+
+    pub async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
+        self.store.delete(self.family, key, cond).await
+    }
+
+    pub async fn list_prefix(
+        &self,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page> {
+        self.store
+            .list_prefix(self.family, prefix, cursor, limit)
+            .await
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait MetaStore: Send + Sync {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult>;
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()>;
+    fn table(self: Arc<Self>, family: FamilyId) -> KvTable<Self>
+    where
+        Self: Sized,
+    {
+        KvTable::new(self, family)
+    }
+
+    fn table_ref(&self, family: FamilyId) -> KvTableRef<'_, Self>
+    where
+        Self: Sized,
+    {
+        KvTableRef::new(self, family)
+    }
+
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>>;
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult>;
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
@@ -50,25 +175,34 @@ pub trait MetaStore: Send + Sync {
 }
 
 impl<T: MetaStore> MetaStore for Arc<T> {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        self.as_ref().get(key).await
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
+        self.as_ref().get(family, key).await
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        self.as_ref().put(key, value, cond).await
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        self.as_ref().put(family, key, value, cond).await
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        self.as_ref().delete(key, cond).await
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+        self.as_ref().delete(family, key, cond).await
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
-        self.as_ref().list_prefix(prefix, cursor, limit).await
+        self.as_ref()
+            .list_prefix(family, prefix, cursor, limit)
+            .await
     }
 }
 

@@ -9,17 +9,21 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_KEY, bitmap_page_meta_key, block_record_key,
-    log_dir_sub_bucket_key, stream_id, stream_page_start_local,
+    BITMAP_PAGE_META_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_KEY,
+    bitmap_page_meta_suffix, block_record_suffix, log_dir_sub_bucket_suffix, stream_id,
+    stream_page_start_local,
 };
 use finalized_history_query::domain::types::{Block, BlockRecord, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
+use finalized_history_query::store::publication::{
+    CasOutcome, MetaPublicationStore, PublicationStore,
+};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
 };
 use futures::executor::block_on;
 
@@ -94,33 +98,61 @@ struct FaultyMetaStore {
     injector: Arc<FaultInjector>,
 }
 
+impl FaultyMetaStore {
+    fn logical_key(family: FamilyId, key: &[u8]) -> Vec<u8> {
+        let mut out = family.as_str().as_bytes().to_vec();
+        if !key.is_empty() {
+            out.push(b'/');
+            out.extend_from_slice(key);
+        }
+        out
+    }
+
+    fn publication_store(&self) -> MetaPublicationStore<InMemoryMetaStore> {
+        MetaPublicationStore::new(Arc::clone(&self.inner))
+    }
+}
+
 impl MetaStore for FaultyMetaStore {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        self.inner.get(key).await
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
+        self.inner.get(family, key).await
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        self.injector.maybe_fail(FaultOp::MetaPut, key)?;
-        self.inner.put(key, value, cond).await
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let logical_key = Self::logical_key(family, key);
+        if family == PUBLICATION_STATE_FAMILY {
+            self.injector
+                .maybe_fail(FaultOp::PublicationCas, &logical_key)?;
+        } else {
+            self.injector.maybe_fail(FaultOp::MetaPut, &logical_key)?;
+        }
+        self.inner.put(family, key, value, cond).await
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        self.inner.delete(key, cond).await
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+        self.inner.delete(family, key, cond).await
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(family, prefix, cursor, limit).await
     }
 }
 
 impl PublicationStore for FaultyMetaStore {
     async fn load(&self) -> Result<Option<PublicationState>> {
-        self.inner.load().await
+        self.publication_store().load().await
     }
 
     async fn create_if_absent(
@@ -129,7 +161,7 @@ impl PublicationStore for FaultyMetaStore {
     ) -> Result<CasOutcome<PublicationState>> {
         self.injector
             .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
-        self.inner.create_if_absent(initial).await
+        self.publication_store().create_if_absent(initial).await
     }
 
     async fn compare_and_set(
@@ -139,7 +171,9 @@ impl PublicationStore for FaultyMetaStore {
     ) -> Result<CasOutcome<PublicationState>> {
         self.injector
             .maybe_fail(FaultOp::PublicationCas, PUBLICATION_STATE_KEY)?;
-        self.inner.compare_and_set(expected, next).await
+        self.publication_store()
+            .compare_and_set(expected, next)
+            .await
     }
 }
 
@@ -198,7 +232,11 @@ fn mk_service(
     meta: Arc<InMemoryMetaStore>,
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
-) -> FinalizedHistoryService<LeaseAuthority<FaultyMetaStore>, FaultyMetaStore, FaultyBlobStore> {
+) -> FinalizedHistoryService<
+    LeaseAuthority<MetaPublicationStore<FaultyMetaStore>>,
+    FaultyMetaStore,
+    FaultyBlobStore,
+> {
     mk_service_with_writer(meta, blob, injector, 1)
 }
 
@@ -207,7 +245,11 @@ fn mk_service_with_writer(
     blob: Arc<InMemoryBlobStore>,
     injector: Arc<FaultInjector>,
     writer_id: u64,
-) -> FinalizedHistoryService<LeaseAuthority<FaultyMetaStore>, FaultyMetaStore, FaultyBlobStore> {
+) -> FinalizedHistoryService<
+    LeaseAuthority<MetaPublicationStore<FaultyMetaStore>>,
+    FaultyMetaStore,
+    FaultyBlobStore,
+> {
     FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
@@ -239,7 +281,7 @@ fn indexed_address_or_filter(addresses: &[u8]) -> LogFilter {
 
 async fn query_range(
     svc: &FinalizedHistoryService<
-        LeaseAuthority<FaultyMetaStore>,
+        LeaseAuthority<MetaPublicationStore<FaultyMetaStore>>,
         FaultyMetaStore,
         FaultyBlobStore,
     >,
@@ -371,20 +413,23 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         let meta = Arc::new(InMemoryMetaStore::default());
         let blob = Arc::new(InMemoryBlobStore::default());
         let seed_first_log_id = 2_560_000u64 - 2;
+        let publication_store = MetaPublicationStore::new(Arc::clone(&meta));
 
         assert!(matches!(
-            meta.create_if_absent(&PublicationState {
-                owner_id: 1,
-                session_id: [1u8; 16],
-                indexed_finalized_head: 1,
-                lease_valid_through_block: 0,
-            })
-            .await
-            .expect("seed publication state"),
+            publication_store
+                .create_if_absent(&PublicationState {
+                    owner_id: 1,
+                    session_id: [1u8; 16],
+                    indexed_finalized_head: 1,
+                    lease_valid_through_block: 0,
+                })
+                .await
+                .expect("seed publication state"),
             CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(1),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -418,9 +463,10 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         assert!(matches!(err, Error::Backend(_)));
 
         assert!(
-            meta.get(&log_dir_sub_bucket_key(
-                2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE
-            ))
+            meta.get(
+                LOG_DIR_SUB_BUCKET_FAMILY,
+                &log_dir_sub_bucket_suffix(2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE),
+            )
             .await
             .expect("dir sub bucket")
             .is_some()
@@ -432,14 +478,17 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         );
         let page_start = stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
         assert!(
-            meta.get(&bitmap_page_meta_key(&sid, page_start))
-                .await
-                .expect("stream page meta")
-                .is_some()
+            meta.get(
+                BITMAP_PAGE_META_FAMILY,
+                &bitmap_page_meta_suffix(&sid, page_start)
+            )
+            .await
+            .expect("stream page meta")
+            .is_some()
         );
 
         injector.clear();
-        let current_state = meta
+        let current_state = publication_store
             .load()
             .await
             .expect("load publication state")
@@ -449,7 +498,8 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             ..current_state.clone()
         };
         assert!(matches!(
-            meta.compare_and_set(&current_state, &expired_state)
+            publication_store
+                .compare_and_set(&current_state, &expired_state)
                 .await
                 .expect("expire publication lease"),
             CasOutcome::Applied(_)
@@ -480,7 +530,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             std::sync::Arc::clone(&takeover_writer.ingest.meta_store),
             std::sync::Arc::clone(&takeover_writer.ingest.blob_store),
         );
-        let plan = startup_plan(&tables, 0)
+        let plan = startup_plan(&tables, &MetaPublicationStore::new(Arc::clone(&meta)), 0)
             .await
             .expect("post conflict startup plan");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);

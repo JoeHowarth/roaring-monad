@@ -1,6 +1,17 @@
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
+use crate::store::traits::FamilyId;
 
 pub const PUBLICATION_STATE_KEY: &[u8] = b"publication_state";
+pub const PUBLICATION_STATE_FAMILY: FamilyId = FamilyId::new("publication_state");
+pub const BLOCK_RECORD_FAMILY: FamilyId = FamilyId::new("block_record");
+pub const BLOCK_LOG_HEADER_FAMILY: FamilyId = FamilyId::new("block_log_header");
+pub const BLOCK_HASH_INDEX_FAMILY: FamilyId = FamilyId::new("block_hash_index");
+pub const LOG_DIR_BUCKET_FAMILY: FamilyId = FamilyId::new("log_dir_bucket");
+pub const LOG_DIR_SUB_BUCKET_FAMILY: FamilyId = FamilyId::new("log_dir_sub_bucket");
+pub const LOG_DIR_BY_BLOCK_FAMILY: FamilyId = FamilyId::new("log_dir_by_block");
+pub const BITMAP_BY_BLOCK_FAMILY: FamilyId = FamilyId::new("bitmap_by_block");
+pub const BITMAP_PAGE_META_FAMILY: FamilyId = FamilyId::new("bitmap_page_meta");
+pub const OPEN_BITMAP_PAGE_FAMILY: FamilyId = FamilyId::new("open_bitmap_page");
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
@@ -36,6 +47,10 @@ pub fn log_dir_bucket_key(bucket_start_log_id: u64) -> Vec<u8> {
     k
 }
 
+pub fn log_dir_bucket_suffix(bucket_start_log_id: u64) -> Vec<u8> {
+    u64_be(bucket_start_log_id).to_vec()
+}
+
 pub fn log_dir_bucket_prefix() -> &'static [u8] {
     b"log_dir_bucket/"
 }
@@ -44,6 +59,10 @@ pub fn log_dir_sub_bucket_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
     let mut k = b"log_dir_sub_bucket/".to_vec();
     k.extend_from_slice(&u64_be(sub_bucket_start_log_id));
     k
+}
+
+pub fn log_dir_sub_bucket_suffix(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    u64_be(sub_bucket_start_log_id).to_vec()
 }
 
 pub fn log_dir_by_block_key(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
@@ -59,10 +78,26 @@ pub fn log_dir_by_block_prefix(sub_bucket_start_log_id: u64) -> Vec<u8> {
     k
 }
 
+pub fn log_dir_by_block_suffix(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
+    let mut k = log_dir_by_block_prefix_suffix(sub_bucket_start_log_id);
+    k.extend_from_slice(&u64_be(block_num));
+    k
+}
+
+pub fn log_dir_by_block_prefix_suffix(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    let mut k = u64_be(sub_bucket_start_log_id).to_vec();
+    k.push(b'/');
+    k
+}
+
 pub fn block_log_header_key(block_num: u64) -> Vec<u8> {
     let mut k = b"block_log_header/".to_vec();
     k.extend_from_slice(&u64_be(block_num));
     k
+}
+
+pub fn block_log_header_suffix(block_num: u64) -> Vec<u8> {
+    u64_be(block_num).to_vec()
 }
 
 pub fn block_log_header_prefix() -> &'static [u8] {
@@ -88,10 +123,18 @@ pub fn block_record_key(block_num: u64) -> Vec<u8> {
     k
 }
 
+pub fn block_record_suffix(block_num: u64) -> Vec<u8> {
+    u64_be(block_num).to_vec()
+}
+
 pub fn block_hash_index_key(hash: &[u8; 32]) -> Vec<u8> {
     let mut k = b"block_hash_index/".to_vec();
     k.extend_from_slice(hash);
     k
+}
+
+pub fn block_hash_index_suffix(hash: &[u8; 32]) -> Vec<u8> {
+    hash.to_vec()
 }
 
 pub fn log_shard(global_log_id: impl Into<LogId>) -> LogShard {
@@ -136,6 +179,12 @@ pub fn bitmap_page_meta_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
     k
 }
 
+pub fn bitmap_page_meta_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k
+}
+
 pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
     let mut k = format!("bitmap_page_blob/{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
@@ -144,6 +193,12 @@ pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
 
 pub fn open_bitmap_page_key(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
     let mut k = open_bitmap_page_shard_page_prefix(shard, page_start_local);
+    k.extend_from_slice(stream_id.as_bytes());
+    k
+}
+
+pub fn open_bitmap_page_suffix(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_page_prefix_suffix(shard, page_start_local);
     k.extend_from_slice(stream_id.as_bytes());
     k
 }
@@ -159,8 +214,24 @@ pub fn open_bitmap_page_shard_prefix(shard: LogShard) -> Vec<u8> {
     k
 }
 
+pub fn open_bitmap_page_shard_prefix_suffix(shard: LogShard) -> Vec<u8> {
+    let mut k = u64_be(shard.get()).to_vec();
+    k.push(b'/');
+    k
+}
+
 pub fn open_bitmap_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
     let mut k = open_bitmap_page_shard_prefix(shard);
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k.push(b'/');
+    k
+}
+
+pub fn open_bitmap_page_shard_page_prefix_suffix(
+    shard: LogShard,
+    page_start_local: u32,
+) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_prefix_suffix(shard);
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k
@@ -174,6 +245,19 @@ pub fn bitmap_by_block_key(stream_id: &str, page_start_local: u32, block_num: u6
 
 pub fn bitmap_by_block_prefix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
     let mut k = format!("bitmap_by_block/{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k.push(b'/');
+    k
+}
+
+pub fn bitmap_by_block_suffix(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
+    let mut k = bitmap_by_block_prefix_suffix(stream_id, page_start_local);
+    k.extend_from_slice(&u64_be(block_num));
+    k
+}
+
+pub fn bitmap_by_block_prefix_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k

@@ -7,15 +7,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    PUBLICATION_STATE_KEY, bitmap_by_block_key, block_log_blob_key, block_record_key,
-    log_dir_by_block_key, stream_id, stream_page_start_local,
+    BITMAP_BY_BLOCK_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, PUBLICATION_STATE_FAMILY,
+    bitmap_by_block_suffix, block_log_blob_key, block_record_suffix, log_dir_by_block_suffix,
+    stream_id, stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::PublicationStore;
+use finalized_history_query::store::publication::{
+    MetaPublicationStore, PUBLICATION_STATE_SUFFIX, PublicationStore,
+};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use finalized_history_query::{Error, WriteAuthority};
 use futures::executor::block_on;
@@ -46,7 +49,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         let publication_state = svc
             .ingest
             .meta_store
-            .get(PUBLICATION_STATE_KEY)
+            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("publication state get")
             .expect("publication state");
@@ -63,7 +66,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&log_dir_by_block_key(0, 1))
+                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 1))
                 .await
                 .expect("directory fragment get")
                 .is_some()
@@ -78,7 +81,10 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(&bitmap_by_block_key(&sid, page_start, 1))
+                .get(
+                    BITMAP_BY_BLOCK_FAMILY,
+                    &bitmap_by_block_suffix(&sid, page_start, 1),
+                )
                 .await
                 .expect("stream fragment get")
                 .is_some()
@@ -91,10 +97,15 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let first = acquire_lease_token(meta.clone(), 7, 100, 50)
-            .await
-            .expect("bootstrap");
-        let first_state = meta
+        let first = acquire_lease_token(
+            MetaPublicationStore::new(Arc::new(meta.clone())),
+            7,
+            100,
+            50,
+        )
+        .await
+        .expect("bootstrap");
+        let first_state = MetaPublicationStore::new(Arc::new(meta.clone()))
             .load()
             .await
             .expect("load publication state")
@@ -103,10 +114,15 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
         assert_eq!(first.session_id, first_state.session_id);
         assert_eq!(first.indexed_finalized_head, 0);
 
-        let second = acquire_lease_token(meta.clone(), 9, 151, 50)
-            .await
-            .expect("takeover after expiry");
-        let second_state = meta
+        let second = acquire_lease_token(
+            MetaPublicationStore::new(Arc::new(meta.clone())),
+            9,
+            151,
+            50,
+        )
+        .await
+        .expect("takeover after expiry");
+        let second_state = MetaPublicationStore::new(Arc::new(meta.clone()))
             .load()
             .await
             .expect("load publication state")
@@ -122,20 +138,33 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let _first = acquire_lease_token(meta.clone(), 7, 100, 50)
-            .await
-            .expect("bootstrap");
-        let first_state = meta
+        let _first = acquire_lease_token(
+            MetaPublicationStore::new(Arc::new(meta.clone())),
+            7,
+            100,
+            50,
+        )
+        .await
+        .expect("bootstrap");
+        let first_state = MetaPublicationStore::new(Arc::new(meta.clone()))
             .load()
             .await
             .expect("load publication state")
             .expect("publication state");
-        let err = acquire_lease_token(meta.clone(), 9, 120, 50)
-            .await
-            .expect_err("fresh lease should reject standby takeover");
+        let err = acquire_lease_token(
+            MetaPublicationStore::new(Arc::new(meta.clone())),
+            9,
+            120,
+            50,
+        )
+        .await
+        .expect_err("fresh lease should reject standby takeover");
         assert!(matches!(err, Error::LeaseStillFresh));
 
-        let publication_state = meta.load().await.expect("load publication state");
+        let publication_state = MetaPublicationStore::new(Arc::new(meta.clone()))
+            .load()
+            .await
+            .expect("load publication state");
         let publication_state = publication_state.expect("publication state");
         assert_eq!(publication_state.owner_id, first_state.owner_id);
         assert_eq!(publication_state.session_id, first_state.session_id);
@@ -147,14 +176,17 @@ fn readers_use_only_publication_state() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
+            publication_store
+                .create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
                 .await
                 .expect("create publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            &block_record_key(3),
+            BLOCK_RECORD_FAMILY,
+            &block_record_suffix(3),
             BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
@@ -169,9 +201,7 @@ fn readers_use_only_publication_state() {
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta, blob);
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 3);
-        let state = svc
-            .ingest
-            .meta_store
+        let state = publication_store
             .load_finalized_head_state()
             .await
             .expect("load finalized head state");
@@ -184,7 +214,8 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         meta.put(
-            PUBLICATION_STATE_KEY,
+            PUBLICATION_STATE_FAMILY,
+            PUBLICATION_STATE_SUFFIX,
             seeded_publication_state(1, [1u8; 16], 3).encode(),
             PutCond::Any,
         )
@@ -192,7 +223,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
         .expect("write publication state");
 
         let record = meta
-            .get(PUBLICATION_STATE_KEY)
+            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("get publication state")
             .expect("publication state");
@@ -244,7 +275,8 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
-        let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
+        let authority =
+            LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
         let engine = IngestEngine::new(lease_writer_config(), authority, meta.clone(), blob);
 
         let stale_lease = engine
@@ -252,7 +284,8 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
             .acquire(Some(100))
             .await
             .expect("writer 1 acquires publication");
-        let takeover = LeaseAuthority::new(meta.clone(), 2, 50, 0);
+        let takeover =
+            LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 2, 50, 0);
         let _takeover_lease = takeover
             .acquire(Some(151))
             .await
@@ -270,7 +303,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         assert!(
             engine
                 .meta_store
-                .get(&block_record_key(1))
+                .get(BLOCK_RECORD_FAMILY, &block_record_suffix(1))
                 .await
                 .expect("read block meta")
                 .is_none(),

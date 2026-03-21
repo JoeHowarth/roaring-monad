@@ -2,9 +2,7 @@ use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
-use crate::domain::keys::{
-    STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_prefix, stream_page_start_local,
-};
+use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, stream_page_start_local};
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -145,20 +143,12 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
     local_to: u32,
     out: &mut RoaringBitmap,
 ) -> Result<()> {
-    let page = tables
-        .meta_store()
-        .list_prefix(
-            &bitmap_by_block_prefix(stream, page_start),
-            None,
-            usize::MAX,
-        )
-        .await?;
-    for key in page.keys {
-        let Some(record) = tables.meta_store().get(&key).await? else {
-            continue;
-        };
-        let _block_num = read_u64_suffix(&key)?;
-        let bitmap_blob = decode_bitmap_blob(&record.value)?;
+    for bytes in tables
+        .bitmap_by_block()
+        .load_page_fragments(stream, page_start)
+        .await?
+    {
+        let bitmap_blob = decode_bitmap_blob(&bytes)?;
         if !overlaps(
             bitmap_blob.min_local,
             bitmap_blob.max_local,
@@ -237,15 +227,6 @@ pub(in crate::logs) fn overlaps(
     min_local <= local_to && max_local >= local_from
 }
 
-fn read_u64_suffix(key: &[u8]) -> Result<u64> {
-    if key.len() < 8 {
-        return Err(Error::Decode("short key suffix"));
-    }
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&key[key.len() - 8..]);
-    Ok(u64::from_be_bytes(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::load_stream_entries;
@@ -254,7 +235,10 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::domain::keys::{bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key};
+    use crate::domain::keys::{
+        BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_suffix,
+        bitmap_page_blob_key, bitmap_page_meta_suffix,
+    };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -266,37 +250,50 @@ mod tests {
 
     struct CountingMetaStore {
         inner: InMemoryMetaStore,
+        target_family: crate::store::traits::FamilyId,
         target_key: Vec<u8>,
         get_count: Arc<AtomicU64>,
     }
 
     impl MetaStore for CountingMetaStore {
-        async fn get(&self, key: &[u8]) -> crate::Result<Option<Record>> {
-            if key == self.target_key.as_slice() {
+        async fn get(
+            &self,
+            family: crate::store::traits::FamilyId,
+            key: &[u8],
+        ) -> crate::Result<Option<Record>> {
+            if family == self.target_family && key == self.target_key.as_slice() {
                 self.get_count.fetch_add(1, Ordering::Relaxed);
             }
-            self.inner.get(key).await
+            self.inner.get(family, key).await
         }
 
-        async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> crate::Result<PutResult> {
-            self.inner.put(key, value, cond).await
+        async fn put(
+            &self,
+            family: crate::store::traits::FamilyId,
+            key: &[u8],
+            value: Bytes,
+            cond: PutCond,
+        ) -> crate::Result<PutResult> {
+            self.inner.put(family, key, value, cond).await
         }
 
         async fn delete(
             &self,
+            family: crate::store::traits::FamilyId,
             key: &[u8],
             cond: crate::store::traits::DelCond,
         ) -> crate::Result<()> {
-            self.inner.delete(key, cond).await
+            self.inner.delete(family, key, cond).await
         }
 
         async fn list_prefix(
             &self,
+            family: crate::store::traits::FamilyId,
             prefix: &[u8],
             cursor: Option<Vec<u8>>,
             limit: usize,
         ) -> crate::Result<Page> {
-            self.inner.list_prefix(prefix, cursor, limit).await
+            self.inner.list_prefix(family, prefix, cursor, limit).await
         }
     }
 
@@ -352,7 +349,8 @@ mod tests {
             };
 
             meta.put(
-                &bitmap_by_block_key(stream, page_start, block_num),
+                BITMAP_BY_BLOCK_FAMILY,
+                &bitmap_by_block_suffix(stream, page_start, block_num),
                 encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
                 PutCond::Any,
             )
@@ -360,7 +358,8 @@ mod tests {
             .expect("write stream fragment");
 
             meta.put(
-                &bitmap_page_meta_key(stream, page_start),
+                BITMAP_PAGE_META_FAMILY,
+                &bitmap_page_meta_suffix(stream, page_start),
                 StreamBitmapMeta {
                     block_num: 0,
                     count: 1,
@@ -388,7 +387,7 @@ mod tests {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = bitmap_page_meta_key(stream, page_start);
+            let meta_key = bitmap_page_meta_suffix(stream, page_start);
             let blob_key = bitmap_page_blob_key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
@@ -408,6 +407,7 @@ mod tests {
 
             inner_meta
                 .put(
+                    BITMAP_PAGE_META_FAMILY,
                     &meta_key,
                     StreamBitmapMeta {
                         block_num: 7,
@@ -430,6 +430,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
+                target_family: BITMAP_PAGE_META_FAMILY,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };
@@ -470,7 +471,7 @@ mod tests {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = bitmap_page_meta_key(stream, page_start);
+            let meta_key = bitmap_page_meta_suffix(stream, page_start);
             let blob_key = bitmap_page_blob_key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
@@ -490,6 +491,7 @@ mod tests {
 
             inner_meta
                 .put(
+                    BITMAP_PAGE_META_FAMILY,
                     &meta_key,
                     StreamBitmapMeta {
                         block_num: 7,
@@ -512,6 +514,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
+                target_family: BITMAP_PAGE_META_FAMILY,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };

@@ -20,10 +20,13 @@ mod tests {
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
-        bitmap_by_block_key, bitmap_page_blob_key, bitmap_page_meta_key, block_hash_index_key,
-        block_log_blob_key, block_log_header_key, block_record_key, log_dir_bucket_key,
-        log_dir_by_block_key, log_dir_sub_bucket_key, log_local, stream_page_start_local,
+        BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, BLOCK_HASH_INDEX_FAMILY,
+        BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BUCKET_FAMILY,
+        LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY, LOG_DIRECTORY_BUCKET_SIZE,
+        LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_suffix,
+        bitmap_page_blob_key, bitmap_page_meta_suffix, block_hash_index_suffix, block_log_blob_key,
+        block_log_header_suffix, block_record_suffix, log_dir_bucket_suffix,
+        log_dir_by_block_suffix, log_dir_sub_bucket_suffix, log_local, stream_page_start_local,
     };
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
@@ -78,7 +81,7 @@ mod tests {
                 .expect("read block blob")
                 .expect("block blob present");
             let header = meta
-                .get(&block_log_header_key(7))
+                .get(BLOCK_LOG_HEADER_FAMILY, &block_log_header_suffix(7))
                 .await
                 .expect("read block header")
                 .expect("block header present");
@@ -112,20 +115,23 @@ mod tests {
                 .expect("compact directory");
 
             let fragment0 = meta
-                .get(&log_dir_by_block_key(0, 700))
+                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 700))
                 .await
                 .expect("read fragment0")
                 .expect("fragment0");
             let fragment1 = meta
-                .get(&log_dir_by_block_key(
-                    crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    700,
-                ))
+                .get(
+                    LOG_DIR_BY_BLOCK_FAMILY,
+                    &log_dir_by_block_suffix(
+                        crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                        700,
+                    ),
+                )
                 .await
                 .expect("read fragment1")
                 .expect("fragment1");
             let sub_bucket = meta
-                .get(&log_dir_sub_bucket_key(0))
+                .get(LOG_DIR_SUB_BUCKET_FAMILY, &log_dir_sub_bucket_suffix(0))
                 .await
                 .expect("read sub bucket")
                 .expect("sub bucket");
@@ -191,12 +197,18 @@ mod tests {
                 .expect("stream");
             let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
             let fragment = meta
-                .get(&bitmap_by_block_key(&sid, first_page, block.block_num))
+                .get(
+                    BITMAP_BY_BLOCK_FAMILY,
+                    &bitmap_by_block_suffix(&sid, first_page, block.block_num),
+                )
                 .await
                 .expect("read stream fragment")
                 .expect("stream fragment");
             let page_meta = meta
-                .get(&bitmap_page_meta_key(&sid, first_page))
+                .get(
+                    BITMAP_PAGE_META_FAMILY,
+                    &bitmap_page_meta_suffix(&sid, first_page),
+                )
                 .await
                 .expect("read stream page meta")
                 .expect("stream page meta");
@@ -238,16 +250,19 @@ mod tests {
                 .expect("persist block metadata");
 
             assert!(
-                meta.get(&block_record_key(9))
+                meta.get(BLOCK_RECORD_FAMILY, &block_record_suffix(9))
                     .await
                     .expect("block meta")
                     .is_some()
             );
             assert!(
-                meta.get(&block_hash_index_key(&block.block_hash))
-                    .await
-                    .expect("hash index")
-                    .is_some()
+                meta.get(
+                    BLOCK_HASH_INDEX_FAMILY,
+                    &block_hash_index_suffix(&block.block_hash)
+                )
+                .await
+                .expect("hash index")
+                .is_some()
             );
         });
     }
@@ -267,7 +282,7 @@ mod tests {
                 .expect("compact directory");
 
             let bucket = meta
-                .get(&log_dir_bucket_key(0))
+                .get(LOG_DIR_BUCKET_FAMILY, &log_dir_bucket_suffix(0))
                 .await
                 .expect("directory bucket")
                 .expect("directory bucket present");
