@@ -6,7 +6,7 @@ use bytes::Bytes;
 use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
-use crate::store::traits::{BlobStore, Page};
+use crate::store::traits::{BlobStore, BlobTableId, Page};
 
 #[derive(Clone)]
 pub struct MinioBlobStore {
@@ -68,22 +68,21 @@ impl MinioBlobStore {
         self
     }
 
-    fn object_key(&self, key: &[u8]) -> String {
-        let group = extract_group(key);
-        format!("{}{}/{}", self.object_prefix, group, hex(key))
+    fn object_key(&self, table: BlobTableId, key: &[u8]) -> String {
+        format!("{}{}/{}", self.object_prefix, table.as_str(), hex(key))
     }
 
-    fn object_list_prefix(&self, prefix: &[u8]) -> String {
+    fn object_list_prefix(&self, table: BlobTableId, prefix: &[u8]) -> String {
         if prefix.is_empty() {
-            return self.object_prefix.clone();
+            return format!("{}{}/", self.object_prefix, table.as_str());
         }
-        format!("{}{}", self.object_prefix, extract_group(prefix))
+        format!("{}{}/", self.object_prefix, table.as_str())
     }
 }
 
 impl BlobStore for MinioBlobStore {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        let object_key = self.object_key(key);
+    async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
+        let object_key = self.object_key(table, key);
         let payload = value.to_vec();
         self.with_retry("put_blob", || async {
             self.client
@@ -99,8 +98,8 @@ impl BlobStore for MinioBlobStore {
         .await
     }
 
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let object_key = self.object_key(key);
+    async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>> {
+        let object_key = self.object_key(table, key);
         self.with_retry("get_blob", || async {
             let res = self
                 .client
@@ -134,12 +133,12 @@ impl BlobStore for MinioBlobStore {
         .await
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> Result<()> {
+    async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
         let _ = self
             .client
             .delete_object()
             .bucket(&self.bucket)
-            .key(self.object_key(key))
+            .key(self.object_key(table, key))
             .send()
             .await;
         Ok(())
@@ -147,6 +146,7 @@ impl BlobStore for MinioBlobStore {
 
     async fn list_prefix(
         &self,
+        table: BlobTableId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
@@ -155,7 +155,7 @@ impl BlobStore for MinioBlobStore {
             .client
             .list_objects_v2()
             .bucket(&self.bucket)
-            .prefix(self.object_list_prefix(prefix))
+            .prefix(self.object_list_prefix(table, prefix))
             .max_keys(limit as i32);
 
         if let Some(c) = cursor
@@ -260,25 +260,6 @@ fn decode_object_key(path: &str, configured_prefix: &str) -> Option<Vec<u8>> {
     let _group = parts.next()?;
     let hex_key = parts.next()?;
     unhex(hex_key).ok()
-}
-
-fn extract_group(key: &[u8]) -> String {
-    let mut out = String::new();
-    for &b in key {
-        if b == b'/' {
-            break;
-        }
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
-            out.push(char::from(b));
-        } else {
-            break;
-        }
-    }
-    if out.is_empty() {
-        "misc".to_string()
-    } else {
-        out
-    }
 }
 
 fn hex(bytes: &[u8]) -> String {

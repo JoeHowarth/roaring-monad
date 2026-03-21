@@ -12,6 +12,7 @@ use finalized_history_query::domain::keys::{
     block_log_blob_key, block_record_suffix, log_dir_by_block_clustering_key,
     log_dir_by_block_partition_key, stream_id, stream_page_start_local,
 };
+use finalized_history_query::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
@@ -310,7 +311,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         assert!(
             engine
                 .blob_store
-                .get_blob(&block_log_blob_key(1))
+                .get_blob(BlockLogBlobSpec::TABLE, &block_log_blob_key(1))
                 .await
                 .expect("read block blob")
                 .is_none(),

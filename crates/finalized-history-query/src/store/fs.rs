@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{
-    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
+    BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
+    TableId,
 };
 
 #[derive(Debug, Clone)]
@@ -385,26 +386,31 @@ impl FsBlobStore {
         Ok(Self { root })
     }
 
-    fn key_path(&self, key: &[u8]) -> PathBuf {
+    fn table_dir(&self, table: BlobTableId) -> PathBuf {
         let mut p = self.root.join("blob");
-        p.push(extract_group(key));
+        p.push(table.as_str());
+        p
+    }
+
+    fn key_path(&self, table: BlobTableId, key: &[u8]) -> PathBuf {
+        let mut p = self.table_dir(table);
         p.push(hex(key));
         p
     }
 }
 
 impl BlobStore for FsBlobStore {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        let path = self.key_path(key);
+    async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
+        let path = self.key_path(table, key);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| Error::Backend(format!("create fs blob group dir: {e}")))?;
+                .map_err(|e| Error::Backend(format!("create fs blob table dir: {e}")))?;
         }
         write_file_bytes(&path, &value)
     }
 
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let p = self.key_path(key);
+    async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>> {
+        let p = self.key_path(table, key);
         if !p.exists() {
             return Ok(None);
         }
@@ -412,38 +418,27 @@ impl BlobStore for FsBlobStore {
         Ok(Some(Bytes::from(b)))
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> Result<()> {
-        let _ = fs::remove_file(self.key_path(key));
+    async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
+        let _ = fs::remove_file(self.key_path(table, key));
         Ok(())
     }
 
     async fn list_prefix(
         &self,
+        table: BlobTableId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let base = self.root.join("blob");
+        let base = self.table_dir(table);
         if !base.exists() {
             return Ok(Page {
                 keys: Vec::new(),
                 next_cursor: None,
             });
         }
-        if let Some(group) = extract_group_from_prefix(prefix) {
-            collect_keys_from_group_dir(&base.join(group), false, prefix, &mut all)?;
-        } else {
-            for entry in
-                fs::read_dir(&base).map_err(|e| Error::Backend(format!("fs blob read_dir: {e}")))?
-            {
-                let entry = entry.map_err(|e| Error::Backend(format!("fs blob dir entry: {e}")))?;
-                if !entry.path().is_dir() {
-                    continue;
-                }
-                collect_keys_from_group_dir(&entry.path(), false, prefix, &mut all)?;
-            }
-        }
+        collect_keys_from_group_dir(&base, false, prefix, &mut all)?;
         all.sort();
 
         let has_cursor = cursor.is_some();
@@ -553,32 +548,6 @@ fn from_nibble(b: u8) -> Result<u8> {
     }
 }
 
-fn extract_group(key: &[u8]) -> String {
-    let mut out = String::new();
-    for &b in key {
-        if b == b'/' {
-            break;
-        }
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
-            out.push(char::from(b));
-        } else {
-            break;
-        }
-    }
-    if out.is_empty() {
-        "misc".to_string()
-    } else {
-        out
-    }
-}
-
-fn extract_group_from_prefix(prefix: &[u8]) -> Option<String> {
-    if prefix.is_empty() {
-        return None;
-    }
-    Some(extract_group(prefix))
-}
-
 fn collect_keys_from_partition_dir(
     dir: &Path,
     prefix: &[u8],
@@ -640,10 +609,12 @@ mod tests {
     };
     use crate::domain::types::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
-    use crate::store::traits::{BlobStore, MetaStore, PutCond};
+    use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond};
     use bytes::Bytes;
     use futures::executor::block_on;
     use std::sync::Arc;
+
+    const TEST_BLOB_TABLE: BlobTableId = BlobTableId::new("test_blob");
 
     fn unique_temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -760,7 +731,7 @@ mod tests {
                     .expect("seed scannable meta key");
                 let blob_key = format!("list-prefix/{index:04}").into_bytes();
                 blob_store
-                    .put_blob(&blob_key, Bytes::from_static(b"v"))
+                    .put_blob(TEST_BLOB_TABLE, &blob_key, Bytes::from_static(b"v"))
                     .await
                     .expect("seed blob key");
             }
@@ -789,7 +760,7 @@ mod tests {
             let mut blob_seen = Vec::new();
             loop {
                 let page = blob_store
-                    .list_prefix(b"list-prefix/", blob_cursor.take(), 1_024)
+                    .list_prefix(TEST_BLOB_TABLE, b"list-prefix/", blob_cursor.take(), 1_024)
                     .await
                     .expect("list blob prefix");
                 blob_seen.extend(page.keys.iter().cloned());

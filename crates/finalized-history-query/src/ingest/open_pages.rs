@@ -2,10 +2,9 @@ use bytes::Bytes;
 use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
-use crate::domain::keys::{
-    OPEN_BITMAP_PAGE_TABLE, STREAM_PAGE_LOCAL_ID_SPAN, log_local, log_shard,
-    open_bitmap_page_clustering_key, open_bitmap_page_page_prefix, open_bitmap_page_partition_key,
-    read_u64_be, stream_page_start_local,
+use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
+use crate::domain::table_specs::{
+    OpenBitmapPageSpec, ScannableTableSpec, log_local, log_shard, stream_page_start_local,
 };
 use crate::error::{Error, Result};
 use crate::logs::ingest::compact_stream_page;
@@ -64,11 +63,11 @@ pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
     meta_store: &M,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    let partition = open_bitmap_page_partition_key(page.shard);
-    let clustering = open_bitmap_page_clustering_key(page.page_start_local, &page.stream_id);
+    let partition = OpenBitmapPageSpec::partition(page.shard);
+    let clustering = OpenBitmapPageSpec::clustering(page.page_start_local, &page.stream_id);
     let _ = meta_store
         .scan_put(
-            OPEN_BITMAP_PAGE_TABLE,
+            OpenBitmapPageSpec::TABLE,
             &partition,
             &clustering,
             Bytes::new(),
@@ -82,11 +81,11 @@ pub async fn delete_open_bitmap_page<M: MetaStore>(
     meta_store: &M,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    let partition = open_bitmap_page_partition_key(page.shard);
-    let clustering = open_bitmap_page_clustering_key(page.page_start_local, &page.stream_id);
+    let partition = OpenBitmapPageSpec::partition(page.shard);
+    let clustering = OpenBitmapPageSpec::clustering(page.page_start_local, &page.stream_id);
     meta_store
         .scan_delete(
-            OPEN_BITMAP_PAGE_TABLE,
+            OpenBitmapPageSpec::TABLE,
             &partition,
             &clustering,
             DelCond::Any,
@@ -109,7 +108,7 @@ pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
     list_open_bitmap_pages_in_partition(
         meta_store,
         shard,
-        &open_bitmap_page_page_prefix(page_start_local),
+        &OpenBitmapPageSpec::page_prefix(page_start_local),
     )
     .await
 }
@@ -119,13 +118,13 @@ async fn list_open_bitmap_pages_in_partition<M: MetaStore>(
     shard: LogShard,
     prefix: &[u8],
 ) -> Result<Vec<OpenBitmapPage>> {
-    let partition = open_bitmap_page_partition_key(shard);
+    let partition = OpenBitmapPageSpec::partition(shard);
     let mut cursor = None;
     let mut out = Vec::new();
     loop {
         let page = meta_store
             .scan_list(
-                OPEN_BITMAP_PAGE_TABLE,
+                OpenBitmapPageSpec::TABLE,
                 &partition,
                 prefix,
                 cursor.take(),
@@ -223,9 +222,10 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
     next_log_id: u64,
 ) -> Result<()> {
     let frontier_shard = log_shard(LogId::new(next_log_id));
-    let mut shard_raw = 0_u64;
-    while shard_raw <= frontier_shard.get() {
-        let shard = LogShard::new(shard_raw).map_err(|_| Error::Decode("invalid shard range"))?;
+    for shard in shard_range_inclusive(
+        LogShard::new(0).expect("0 is a valid shard"),
+        frontier_shard,
+    )? {
         for page in list_open_bitmap_pages_for_shard(meta_store, shard)
             .await?
             .into_iter()
@@ -240,9 +240,18 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
             .await?;
             delete_open_bitmap_page(meta_store, &page).await?;
         }
-        shard_raw = shard_raw.saturating_add(1);
     }
     Ok(())
+}
+
+fn shard_range_inclusive(from: LogShard, to: LogShard) -> Result<Vec<LogShard>> {
+    let mut out = Vec::new();
+    let mut raw = from.get();
+    while raw <= to.get() {
+        out.push(LogShard::new(raw).map_err(|_| Error::Decode("invalid shard range"))?);
+        raw = raw.saturating_add(1);
+    }
+    Ok(out)
 }
 
 pub fn decode_open_bitmap_page_key(partition: &[u8], clustering: &[u8]) -> Result<OpenBitmapPage> {

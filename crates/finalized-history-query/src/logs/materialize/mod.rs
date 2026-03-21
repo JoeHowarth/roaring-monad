@@ -52,10 +52,11 @@ mod tests {
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_blob_key,
         log_dir_bucket_start, log_dir_sub_bucket_start,
     };
+    use crate::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
     use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{BlobStore, MetaStore, Page, PutCond};
+    use crate::store::traits::{BlobStore, BlobTableId, MetaStore, Page, PutCond};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
 
@@ -66,40 +67,49 @@ mod tests {
     }
 
     impl BlobStore for CountingBlobStore {
-        async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
-            self.inner.put_blob(key, value).await
+        async fn put_blob(
+            &self,
+            table: BlobTableId,
+            key: &[u8],
+            value: Bytes,
+        ) -> crate::Result<()> {
+            self.inner.put_blob(table, key, value).await
         }
 
-        async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
-            if key.starts_with(b"block_log_blob/") {
+        async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> crate::Result<Option<Bytes>> {
+            if table == BlockLogBlobSpec::TABLE {
                 self.get_blob_count.fetch_add(1, Ordering::Relaxed);
             }
-            self.inner.get_blob(key).await
+            self.inner.get_blob(table, key).await
         }
 
         async fn read_range(
             &self,
+            table: BlobTableId,
             key: &[u8],
             start: u64,
             end_exclusive: u64,
         ) -> crate::Result<Option<Bytes>> {
-            if key.starts_with(b"block_log_blob/") {
+            if table == BlockLogBlobSpec::TABLE {
                 self.read_range_count.fetch_add(1, Ordering::Relaxed);
             }
-            self.inner.read_range(key, start, end_exclusive).await
+            self.inner
+                .read_range(table, key, start, end_exclusive)
+                .await
         }
 
-        async fn delete_blob(&self, key: &[u8]) -> crate::Result<()> {
-            self.inner.delete_blob(key).await
+        async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> crate::Result<()> {
+            self.inner.delete_blob(table, key).await
         }
 
         async fn list_prefix(
             &self,
+            table: BlobTableId,
             prefix: &[u8],
             cursor: Option<Vec<u8>>,
             limit: usize,
         ) -> crate::Result<Page> {
-            self.inner.list_prefix(prefix, cursor, limit).await
+            self.inner.list_prefix(table, prefix, cursor, limit).await
         }
     }
 
@@ -272,9 +282,13 @@ mod tests {
             )
             .await
             .expect("write block log header");
-            blob.put_blob(&block_log_blob_key(block_num), encoded.clone())
-                .await
-                .expect("write block log blob");
+            blob.put_blob(
+                BlockLogBlobSpec::TABLE,
+                &block_log_blob_key(block_num),
+                encoded.clone(),
+            )
+            .await
+            .expect("write block log blob");
 
             let tables = Tables::new(
                 std::sync::Arc::new(meta),
@@ -365,9 +379,13 @@ mod tests {
             )
             .await
             .expect("write block log header");
-            blob.put_blob(&block_log_blob_key(block_num), Bytes::from(blob_bytes))
-                .await
-                .expect("write block log blob");
+            blob.put_blob(
+                BlockLogBlobSpec::TABLE,
+                &block_log_blob_key(block_num),
+                Bytes::from(blob_bytes),
+            )
+            .await
+            .expect("write block log blob");
 
             let tables = Tables::new(
                 std::sync::Arc::new(meta),

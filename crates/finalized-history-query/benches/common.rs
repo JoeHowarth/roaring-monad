@@ -20,6 +20,7 @@ use finalized_history_query::domain::keys::{
     PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE, block_log_blob_key, block_log_header_suffix,
     block_record_suffix, log_dir_bucket_start, log_dir_bucket_suffix, stream_id,
 };
+use finalized_history_query::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::domain::types::{
     Block, BlockRecord, DirBucket, Log, PublicationState,
 };
@@ -27,7 +28,7 @@ use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
-use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond, TableId};
+use finalized_history_query::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, TableId};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
     Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
@@ -102,24 +103,25 @@ impl CountingBlobStore {
 }
 
 impl BlobStore for CountingBlobStore {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        self.inner.put_blob(key, value).await
+    async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
+        self.inner.put_blob(table, key, value).await
     }
 
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if key.starts_with(b"block_log_blob/") {
+    async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>> {
+        if table == BlockLogBlobSpec::TABLE {
             self.counters.get_blob_calls.fetch_add(1, Ordering::Relaxed);
         }
-        self.inner.get_blob(key).await
+        self.inner.get_blob(table, key).await
     }
 
     async fn read_range(
         &self,
+        table: BlobTableId,
         key: &[u8],
         start: u64,
         end_exclusive: u64,
     ) -> Result<Option<Bytes>> {
-        if key.starts_with(b"block_log_blob/") {
+        if table == BlockLogBlobSpec::TABLE {
             self.counters
                 .read_range_calls
                 .fetch_add(1, Ordering::Relaxed);
@@ -127,20 +129,23 @@ impl BlobStore for CountingBlobStore {
                 .read_range_bytes
                 .fetch_add(end_exclusive.saturating_sub(start), Ordering::Relaxed);
         }
-        self.inner.read_range(key, start, end_exclusive).await
+        self.inner
+            .read_range(table, key, start, end_exclusive)
+            .await
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> Result<()> {
-        self.inner.delete_blob(key).await
+    async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
+        self.inner.delete_blob(table, key).await
     }
 
     async fn list_prefix(
         &self,
+        table: BlobTableId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<finalized_history_query::store::traits::Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(table, prefix, cursor, limit).await
     }
 }
 
@@ -635,7 +640,11 @@ pub fn seed_materialized_blocks(
                 )
                 .await;
                 blob_store
-                    .put_blob(&block_log_blob_key(block.block_num), Bytes::from(payload))
+                    .put_blob(
+                        BlockLogBlobSpec::TABLE,
+                        &block_log_blob_key(block.block_num),
+                        Bytes::from(payload),
+                    )
                     .await
                     .expect("put block blob");
             }

@@ -74,9 +74,7 @@ pub fn block_log_header_suffix(block_num: u64) -> Vec<u8> {
 }
 
 pub fn block_log_blob_key(block_num: u64) -> Vec<u8> {
-    let mut k = b"block_log_blob/".to_vec();
-    k.extend_from_slice(&u64_be(block_num));
-    k
+    u64_be(block_num).to_vec()
 }
 
 pub fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
@@ -137,7 +135,7 @@ pub fn bitmap_page_meta_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8
 }
 
 pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("bitmap_page_blob/{stream_id}/").into_bytes();
+    let mut k = format!("{stream_id}/").into_bytes();
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k
 }
@@ -219,7 +217,7 @@ pub fn stream_id(index_kind: &str, value: &[u8], shard: LogShard) -> String {
     s
 }
 
-fn hex_digit(v: u8) -> char {
+pub(crate) fn hex_digit(v: u8) -> char {
     match v {
         0..=9 => (b'0' + v) as char,
         10..=15 => (b'a' + (v - 10)) as char,

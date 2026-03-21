@@ -2,17 +2,15 @@ use bytes::Bytes;
 
 use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
-use crate::core::ids::LogId;
-use crate::domain::keys::{
-    BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_suffix, block_log_blob_key,
-    block_log_header_suffix, block_record_suffix, log_dir_by_block_clustering_key,
-    log_dir_by_block_partition_key, log_dir_sub_bucket_start,
+use crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
+use crate::domain::table_specs::{
+    BlobTableSpec, BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec,
+    LogDirByBlockSpec, LogDirSubBucketSpec, PointTableSpec, ScannableTableSpec,
 };
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, MetaStore, PutCond, ScannableTableId, TableId};
+use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, ScannableTableId, TableId};
 
 pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
@@ -39,10 +37,11 @@ pub(in crate::logs) async fn put_scannable_artifact_meta<M: MetaStore>(
 
 pub(in crate::logs) async fn put_artifact_blob<B: BlobStore>(
     blob_store: &B,
+    table: BlobTableId,
     key: &[u8],
     value: Bytes,
 ) -> Result<()> {
-    blob_store.put_blob(key, value).await
+    blob_store.put_blob(table, key, value).await
 }
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
@@ -58,11 +57,17 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     }
 
     let (block_blob, header) = encode_block_log_blob(logs)?;
-    put_artifact_blob(blob_store, &block_log_blob_key(block_num), block_blob).await?;
+    put_artifact_blob(
+        blob_store,
+        BlockLogBlobSpec::TABLE,
+        &BlockLogBlobSpec::key(block_num),
+        block_blob,
+    )
+    .await?;
     put_artifact_meta(
         meta_store,
-        BLOCK_LOG_HEADER_TABLE,
-        &block_log_header_suffix(block_num),
+        BlockLogHeaderSpec::TABLE,
+        &BlockLogHeaderSpec::key(block_num),
         header.encode(),
     )
     .await?;
@@ -83,16 +88,16 @@ pub async fn persist_log_block_record<M: MetaStore>(
 
     put_artifact_meta(
         meta_store,
-        BLOCK_RECORD_TABLE,
-        &block_record_suffix(block.block_num),
+        BlockRecordSpec::TABLE,
+        &BlockRecordSpec::key(block.block_num),
         block_record.encode(),
     )
     .await?;
 
     put_artifact_meta(
         meta_store,
-        BLOCK_HASH_INDEX_TABLE,
-        &block_hash_index_suffix(&block.block_hash),
+        BlockHashIndexSpec::TABLE,
+        &BlockHashIndexSpec::key(&block.block_hash),
         encode_u64(block.block_num),
     )
     .await?;
@@ -112,20 +117,20 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
         end_log_id_exclusive: first_log_id.saturating_add(u64::from(count)),
     };
 
-    let mut sub_bucket_start = log_dir_sub_bucket_start(LogId::new(first_log_id));
+    let mut sub_bucket_start = LogDirSubBucketSpec::sub_bucket_start(first_log_id);
     let last_sub_bucket_start = if count == 0 {
         sub_bucket_start
     } else {
-        log_dir_sub_bucket_start(LogId::new(fragment.end_log_id_exclusive.saturating_sub(1)))
+        LogDirSubBucketSpec::sub_bucket_start(fragment.end_log_id_exclusive.saturating_sub(1))
     };
     let encoded_fragment = fragment.encode();
 
     loop {
-        let partition = log_dir_by_block_partition_key(sub_bucket_start);
-        let clustering = log_dir_by_block_clustering_key(block_num);
+        let partition = LogDirByBlockSpec::partition(sub_bucket_start);
+        let clustering = LogDirByBlockSpec::clustering(block_num);
         put_scannable_artifact_meta(
             meta_store,
-            LOG_DIR_BY_BLOCK_TABLE,
+            LogDirByBlockSpec::TABLE,
             &partition,
             &clustering,
             encoded_fragment.clone(),

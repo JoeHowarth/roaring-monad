@@ -23,7 +23,8 @@ use finalized_history_query::store::publication::{
     CasOutcome, MetaPublicationStore, PublicationStore,
 };
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
+    BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
+    TableId,
 };
 use futures::executor::block_on;
 
@@ -208,27 +209,40 @@ struct FaultyBlobStore {
     injector: Arc<FaultInjector>,
 }
 
+impl FaultyBlobStore {
+    fn logical_key(table: BlobTableId, key: &[u8]) -> Vec<u8> {
+        let mut out = table.as_str().as_bytes().to_vec();
+        if !key.is_empty() {
+            out.push(b'/');
+            out.extend_from_slice(key);
+        }
+        out
+    }
+}
+
 impl BlobStore for FaultyBlobStore {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()> {
-        self.injector.maybe_fail(FaultOp::BlobPut, key)?;
-        self.inner.put_blob(key, value).await
+    async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
+        self.injector
+            .maybe_fail(FaultOp::BlobPut, &Self::logical_key(table, key))?;
+        self.inner.put_blob(table, key, value).await
     }
 
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        self.inner.get_blob(key).await
+    async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>> {
+        self.inner.get_blob(table, key).await
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> Result<()> {
-        self.inner.delete_blob(key).await
+    async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
+        self.inner.delete_blob(table, key).await
     }
 
     async fn list_prefix(
         &self,
+        table: BlobTableId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(table, prefix, cursor, limit).await
     }
 }
 

@@ -72,17 +72,35 @@ explicit `(partition, clustering)` components.
 
 ## BlobStore
 
-The `BlobStore` trait provides unversioned object storage with range reads:
+The `BlobStore` trait provides table-scoped unversioned object storage with
+range reads:
 
 ```rust
+pub struct BlobTableId(&'static str);
+
 pub trait BlobStore: Send + Sync {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> Result<()>;
-    async fn get_blob(&self, key: &[u8]) -> Result<Option<Bytes>>;
-    async fn read_range(&self, key: &[u8], start: u64, end_exclusive: u64) -> Result<Option<Bytes>>;
-    async fn delete_blob(&self, key: &[u8]) -> Result<()>;
-    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page>;
+    async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()>;
+    async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>>;
+    async fn read_range(
+        &self,
+        table: BlobTableId,
+        key: &[u8],
+        start: u64,
+        end_exclusive: u64,
+    ) -> Result<Option<Bytes>>;
+    async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()>;
+    async fn list_prefix(
+        &self,
+        table: BlobTableId,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page>;
 }
 ```
+
+The storage boundary also exposes `BlobTable<B>` / `BlobTableRef<'_, B>` so
+higher-level code can bind a blob table once and then work with suffix keys.
 
 `read_range` has a default implementation that loads the full blob and slices locally. Backends with native range-read support can override this.
 
@@ -121,7 +139,7 @@ All other metadata tables stay on the simpler point-table shape.
 Test doubles backed by in-memory collections.
 
 - `InMemoryMetaStore` — point records in `BTreeMap<(TableId, Vec<u8>), Record>` and scannable records in `BTreeMap<(ScannableTableId, Vec<u8>, Vec<u8>), Record>` behind `RwLock`
-- `InMemoryBlobStore` — `HashMap<Vec<u8>, Bytes>` behind `RwLock`, implements `BlobStore`
+- `InMemoryBlobStore` — `HashMap<(BlobTableId, Vec<u8>), Bytes>` behind `RwLock`, implements `BlobStore`
 
 ## FsMetaStore / FsBlobStore
 
@@ -131,6 +149,7 @@ File-system backed stores for local development and testing.
 - Metadata table names map to directories under `meta/<table>/`
 - Metadata files are keyed by the hex-encoded suffix bytes within that table
 - Scannable metadata tables live under `meta_scan/<table>/<hex_partition>/<hex_clustering>`
+- Blob tables map to directories under `blob/<table>/`
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
 
@@ -193,7 +212,7 @@ Retryable errors (timeout, temporary, connection, reset, refused, unavailable, o
 
 S3-compatible object storage implementation for `BlobStore`.
 
-- Objects are stored under `<object_prefix>/<group>/<hex_key>`
+- Objects are stored under `<object_prefix>/<table>/<hex_key>`
 - Bucket is auto-created if it doesn't exist
 - `list_prefix` uses S3 `ListObjectsV2` with continuation tokens
 - Retryable errors use the same exponential backoff pattern as Scylla

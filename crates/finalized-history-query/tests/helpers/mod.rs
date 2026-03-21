@@ -7,13 +7,15 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::PUBLICATION_STATE_TABLE;
+use finalized_history_query::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
+    BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
+    TableId,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority, WriteSession};
 
@@ -374,41 +376,58 @@ pub struct CountingBlobStore {
 }
 
 impl BlobStore for CountingBlobStore {
-    async fn put_blob(&self, key: &[u8], value: Bytes) -> finalized_history_query::Result<()> {
-        self.inner.put_blob(key, value).await
+    async fn put_blob(
+        &self,
+        table: BlobTableId,
+        key: &[u8],
+        value: Bytes,
+    ) -> finalized_history_query::Result<()> {
+        self.inner.put_blob(table, key, value).await
     }
 
-    async fn get_blob(&self, key: &[u8]) -> finalized_history_query::Result<Option<Bytes>> {
-        if key == self.target_key.as_slice() {
+    async fn get_blob(
+        &self,
+        table: BlobTableId,
+        key: &[u8],
+    ) -> finalized_history_query::Result<Option<Bytes>> {
+        if table == BlockLogBlobSpec::TABLE && key == self.target_key.as_slice() {
             self.get_blob_calls.fetch_add(1, Ordering::Relaxed);
         }
-        self.inner.get_blob(key).await
+        self.inner.get_blob(table, key).await
     }
 
     async fn read_range(
         &self,
+        table: BlobTableId,
         key: &[u8],
         start: u64,
         end_exclusive: u64,
     ) -> finalized_history_query::Result<Option<Bytes>> {
-        if key == self.target_key.as_slice() {
+        if table == BlockLogBlobSpec::TABLE && key == self.target_key.as_slice() {
             self.read_range_calls.fetch_add(1, Ordering::Relaxed);
             self.read_range_bytes
                 .fetch_add(end_exclusive.saturating_sub(start), Ordering::Relaxed);
         }
-        self.inner.read_range(key, start, end_exclusive).await
+        self.inner
+            .read_range(table, key, start, end_exclusive)
+            .await
     }
 
-    async fn delete_blob(&self, key: &[u8]) -> finalized_history_query::Result<()> {
-        self.inner.delete_blob(key).await
+    async fn delete_blob(
+        &self,
+        table: BlobTableId,
+        key: &[u8],
+    ) -> finalized_history_query::Result<()> {
+        self.inner.delete_blob(table, key).await
     }
 
     async fn list_prefix(
         &self,
+        table: BlobTableId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(prefix, cursor, limit).await
+        self.inner.list_prefix(table, prefix, cursor, limit).await
     }
 }

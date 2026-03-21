@@ -235,15 +235,16 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::domain::keys::{
-        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, bitmap_by_block_clustering_key,
-        bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
+    use crate::domain::keys::{BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE};
+    use crate::domain::table_specs::{
+        BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
     };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{
-        BlobStore, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
+        BlobStore, BlobTableId, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
+        TableId,
     };
     use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
@@ -343,28 +344,34 @@ mod tests {
     }
 
     impl BlobStore for CountingBlobStore {
-        async fn put_blob(&self, key: &[u8], value: Bytes) -> crate::Result<()> {
-            self.inner.put_blob(key, value).await
+        async fn put_blob(
+            &self,
+            table: BlobTableId,
+            key: &[u8],
+            value: Bytes,
+        ) -> crate::Result<()> {
+            self.inner.put_blob(table, key, value).await
         }
 
-        async fn get_blob(&self, key: &[u8]) -> crate::Result<Option<Bytes>> {
-            if key == self.target_key.as_slice() {
+        async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> crate::Result<Option<Bytes>> {
+            if table == BitmapPageBlobSpec::TABLE && key == self.target_key.as_slice() {
                 self.get_blob_count.fetch_add(1, Ordering::Relaxed);
             }
-            self.inner.get_blob(key).await
+            self.inner.get_blob(table, key).await
         }
 
-        async fn delete_blob(&self, key: &[u8]) -> crate::Result<()> {
-            self.inner.delete_blob(key).await
+        async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> crate::Result<()> {
+            self.inner.delete_blob(table, key).await
         }
 
         async fn list_prefix(
             &self,
+            table: BlobTableId,
             prefix: &[u8],
             cursor: Option<Vec<u8>>,
             limit: usize,
         ) -> crate::Result<Page> {
-            self.inner.list_prefix(prefix, cursor, limit).await
+            self.inner.list_prefix(table, prefix, cursor, limit).await
         }
     }
 
@@ -386,12 +393,12 @@ mod tests {
                 crc32: 0,
                 bitmap: fragment_bitmap,
             };
-            let partition = bitmap_by_block_partition_key(stream, page_start);
+            let partition = BitmapByBlockSpec::partition(stream, page_start);
 
             meta.scan_put(
                 BITMAP_BY_BLOCK_TABLE,
                 &partition,
-                &bitmap_by_block_clustering_key(block_num),
+                &BitmapByBlockSpec::clustering(block_num),
                 encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
                 PutCond::Any,
             )
@@ -400,7 +407,7 @@ mod tests {
 
             meta.put(
                 BITMAP_PAGE_META_TABLE,
-                &bitmap_page_meta_suffix(stream, page_start),
+                &BitmapPageMetaSpec::key(stream, page_start),
                 StreamBitmapMeta {
                     block_num: 0,
                     count: 1,
@@ -428,8 +435,8 @@ mod tests {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = bitmap_page_meta_suffix(stream, page_start);
-            let blob_key = bitmap_page_blob_key(stream, page_start);
+            let meta_key = BitmapPageMetaSpec::key(stream, page_start);
+            let blob_key = BitmapPageBlobSpec::key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
             let inner_blob = InMemoryBlobStore::default();
@@ -463,6 +470,7 @@ mod tests {
                 .expect("write stream page meta");
             inner_blob
                 .put_blob(
+                    BitmapPageBlobSpec::TABLE,
                     &blob_key,
                     encode_bitmap_blob(&bitmap_blob).expect("encode stream page bitmap blob"),
                 )
@@ -512,8 +520,8 @@ mod tests {
         block_on(async {
             let stream = "addr/test/00000000";
             let page_start = 0u32;
-            let meta_key = bitmap_page_meta_suffix(stream, page_start);
-            let blob_key = bitmap_page_blob_key(stream, page_start);
+            let meta_key = BitmapPageMetaSpec::key(stream, page_start);
+            let blob_key = BitmapPageBlobSpec::key(stream, page_start);
 
             let inner_meta = InMemoryMetaStore::default();
             let inner_blob = InMemoryBlobStore::default();
@@ -547,6 +555,7 @@ mod tests {
                 .expect("write stream page meta");
             inner_blob
                 .put_blob(
+                    BitmapPageBlobSpec::TABLE,
                     &blob_key,
                     encode_bitmap_blob(&bitmap_blob).expect("encode stream page bitmap blob"),
                 )

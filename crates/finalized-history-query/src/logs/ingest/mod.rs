@@ -29,6 +29,7 @@ mod tests {
         log_dir_by_block_clustering_key, log_dir_by_block_partition_key, log_dir_sub_bucket_suffix,
         log_local, stream_page_start_local,
     };
+    use crate::domain::table_specs::{BitmapPageBlobSpec, BlobTableSpec, BlockLogBlobSpec};
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
         persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
@@ -77,7 +78,7 @@ mod tests {
                 .expect("persist artifacts");
 
             let block_blob = blob
-                .get_blob(&block_log_blob_key(7))
+                .get_blob(BlockLogBlobSpec::TABLE, &block_log_blob_key(7))
                 .await
                 .expect("read block blob")
                 .expect("block blob present");
@@ -219,7 +220,10 @@ mod tests {
                 .expect("read stream page meta")
                 .expect("stream page meta");
             let page_blob = blob
-                .get_blob(&bitmap_page_blob_key(&sid, first_page))
+                .get_blob(
+                    BitmapPageBlobSpec::TABLE,
+                    &bitmap_page_blob_key(&sid, first_page),
+                )
                 .await
                 .expect("read stream page blob")
                 .expect("stream page blob");
