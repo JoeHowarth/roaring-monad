@@ -33,7 +33,7 @@ The crate is organized in three layers.
 
 ### Method boundary
 
-- `src/api/mod.rs`
+- `src/api.rs`
 - `src/api/service/*`
 
 ### Shared finalized-history substrate
@@ -217,7 +217,7 @@ The crate intentionally does not implement:
 ### Pass 1: Public surface
 
 1. `src/lib.rs` — crate boundary, re-exports
-2. `src/api/mod.rs` — transport-free request/result surface and service export
+2. `src/api.rs` — transport-free request/result surface and service export
 3. `src/api/service/` — service behavior: query, ingest, health
 
 ### Pass 2: Shared substrate

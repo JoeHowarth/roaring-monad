@@ -1,17 +1,34 @@
 use std::sync::Arc;
 
 use crate::config::Config;
+pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
+pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
+use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
-use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
-use crate::store::publication::MetaPublicationStore;
-use crate::store::publication::PublicationStore;
+pub use crate::startup::StartupPlan;
+use crate::startup::{build_startup_plan, startup_plan};
+use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{BytesCacheMetrics, Tables};
-use crate::{ExecutionBudget, QueryLogsRequest};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryLogsRequest {
+    pub from_block: u64,
+    pub to_block: u64,
+    pub order: QueryOrder,
+    pub resume_log_id: Option<u64>,
+    pub limit: usize,
+    pub filter: LogFilter,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExecutionBudget {
+    pub max_results: Option<usize>,
+}
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A, Arc<M>, Arc<B>>,
@@ -105,7 +122,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         self.ingest.ingest_finalized_blocks(&blocks).await
     }
 
-    pub(super) async fn startup_locked(&self) -> Result<StartupPlan> {
+    async fn startup_locked(&self) -> Result<StartupPlan> {
         debug_assert!(self.allows_writes);
         let session = self
             .ingest
