@@ -222,7 +222,7 @@ The crate intentionally does not implement:
 
 ### Pass 2: Shared substrate
 
-4. `src/tables/mod.rs` — typed immutable-artifact tables, per-table bytes caches, and cache config/metrics
+4. `src/tables.rs` — typed immutable-artifact tables, per-table bytes caches, and cache config/metrics
 5. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
 6. `src/core/page.rs` — pagination/result vocabulary
 7. `src/core/refs.rs` — shared `BlockRef` type
