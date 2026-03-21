@@ -9,6 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
+use crate::domain::keys::{
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE,
+    BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
+    OPEN_BITMAP_PAGE_TABLE, PUBLICATION_STATE_TABLE,
+};
 use crate::error::{Error, Result};
 use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
@@ -16,8 +21,6 @@ use crate::store::traits::{
 
 const DEFAULT_FENCE_KEY: &str = "global";
 const META_BUCKETS: u16 = 256;
-const POINT_TABLE_NAME: &str = "meta_kv";
-const SCANNABLE_TABLE_NAME: &str = "meta_scan_kv";
 const FENCE_TABLE_NAME: &str = "meta_fence";
 
 #[derive(Debug, Clone)]
@@ -101,8 +104,8 @@ pub struct ScyllaMetaStore {
 #[derive(Debug)]
 struct ScyllaStatements {
     set_min_epoch: PreparedStatement,
-    point: PointTableStatements,
-    scannable: ScannableTableStatements,
+    point: BTreeMap<TableId, PointTableStatements>,
+    scannable: BTreeMap<ScannableTableId, ScannableTableStatements>,
 }
 
 #[derive(Debug)]
@@ -128,6 +131,7 @@ struct ScannableTableStatements {
 
 #[derive(Debug, Clone, Copy)]
 struct PointTableSchema {
+    id: TableId,
     table_name: &'static str,
 }
 
@@ -137,12 +141,11 @@ impl PointTableSchema {
             .query_unpaged(
                 format!(
                     "CREATE TABLE IF NOT EXISTS {} (\
-                     grp text, \
                      bucket smallint, \
                      k blob, \
                      v blob, \
                      version bigint, \
-                     PRIMARY KEY ((grp, bucket), k)\
+                     PRIMARY KEY ((bucket), k)\
                     )",
                     self.table_name
                 ),
@@ -158,7 +161,7 @@ impl PointTableSchema {
             get: prepare_statement(
                 session,
                 format!(
-                    "SELECT v, version FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
+                    "SELECT v, version FROM {} WHERE bucket = ? AND k = ?",
                     self.table_name
                 ),
                 "point_get",
@@ -167,7 +170,7 @@ impl PointTableSchema {
             put_any: prepare_statement(
                 session,
                 format!(
-                    "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO {} (bucket, k, v, version) VALUES (?, ?, ?, ?)",
                     self.table_name
                 ),
                 "point_put_any",
@@ -176,7 +179,7 @@ impl PointTableSchema {
             put_if_absent: prepare_statement(
                 session,
                 format!(
-                    "INSERT INTO {} (grp, bucket, k, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS",
+                    "INSERT INTO {} (bucket, k, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
                     self.table_name
                 ),
                 "point_put_if_absent",
@@ -185,7 +188,7 @@ impl PointTableSchema {
             put_if_version: prepare_statement(
                 session,
                 format!(
-                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
+                    "UPDATE {} SET v = ?, version = ? WHERE bucket = ? AND k = ? IF version = ?",
                     self.table_name
                 ),
                 "point_put_if_version",
@@ -193,17 +196,14 @@ impl PointTableSchema {
             .await?,
             delete_any: prepare_statement(
                 session,
-                format!(
-                    "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ?",
-                    self.table_name
-                ),
+                format!("DELETE FROM {} WHERE bucket = ? AND k = ?", self.table_name),
                 "point_delete_any",
             )
             .await?,
             delete_if_version: prepare_statement(
                 session,
                 format!(
-                    "DELETE FROM {} WHERE grp = ? AND bucket = ? AND k = ? IF version = ?",
+                    "DELETE FROM {} WHERE bucket = ? AND k = ? IF version = ?",
                     self.table_name
                 ),
                 "point_delete_if_version",
@@ -215,6 +215,7 @@ impl PointTableSchema {
 
 #[derive(Debug, Clone, Copy)]
 struct ScannableTableSchema {
+    id: ScannableTableId,
     table_name: &'static str,
 }
 
@@ -224,12 +225,11 @@ impl ScannableTableSchema {
             .query_unpaged(
                 format!(
                     "CREATE TABLE IF NOT EXISTS {} (\
-                     grp text, \
                      pk blob, \
                      ck blob, \
                      v blob, \
                      version bigint, \
-                     PRIMARY KEY ((grp, pk), ck)\
+                     PRIMARY KEY ((pk), ck)\
                     )",
                     self.table_name
                 ),
@@ -245,7 +245,7 @@ impl ScannableTableSchema {
             get: prepare_statement(
                 session,
                 format!(
-                    "SELECT v, version FROM {} WHERE grp = ? AND pk = ? AND ck = ?",
+                    "SELECT v, version FROM {} WHERE pk = ? AND ck = ?",
                     self.table_name
                 ),
                 "scan_get",
@@ -254,7 +254,7 @@ impl ScannableTableSchema {
             put_any: prepare_statement(
                 session,
                 format!(
-                    "INSERT INTO {} (grp, pk, ck, v, version) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO {} (pk, ck, v, version) VALUES (?, ?, ?, ?)",
                     self.table_name
                 ),
                 "scan_put_any",
@@ -263,7 +263,7 @@ impl ScannableTableSchema {
             put_if_absent: prepare_statement(
                 session,
                 format!(
-                    "INSERT INTO {} (grp, pk, ck, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS",
+                    "INSERT INTO {} (pk, ck, v, version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
                     self.table_name
                 ),
                 "scan_put_if_absent",
@@ -272,7 +272,7 @@ impl ScannableTableSchema {
             put_if_version: prepare_statement(
                 session,
                 format!(
-                    "UPDATE {} SET v = ?, version = ? WHERE grp = ? AND pk = ? AND ck = ? IF version = ?",
+                    "UPDATE {} SET v = ?, version = ? WHERE pk = ? AND ck = ? IF version = ?",
                     self.table_name
                 ),
                 "scan_put_if_version",
@@ -280,14 +280,14 @@ impl ScannableTableSchema {
             .await?,
             delete_any: prepare_statement(
                 session,
-                format!("DELETE FROM {} WHERE grp = ? AND pk = ? AND ck = ?", self.table_name),
+                format!("DELETE FROM {} WHERE pk = ? AND ck = ?", self.table_name),
                 "scan_delete_any",
             )
             .await?,
             delete_if_version: prepare_statement(
                 session,
                 format!(
-                    "DELETE FROM {} WHERE grp = ? AND pk = ? AND ck = ? IF version = ?",
+                    "DELETE FROM {} WHERE pk = ? AND ck = ? IF version = ?",
                     self.table_name
                 ),
                 "scan_delete_if_version",
@@ -295,13 +295,59 @@ impl ScannableTableSchema {
             .await?,
             list: prepare_statement(
                 session,
-                format!("SELECT ck FROM {} WHERE grp = ? AND pk = ?", self.table_name),
+                format!("SELECT ck FROM {} WHERE pk = ?", self.table_name),
                 "scan_list",
             )
             .await?,
         })
     }
 }
+
+const POINT_TABLE_SCHEMAS: [PointTableSchema; 7] = [
+    PointTableSchema {
+        id: PUBLICATION_STATE_TABLE,
+        table_name: "publication_state",
+    },
+    PointTableSchema {
+        id: BLOCK_RECORD_TABLE,
+        table_name: "block_record",
+    },
+    PointTableSchema {
+        id: BLOCK_LOG_HEADER_TABLE,
+        table_name: "block_log_header",
+    },
+    PointTableSchema {
+        id: BLOCK_HASH_INDEX_TABLE,
+        table_name: "block_hash_index",
+    },
+    PointTableSchema {
+        id: LOG_DIR_BUCKET_TABLE,
+        table_name: "log_dir_bucket",
+    },
+    PointTableSchema {
+        id: LOG_DIR_SUB_BUCKET_TABLE,
+        table_name: "log_dir_sub_bucket",
+    },
+    PointTableSchema {
+        id: BITMAP_PAGE_META_TABLE,
+        table_name: "bitmap_page_meta",
+    },
+];
+
+const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; 3] = [
+    ScannableTableSchema {
+        id: LOG_DIR_BY_BLOCK_TABLE,
+        table_name: "log_dir_by_block",
+    },
+    ScannableTableSchema {
+        id: BITMAP_BY_BLOCK_TABLE,
+        table_name: "bitmap_by_block",
+    },
+    ScannableTableSchema {
+        id: OPEN_BITMAP_PAGE_TABLE,
+        table_name: "open_bitmap_page",
+    },
+];
 
 impl ScyllaMetaStore {
     pub async fn new(nodes: &[String], keyspace: &str) -> Result<Self> {
@@ -330,15 +376,17 @@ impl ScyllaMetaStore {
             .await
             .map_err(|e| Error::Backend(format!("use keyspace: {e}")))?;
 
-        let point_schema = PointTableSchema {
-            table_name: POINT_TABLE_NAME,
-        };
-        let scannable_schema = ScannableTableSchema {
-            table_name: SCANNABLE_TABLE_NAME,
-        };
+        let mut point = BTreeMap::new();
+        for schema in POINT_TABLE_SCHEMAS {
+            schema.ensure(&session).await?;
+            point.insert(schema.id, schema.prepare(&session).await?);
+        }
 
-        point_schema.ensure(&session).await?;
-        scannable_schema.ensure(&session).await?;
+        let mut scannable = BTreeMap::new();
+        for schema in SCANNABLE_TABLE_SCHEMAS {
+            schema.ensure(&session).await?;
+            scannable.insert(schema.id, schema.prepare(&session).await?);
+        }
 
         session
             .query_unpaged(
@@ -360,8 +408,8 @@ impl ScyllaMetaStore {
                 "set_min_epoch",
             )
             .await?,
-            point: point_schema.prepare(&session).await?,
-            scannable: scannable_schema.prepare(&session).await?,
+            point,
+            scannable,
         };
 
         Ok(Self {
@@ -405,17 +453,30 @@ impl ScyllaMetaStore {
         self.cached_min_epoch.store(min_epoch, Ordering::Relaxed);
         Ok(())
     }
+
+    fn point_statements(&self, table: TableId) -> Result<&PointTableStatements> {
+        self.stmts
+            .point
+            .get(&table)
+            .ok_or_else(|| Error::Backend(format!("unknown scylla point table {}", table.as_str())))
+    }
+
+    fn scannable_statements(&self, table: ScannableTableId) -> Result<&ScannableTableStatements> {
+        self.stmts.scannable.get(&table).ok_or_else(|| {
+            Error::Backend(format!("unknown scylla scannable table {}", table.as_str()))
+        })
+    }
 }
 
 impl MetaStore for ScyllaMetaStore {
     async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>> {
         let key_vec = key.to_vec();
         let bucket = key_bucket(&key_vec);
-        let stmt = self.stmts.point.get.clone();
+        let stmt = self.point_statements(table)?.get.clone();
         let res = self
             .with_retry("get", || async {
                 self.session
-                    .execute_unpaged(&stmt, (table.as_str(), bucket, key_vec.clone()))
+                    .execute_unpaged(&stmt, (bucket, key_vec.clone()))
                     .await
                     .map_err(|e| Error::Backend(format!("scylla get: {e}")))
             })
@@ -440,13 +501,12 @@ impl MetaStore for ScyllaMetaStore {
 
         match cond {
             PutCond::Any => {
-                let stmt = self.stmts.point.put_any.clone();
+                let stmt = self.point_statements(table)?.put_any.clone();
                 self.with_retry("put_any", || async {
                     self.session
                         .execute_unpaged(
                             &stmt,
                             (
-                                table.as_str(),
                                 bucket,
                                 key_vec.clone(),
                                 value.to_vec(),
@@ -466,19 +526,13 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfAbsent => {
                 let cas_op = format!("put_if_absent:{}", table.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
-                let stmt = self.stmts.point.put_if_absent.clone();
+                let stmt = self.point_statements(table)?.put_if_absent.clone();
                 let res = self
                     .with_retry("put_if_absent", || async {
                         self.session
                             .execute_unpaged(
                                 &stmt,
-                                (
-                                    table.as_str(),
-                                    bucket,
-                                    key_vec.clone(),
-                                    value.to_vec(),
-                                    1_i64,
-                                ),
+                                (bucket, key_vec.clone(), value.to_vec(), 1_i64),
                             )
                             .await
                             .map_err(|e| Error::Backend(format!("scylla put if absent: {e}")))
@@ -496,7 +550,7 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfVersion(v) => {
                 let cas_op = format!("put_if_version:{}", table.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
-                let stmt = self.stmts.point.put_if_version.clone();
+                let stmt = self.point_statements(table)?.put_if_version.clone();
                 let res = self
                     .with_retry("put_if_version", || async {
                         self.session
@@ -505,7 +559,6 @@ impl MetaStore for ScyllaMetaStore {
                                 (
                                     value.to_vec(),
                                     (v + 1) as i64,
-                                    table.as_str(),
                                     bucket,
                                     key_vec.clone(),
                                     v as i64,
@@ -531,10 +584,10 @@ impl MetaStore for ScyllaMetaStore {
         let bucket = key_bucket(key);
         match cond {
             DelCond::Any => {
-                let stmt = self.stmts.point.delete_any.clone();
+                let stmt = self.point_statements(table)?.delete_any.clone();
                 self.with_retry("delete_any", || async {
                     self.session
-                        .execute_unpaged(&stmt, (table.as_str(), bucket, key.to_vec()))
+                        .execute_unpaged(&stmt, (bucket, key.to_vec()))
                         .await
                         .map_err(|e| Error::Backend(format!("scylla delete: {e}")))?;
                     Ok(())
@@ -542,14 +595,11 @@ impl MetaStore for ScyllaMetaStore {
                 .await?;
             }
             DelCond::IfVersion(v) => {
-                let stmt = self.stmts.point.delete_if_version.clone();
+                let stmt = self.point_statements(table)?.delete_if_version.clone();
                 let _ = self
                     .with_retry("delete_if_version", || async {
                         self.session
-                            .execute_unpaged(
-                                &stmt,
-                                (table.as_str(), bucket, key.to_vec(), v as i64),
-                            )
+                            .execute_unpaged(&stmt, (bucket, key.to_vec(), v as i64))
                             .await
                             .map_err(|e| Error::Backend(format!("scylla delete if version: {e}")))
                     })
@@ -565,14 +615,11 @@ impl MetaStore for ScyllaMetaStore {
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
-        let stmt = self.stmts.scannable.get.clone();
+        let stmt = self.scannable_statements(table)?.get.clone();
         let res = self
             .with_retry("scan_get", || async {
                 self.session
-                    .execute_unpaged(
-                        &stmt,
-                        (table.as_str(), partition.to_vec(), clustering.to_vec()),
-                    )
+                    .execute_unpaged(&stmt, (partition.to_vec(), clustering.to_vec()))
                     .await
                     .map_err(|e| Error::Backend(format!("scylla scan get: {e}")))
             })
@@ -598,13 +645,12 @@ impl MetaStore for ScyllaMetaStore {
 
         match cond {
             PutCond::Any => {
-                let stmt = self.stmts.scannable.put_any.clone();
+                let stmt = self.scannable_statements(table)?.put_any.clone();
                 self.with_retry("scan_put_any", || async {
                     self.session
                         .execute_unpaged(
                             &stmt,
                             (
-                                table.as_str(),
                                 partition_vec.clone(),
                                 clustering_vec.clone(),
                                 value.to_vec(),
@@ -624,14 +670,13 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfAbsent => {
                 let cas_op = format!("scan_put_if_absent:{}", table.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
-                let stmt = self.stmts.scannable.put_if_absent.clone();
+                let stmt = self.scannable_statements(table)?.put_if_absent.clone();
                 let res = self
                     .with_retry("scan_put_if_absent", || async {
                         self.session
                             .execute_unpaged(
                                 &stmt,
                                 (
-                                    table.as_str(),
                                     partition_vec.clone(),
                                     clustering_vec.clone(),
                                     value.to_vec(),
@@ -654,7 +699,7 @@ impl MetaStore for ScyllaMetaStore {
             PutCond::IfVersion(v) => {
                 let cas_op = format!("scan_put_if_version:{}", table.as_str());
                 self.telemetry.record_cas_attempt(&cas_op);
-                let stmt = self.stmts.scannable.put_if_version.clone();
+                let stmt = self.scannable_statements(table)?.put_if_version.clone();
                 let res = self
                     .with_retry("scan_put_if_version", || async {
                         self.session
@@ -663,7 +708,6 @@ impl MetaStore for ScyllaMetaStore {
                                 (
                                     value.to_vec(),
                                     (v + 1) as i64,
-                                    table.as_str(),
                                     partition_vec.clone(),
                                     clustering_vec.clone(),
                                     v as i64,
@@ -694,13 +738,10 @@ impl MetaStore for ScyllaMetaStore {
     ) -> Result<()> {
         match cond {
             DelCond::Any => {
-                let stmt = self.stmts.scannable.delete_any.clone();
+                let stmt = self.scannable_statements(table)?.delete_any.clone();
                 self.with_retry("scan_delete_any", || async {
                     self.session
-                        .execute_unpaged(
-                            &stmt,
-                            (table.as_str(), partition.to_vec(), clustering.to_vec()),
-                        )
+                        .execute_unpaged(&stmt, (partition.to_vec(), clustering.to_vec()))
                         .await
                         .map_err(|e| Error::Backend(format!("scylla scan delete: {e}")))?;
                     Ok(())
@@ -708,18 +749,13 @@ impl MetaStore for ScyllaMetaStore {
                 .await?;
             }
             DelCond::IfVersion(v) => {
-                let stmt = self.stmts.scannable.delete_if_version.clone();
+                let stmt = self.scannable_statements(table)?.delete_if_version.clone();
                 let _ = self
                     .with_retry("scan_delete_if_version", || async {
                         self.session
                             .execute_unpaged(
                                 &stmt,
-                                (
-                                    table.as_str(),
-                                    partition.to_vec(),
-                                    clustering.to_vec(),
-                                    v as i64,
-                                ),
+                                (partition.to_vec(), clustering.to_vec(), v as i64),
                             )
                             .await
                             .map_err(|e| {
@@ -743,11 +779,11 @@ impl MetaStore for ScyllaMetaStore {
         let mut keys = Vec::new();
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
-        let stmt = self.stmts.scannable.list.clone();
+        let stmt = self.scannable_statements(table)?.list.clone();
         let res = self
             .with_retry("scan_list", || async {
                 self.session
-                    .execute_unpaged(&stmt, (table.as_str(), partition.to_vec()))
+                    .execute_unpaged(&stmt, (partition.to_vec(),))
                     .await
                     .map_err(|e| Error::Backend(format!("scylla scan list: {e}")))
             })

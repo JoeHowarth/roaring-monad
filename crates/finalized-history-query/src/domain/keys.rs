@@ -143,32 +143,38 @@ pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
 }
 
 pub fn open_bitmap_page_suffix(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
-    open_bitmap_page_clustering_key(shard, page_start_local, stream_id)
+    let mut key = open_bitmap_page_partition_key(shard);
+    key.push(b'/');
+    key.extend_from_slice(&open_bitmap_page_clustering_key(
+        page_start_local,
+        stream_id,
+    ));
+    key
 }
 
-pub fn open_bitmap_page_partition_key() -> Vec<u8> {
-    Vec::new()
+pub fn open_bitmap_page_partition_key(shard: LogShard) -> Vec<u8> {
+    u64_be(shard.get()).to_vec()
 }
 
-pub fn open_bitmap_page_clustering_key(
-    shard: LogShard,
-    page_start_local: u32,
-    stream_id: &str,
-) -> Vec<u8> {
-    let mut k = open_bitmap_page_shard_page_prefix(shard, page_start_local);
+pub fn open_bitmap_page_clustering_key(page_start_local: u32, stream_id: &str) -> Vec<u8> {
+    let mut k = open_bitmap_page_page_prefix(page_start_local);
     k.extend_from_slice(stream_id.as_bytes());
     k
 }
 
 pub fn open_bitmap_page_shard_prefix(shard: LogShard) -> Vec<u8> {
-    let mut k = u64_be(shard.get()).to_vec();
-    k.push(b'/');
-    k
+    open_bitmap_page_partition_key(shard)
 }
 
 pub fn open_bitmap_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
-    let mut k = open_bitmap_page_shard_prefix(shard);
-    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    let mut k = open_bitmap_page_partition_key(shard);
+    k.push(b'/');
+    k.extend_from_slice(&open_bitmap_page_page_prefix(page_start_local));
+    k
+}
+
+pub fn open_bitmap_page_page_prefix(page_start_local: u32) -> Vec<u8> {
+    let mut k = u64_be(u64::from(page_start_local)).to_vec();
     k.push(b'/');
     k
 }

@@ -142,26 +142,39 @@ Scylla (Cassandra-compatible) implementation for `MetaStore`.
 
 ### Schema
 
-Three tables are created:
+Each logical metadata table becomes its own physical Scylla table. Point tables
+use:
 
-- `meta_kv (grp text, bucket smallint, k blob, v blob, version bigint, PRIMARY KEY ((grp, bucket), k))` — point metadata table
-- `meta_scan_kv (grp text, pk blob, ck blob, v blob, version bigint, PRIMARY KEY ((grp, pk), ck))` — scannable metadata table
-- `meta_fence (id text PRIMARY KEY, min_epoch bigint)` — auxiliary compatibility/operations state
+- `<table_name> (bucket smallint, k blob, v blob, version bigint, PRIMARY KEY ((bucket), k))`
+
+Scannable tables use:
+
+- `<table_name> (pk blob, ck blob, v blob, version bigint, PRIMARY KEY ((pk), ck))`
+
+The backend currently creates physical tables for:
+
+- point tables: `publication_state`, `block_record`, `block_log_header`, `block_hash_index`, `log_dir_bucket`, `log_dir_sub_bucket`, `bitmap_page_meta`
+- scannable tables: `log_dir_by_block`, `bitmap_by_block`, `open_bitmap_page`
+- auxiliary state: `meta_fence (id text PRIMARY KEY, min_epoch bigint)`
 
 ### Key partitioning
 
-Point-table keys are partitioned by:
+Point-table rows are partitioned by:
 
-1. **Group** — the explicit logical metadata table (for example `block_record` or `log_dir_sub_bucket`)
+1. **Table** — one physical Scylla table per logical metadata table
 2. **Bucket** — FNV-1a hash of the suffix key modulo 256
 
 This distributes load across partitions for point lookups and conditional
 writes.
 
-Scannable-table rows are partitioned by `(table, partition)` and ordered by the
-clustering key. This lets the backend support exact lookup and ordered scans for
-the actual enumerable metadata tables without the old table-wide bucket
-fanout.
+Scannable tables are keyed by the natural scan scope of each logical table:
+
+- `log_dir_by_block`: partition = `sub_bucket_start`, clustering = `block_num`
+- `bitmap_by_block`: partition = `(stream_id, page_start_local)`, clustering = `block_num`
+- `open_bitmap_page`: partition = `shard`, clustering = `(page_start_local, stream_id)`
+
+This lets the backend support exact lookup and ordered scans without a shared
+generic scan table or family-wide fanout.
 
 ### CAS operations
 
