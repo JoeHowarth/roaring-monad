@@ -12,6 +12,7 @@ use crate::store::traits::{
     TableId,
 };
 
+/// Cheap clone handle to the same filesystem-backed metadata namespace.
 #[derive(Debug, Clone)]
 pub struct FsMetaStore {
     root: PathBuf,
@@ -373,6 +374,7 @@ impl MetaStore for FsMetaStore {
     }
 }
 
+/// Cheap clone handle to the same filesystem-backed blob namespace.
 #[derive(Debug, Clone)]
 pub struct FsBlobStore {
     root: PathBuf,

@@ -8,6 +8,7 @@ use tokio::time::{Duration, sleep};
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, BlobTableId, Page};
 
+/// Cheap clone handle to the same MinIO bucket/prefix and shared client state.
 #[derive(Clone)]
 pub struct MinioBlobStore {
     client: Client,

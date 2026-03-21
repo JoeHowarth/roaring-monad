@@ -89,6 +89,7 @@ impl ScyllaTelemetry {
     }
 }
 
+/// Cheap clone handle to the same Scylla session, prepared statements, and telemetry.
 #[derive(Clone)]
 pub struct ScyllaMetaStore {
     session: Arc<Session>,

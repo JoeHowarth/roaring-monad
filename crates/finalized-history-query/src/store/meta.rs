@@ -8,6 +8,7 @@ use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
 
+/// Cheap clone handle backed by shared in-memory state.
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
     inner: Arc<RwLock<BTreeMap<(TableId, Vec<u8>), Record>>>,

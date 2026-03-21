@@ -370,6 +370,15 @@ impl<M: MetaStore> ScannableKvTableRef<'_, M> {
     }
 }
 
+/// Metadata store handle.
+///
+/// Implementations are expected to behave like cheap, cloneable handles to a
+/// single logical store instance. Cloning a handle must not create a distinct
+/// backing store or fork state; all clones must continue to target the same
+/// logical store.
+///
+/// Rust cannot enforce "cheap clone" mechanically, so this is a semantic
+/// contract for implementors of the trait.
 #[allow(async_fn_in_trait)]
 pub trait MetaStore: Send + Sync {
     fn table(self: Arc<Self>, table: TableId) -> KvTable<Self>
@@ -507,6 +516,15 @@ impl<T: MetaStore> MetaStore for Arc<T> {
     }
 }
 
+/// Blob store handle.
+///
+/// Implementations are expected to behave like cheap, cloneable handles to a
+/// single logical store instance. Cloning a handle must not create a distinct
+/// backing store or fork state; all clones must continue to target the same
+/// logical store.
+///
+/// Rust cannot enforce "cheap clone" mechanically, so this is a semantic
+/// contract for implementors of the trait.
 #[allow(async_fn_in_trait)]
 pub trait BlobStore: Send + Sync {
     fn table(self: Arc<Self>, table: BlobTableId) -> BlobTable<Self>

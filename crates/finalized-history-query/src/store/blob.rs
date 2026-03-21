@@ -6,6 +6,7 @@ use bytes::Bytes;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, BlobTableId, Page};
 
+/// Cheap clone handle backed by shared in-memory blob state.
 #[derive(Clone, Default)]
 pub struct InMemoryBlobStore {
     inner: Arc<RwLock<HashMap<(BlobTableId, Vec<u8>), Bytes>>>,
