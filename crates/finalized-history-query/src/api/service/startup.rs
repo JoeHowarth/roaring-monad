@@ -10,24 +10,17 @@ use super::FinalizedHistoryService;
 impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M, B> {
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
-            let result = startup_plan(self.tables(), &self.publication_store, 0).await;
-            self.update_backend_state(&result);
-            return result;
+            return startup_plan(self.tables(), &self.publication_store, 0).await;
         }
 
-        let result = self.startup_locked().await;
-        self.update_backend_state(&result);
-        result
+        self.startup_locked().await
     }
 
     pub async fn indexed_finalized_head(&self) -> Result<u64> {
-        let result = self
-            .publication_store
+        self.publication_store
             .load_finalized_head_state()
             .await
-            .map(|state| state.indexed_finalized_head);
-        self.update_backend_state(&result);
-        result
+            .map(|state| state.indexed_finalized_head)
     }
 
     pub(super) async fn startup_locked(&self) -> Result<StartupPlan> {
@@ -35,7 +28,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         let session = self
             .ingest
             .authority
-            .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
+            .begin_write(self.ingest.config.observe_upstream_finalized_block.as_ref()())
             .await?;
         self.recover_and_plan(session.state().indexed_finalized_head)
             .await

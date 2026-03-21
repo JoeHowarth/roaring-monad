@@ -9,7 +9,6 @@ pub struct Config {
     pub publication_lease_blocks: u64,
     pub publication_lease_renew_threshold_blocks: u64,
     pub planner_max_or_terms: usize,
-    pub backend_error_degraded_after: u64,
     pub assume_empty_streams: bool,
     pub stream_append_concurrency: usize,
     pub bytes_cache: BytesCacheConfig,
@@ -25,10 +24,6 @@ impl fmt::Debug for Config {
                 &self.publication_lease_renew_threshold_blocks,
             )
             .field("planner_max_or_terms", &self.planner_max_or_terms)
-            .field(
-                "backend_error_degraded_after",
-                &self.backend_error_degraded_after,
-            )
             .field("assume_empty_streams", &self.assume_empty_streams)
             .field("stream_append_concurrency", &self.stream_append_concurrency)
             .field("bytes_cache", &self.bytes_cache)
@@ -43,7 +38,6 @@ impl Default for Config {
             publication_lease_blocks: 10,
             publication_lease_renew_threshold_blocks: 2,
             planner_max_or_terms: 128,
-            backend_error_degraded_after: 10,
             assume_empty_streams: false,
             stream_append_concurrency: 96,
             bytes_cache: BytesCacheConfig::default(),

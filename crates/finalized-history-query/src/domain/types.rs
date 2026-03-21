@@ -85,6 +85,5 @@ pub struct IngestOutcome {
 #[derive(Debug, Clone)]
 pub struct HealthReport {
     pub healthy: bool,
-    pub degraded: bool,
     pub message: String,
 }

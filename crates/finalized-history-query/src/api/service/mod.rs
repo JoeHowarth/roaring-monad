@@ -2,11 +2,9 @@ mod handlers;
 mod startup;
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use crate::config::Config;
-use crate::core::runtime::RuntimeState;
-use crate::error::{Error, Result};
+use crate::error::Error;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::query::LogsQueryEngine;
@@ -20,8 +18,6 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     publication_store: MetaPublicationStore<M>,
     query: LogsQueryEngine,
     tables: Tables<M, B>,
-    config: Config,
-    state: Arc<RuntimeState>,
     allows_writes: bool,
 }
 
@@ -37,34 +33,26 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         let meta_store = Arc::new(meta_store);
         let blob_store = Arc::new(blob_store);
         let publication_store = MetaPublicationStore::new(Arc::clone(&meta_store));
+        let bytes_cache = config.bytes_cache;
         let tables = Tables::new(
             Arc::clone(&meta_store),
             Arc::clone(&blob_store),
-            config.bytes_cache,
+            bytes_cache,
         );
-        let ingest = IngestEngine::new(config.clone(), authority, meta_store, blob_store);
+        let ingest = IngestEngine::new(config, authority, meta_store, blob_store);
         Self {
             ingest,
             publication_store,
             query,
             tables,
-            config,
-            state: Arc::new(RuntimeState::default()),
             allows_writes,
         }
     }
 
     pub async fn health(&self) -> HealthReport {
-        let degraded = self.state.degraded.load(Ordering::Relaxed);
-        let message = self.state.reason();
         HealthReport {
-            healthy: !degraded,
-            degraded,
-            message: if degraded {
-                format!("degraded: {message}")
-            } else {
-                "ok".to_string()
-            },
+            healthy: true,
+            message: "ok".to_string(),
         }
     }
 
@@ -74,16 +62,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub(crate) fn tables(&self) -> &Tables<M, B> {
         &self.tables
-    }
-
-    fn update_backend_state<T>(&self, result: &Result<T>) {
-        match result {
-            Ok(_) => self.state.on_backend_success(),
-            Err(Error::Backend(message)) => self
-                .state
-                .on_backend_error(message.clone(), self.config.backend_error_degraded_after),
-            _ => {}
-        }
     }
 }
 

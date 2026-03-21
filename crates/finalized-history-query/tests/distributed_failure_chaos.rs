@@ -43,7 +43,7 @@ fn docker_control(args: &[&str]) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn minio_outage_trips_retry_budget_and_degrades_service() {
+async fn minio_outage_surfaces_backend_failures_without_latching_service_state() {
     if std::env::var("RUN_DISTRIBUTED_CHAOS") != Ok("1".to_string()) {
         eprintln!("skipping distributed chaos test (set RUN_DISTRIBUTED_CHAOS=1)");
         return;
@@ -76,7 +76,6 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     let svc = FinalizedHistoryService::new_reader_writer(
         Config {
             observe_upstream_finalized_block: Arc::new(|| Some(u64::MAX / 4)),
-            backend_error_degraded_after: 2,
             ..Config::default()
         },
         meta,
@@ -121,7 +120,11 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
     assert!(matches!(e2, Error::Backend(_)));
 
     let h = svc.health().await;
-    assert!(h.degraded, "service should fail-closed after threshold");
+    assert!(
+        h.healthy,
+        "backend failures should not latch service health"
+    );
+    assert_eq!(h.message, "ok");
 
     let e3 = svc
         .query_logs(
@@ -142,8 +145,8 @@ async fn minio_outage_trips_retry_budget_and_degrades_service() {
             ExecutionBudget::default(),
         )
         .await
-        .expect_err("degraded call blocked");
-    assert!(matches!(e3, Error::Degraded(_)));
+        .expect_err("subsequent call still surfaces backend failure");
+    assert!(matches!(e3, Error::Backend(_)));
 
     let _ = docker_control(&["start", "finalized-history-query-minio"]);
 }

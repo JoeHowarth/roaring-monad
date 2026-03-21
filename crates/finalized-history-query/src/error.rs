@@ -20,8 +20,6 @@ pub enum Error {
     InvalidParent,
     #[error("finality violation")]
     FinalityViolation,
-    #[error("service degraded: {0}")]
-    Degraded(String),
     #[error("invalid params: {0}")]
     InvalidParams(&'static str),
     #[error("decode error: {0}")]

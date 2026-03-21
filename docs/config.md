@@ -42,12 +42,6 @@ See [caching.md](caching.md) for cache design details.
 | `assume_empty_streams` | `bool` | `false` | Skip stream fragment loading during startup when streams are known to be empty |
 | `stream_append_concurrency` | `usize` | `96` | Maximum concurrent stream fragment write operations |
 
-## Runtime Health
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `backend_error_degraded_after` | `u64` | `10` | Consecutive backend errors before degraded state |
-
 ## Backend-Specific Config
 
 Backend implementations have their own configuration that is not part of the main `Config` struct. These are set at construction time on each store.
