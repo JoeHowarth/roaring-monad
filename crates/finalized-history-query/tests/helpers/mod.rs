@@ -6,13 +6,13 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::PUBLICATION_STATE_TABLE;
-use finalized_history_query::domain::types::PublicationState;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::logs::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::PUBLICATION_STATE_TABLE;
+use finalized_history_query::store::publication::PublicationState;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,

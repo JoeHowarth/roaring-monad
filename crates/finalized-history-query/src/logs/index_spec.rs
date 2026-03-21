@@ -8,7 +8,7 @@ use crate::logs::keys::{
 use crate::logs::table_specs::{self, BitmapByBlockSpec, BitmapPageMetaSpec};
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::MetaStore;
-use crate::streams::bitmap_blob::decode_bitmap_blob;
+use crate::streams::decode_bitmap_blob;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClauseKind {

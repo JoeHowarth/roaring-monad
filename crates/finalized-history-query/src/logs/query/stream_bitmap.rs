@@ -7,7 +7,7 @@ use crate::logs::index_spec::is_full_shard_range;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::bitmap_blob::decode_bitmap_blob;
+use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
 use super::clause::PreparedShardClause;
@@ -245,7 +245,7 @@ mod tests {
         BlobStore, BlobTableId, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
         TableId,
     };
-    use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
+    use crate::streams::{BitmapBlob, encode_bitmap_blob};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;

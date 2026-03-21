@@ -3,7 +3,6 @@ pub mod block;
 pub mod codec;
 pub mod config;
 pub mod core;
-pub mod domain;
 pub mod error;
 pub mod family;
 pub mod ingest;
@@ -18,9 +17,7 @@ pub mod tables;
 pub mod traces;
 pub mod txs;
 
-pub use api::{
-    ExecutionBudget, FinalizedHistoryService, HealthReport, IngestOutcome, QueryLogsRequest,
-};
+pub use api::{ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryLogsRequest};
 pub use block::FinalizedBlock;
 pub use config::Config;
 pub use core::clause::Clause;

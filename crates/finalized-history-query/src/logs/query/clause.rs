@@ -6,7 +6,7 @@ use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::bitmap_blob::decode_bitmap_blob;
+use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
 use super::stream_bitmap::{fetch_union_log_level_with_cache, load_bitmap_page_meta, overlaps};

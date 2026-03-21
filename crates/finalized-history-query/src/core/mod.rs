@@ -1,7 +1,15 @@
-pub mod clause;
 pub mod execution;
 pub mod ids;
-pub mod page;
 pub mod range;
-pub mod refs;
 pub mod state;
+pub mod types;
+
+pub mod clause {
+    pub use super::types::Clause;
+}
+pub mod refs {
+    pub use super::types::BlockRef;
+}
+pub mod page {
+    pub use super::types::{QueryOrder, QueryPage, QueryPageMeta};
+}

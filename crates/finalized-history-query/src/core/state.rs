@@ -60,12 +60,12 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity};
-    use crate::domain::types::PublicationState;
     use crate::logs::keys::BLOCK_RECORD_TABLE;
     use crate::logs::table_specs::BlockRecordSpec;
     use crate::logs::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
+    use crate::store::publication::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{MetaStore, PutCond};
     use crate::tables::Tables;

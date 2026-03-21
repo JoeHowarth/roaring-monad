@@ -1,5 +1,5 @@
-use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
+use crate::store::publication::PublicationState;
 use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};

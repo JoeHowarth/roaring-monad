@@ -38,7 +38,7 @@ mod tests {
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
-    use crate::streams::bitmap_blob::decode_bitmap_blob;
+    use crate::streams::decode_bitmap_blob;
     use crate::tables::Tables;
     use futures::executor::block_on;
 

@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use finalized_history_query::family::Families;
 use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
 use finalized_history_query::logs::table_specs::BlockRecordSpec;
@@ -16,6 +15,9 @@ use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
+use finalized_history_query::store::publication::{
+    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
+};
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 use futures::executor::block_on;
 
@@ -193,10 +195,11 @@ fn startup_plan_should_not_take_publication_ownership() {
             .await
             .expect("read publication state")
             .expect("publication state present");
-        let publication_state = finalized_history_query::domain::types::PublicationState::decode(
-            &publication_state.value,
-        )
-        .expect("decode publication state");
+        let publication_state =
+            finalized_history_query::store::publication::PublicationState::decode(
+                &publication_state.value,
+            )
+            .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 7);
         assert_eq!(publication_state.session_id, [7u8; 16]);
     });

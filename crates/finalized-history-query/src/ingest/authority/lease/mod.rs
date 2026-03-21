@@ -1,7 +1,7 @@
 use rand::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::domain::types::SessionId;
+use crate::store::publication::SessionId;
 
 mod acquisition;
 mod lifecycle;
@@ -75,8 +75,8 @@ struct PublicationLease {
     lease_valid_through_block: u64,
 }
 
-impl From<crate::domain::types::PublicationState> for PublicationLease {
-    fn from(value: crate::domain::types::PublicationState) -> Self {
+impl From<crate::store::publication::PublicationState> for PublicationLease {
+    fn from(value: crate::store::publication::PublicationState) -> Self {
         Self {
             owner_id: value.owner_id,
             session_id: value.session_id,
@@ -87,8 +87,8 @@ impl From<crate::domain::types::PublicationState> for PublicationLease {
 }
 
 impl PublicationLease {
-    fn as_state(self) -> crate::domain::types::PublicationState {
-        crate::domain::types::PublicationState {
+    fn as_state(self) -> crate::store::publication::PublicationState {
+        crate::store::publication::PublicationState {
             owner_id: self.owner_id,
             session_id: self.session_id,
             indexed_finalized_head: self.indexed_finalized_head,

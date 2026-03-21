@@ -14,8 +14,6 @@ use finalized_history_query::core::ids::{
     LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id,
 };
 use finalized_history_query::core::refs::BlockRef;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
-use finalized_history_query::domain::types::PublicationState;
 use finalized_history_query::logs::codec::validate_log;
 use finalized_history_query::logs::keys::{
     BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE,
@@ -29,6 +27,10 @@ use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord, DirBucke
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
+use finalized_history_query::store::publication::PublicationState;
+use finalized_history_query::store::publication::{
+    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
+};
 use finalized_history_query::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, TableId};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{

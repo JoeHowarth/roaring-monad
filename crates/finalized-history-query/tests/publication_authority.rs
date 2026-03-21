@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use finalized_history_query::family::Families;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
@@ -21,6 +20,9 @@ use finalized_history_query::runtime::Runtime;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
+use finalized_history_query::store::publication::{
+    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
+};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
 use finalized_history_query::{Error, WriteAuthority};
 use futures::executor::block_on;
@@ -54,10 +56,11 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             .await
             .expect("publication state get")
             .expect("publication state");
-        let publication_state = finalized_history_query::domain::types::PublicationState::decode(
-            &publication_state.value,
-        )
-        .expect("decode publication state");
+        let publication_state =
+            finalized_history_query::store::publication::PublicationState::decode(
+                &publication_state.value,
+            )
+            .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 1);
         assert_eq!(publication_state.indexed_finalized_head, 1);
         assert_eq!(
@@ -231,7 +234,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
             .expect("get publication state")
             .expect("publication state");
         let decoded =
-            finalized_history_query::domain::types::PublicationState::decode(&record.value)
+            finalized_history_query::store::publication::PublicationState::decode(&record.value)
                 .expect("decode");
         assert_eq!(decoded.indexed_finalized_head, 3);
     });

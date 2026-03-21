@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::logs::table_specs;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::bitmap_blob::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
+use crate::streams::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 use crate::tables::Tables;
 
 pub fn collect_stream_appends(

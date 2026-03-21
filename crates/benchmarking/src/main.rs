@@ -11,7 +11,6 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
-use finalized_history_query::domain::types::{Block as IndexBlock, Log as IndexLog};
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};

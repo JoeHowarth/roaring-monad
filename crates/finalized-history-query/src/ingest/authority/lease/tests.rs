@@ -2,10 +2,10 @@ use std::sync::Mutex;
 
 use futures::executor::block_on;
 
-use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::store::meta::InMemoryMetaStore;
+use crate::store::publication::PublicationState;
 use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
 
 use super::LeaseAuthority;

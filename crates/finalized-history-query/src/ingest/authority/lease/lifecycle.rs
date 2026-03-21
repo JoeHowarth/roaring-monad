@@ -89,7 +89,7 @@ impl<P: PublicationStore> LeaseAuthority<P> {
                 return Err(Error::LeaseLost);
             }
 
-            let next = crate::domain::types::PublicationState {
+            let next = crate::store::publication::PublicationState {
                 owner_id: current.owner_id,
                 session_id: current.session_id,
                 indexed_finalized_head: current.indexed_finalized_head,

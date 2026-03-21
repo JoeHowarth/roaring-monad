@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
-use crate::domain::keys::PUBLICATION_STATE_TABLE;
 use crate::error::{Error, Result};
 use crate::logs::keys::{
     BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE,
     BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     OPEN_BITMAP_PAGE_TABLE,
 };
+use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };

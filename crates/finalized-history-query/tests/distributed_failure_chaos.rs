@@ -122,13 +122,6 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
         .expect_err("second backend fail");
     assert!(matches!(e2, Error::Backend(_)));
 
-    let h = svc.health().await;
-    assert!(
-        h.healthy,
-        "backend failures should not latch service health"
-    );
-    assert_eq!(h.message, "ok");
-
     let e3 = svc
         .query_logs(
             QueryLogsRequest {

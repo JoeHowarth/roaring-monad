@@ -1,9 +1,30 @@
 use std::sync::Arc;
 
-use crate::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
-use crate::domain::types::PublicationState;
+use serde::{Deserialize, Serialize};
+
 use crate::error::Result;
-use crate::store::traits::{KvTable, MetaStore, PutCond};
+use crate::store::traits::{KvTable, MetaStore, PutCond, TableId};
+
+pub type SessionId = [u8; 16];
+
+pub const PUBLICATION_STATE_TABLE: TableId = TableId::new("publication_state");
+pub const PUBLICATION_STATE_SUFFIX: &[u8] = b"state";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PublicationState {
+    pub owner_id: u64,
+    pub session_id: SessionId,
+    pub indexed_finalized_head: u64,
+    pub lease_valid_through_block: u64,
+}
+
+impl PublicationState {
+    pub fn finalized_head_state(&self) -> FinalizedHeadState {
+        FinalizedHeadState {
+            indexed_finalized_head: self.indexed_finalized_head,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CasOutcome<T> {

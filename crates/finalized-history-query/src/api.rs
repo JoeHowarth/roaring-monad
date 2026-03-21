@@ -39,12 +39,6 @@ pub struct IngestOutcome {
     pub written_traces: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct HealthReport {
-    pub healthy: bool,
-    pub message: String,
-}
-
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
@@ -71,13 +65,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             query,
             runtime,
             allows_writes,
-        }
-    }
-
-    pub async fn health(&self) -> HealthReport {
-        HealthReport {
-            healthy: true,
-            message: "ok".to_string(),
         }
     }
 
