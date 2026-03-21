@@ -1,4 +1,4 @@
-use crate::core::state::{derive_next_log_id, load_finalized_head_state};
+use crate::core::state::derive_next_log_id;
 use crate::error::Result;
 use crate::ingest::authority::{WriteAuthority, WriteToken};
 use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
@@ -27,7 +27,10 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     where
         M: PublicationStore,
     {
-        let result = load_finalized_head_state(&self.ingest.meta_store)
+        let result = self
+            .ingest
+            .meta_store
+            .load_finalized_head_state()
             .await
             .map(|state| state.indexed_finalized_head);
         self.update_backend_state(&result);

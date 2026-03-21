@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::store::publication::FinalizedHeadState;
+
 pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];
@@ -65,6 +67,15 @@ pub struct PublicationState {
     pub epoch: u64,
     pub indexed_finalized_head: u64,
     pub lease_valid_through_block: u64,
+}
+
+impl PublicationState {
+    pub fn finalized_head_state(&self) -> FinalizedHeadState {
+        FinalizedHeadState {
+            indexed_finalized_head: self.indexed_finalized_head,
+            publication_epoch: self.epoch,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

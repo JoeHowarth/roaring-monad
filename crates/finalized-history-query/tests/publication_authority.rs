@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{
     PUBLICATION_STATE_KEY, bitmap_by_block_key, block_log_blob_key, block_record_key,
     log_dir_by_block_key, stream_id, stream_page_start_local,
@@ -172,7 +171,10 @@ fn readers_use_only_publication_state() {
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta, blob);
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 3);
-        let state = load_finalized_head_state(&svc.ingest.meta_store)
+        let state = svc
+            .ingest
+            .meta_store
+            .load_finalized_head_state()
             .await
             .expect("load finalized head state");
         assert_eq!(state.indexed_finalized_head, 3);

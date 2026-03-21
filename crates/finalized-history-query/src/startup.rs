@@ -1,8 +1,8 @@
 use crate::core::ids::LogId;
-use crate::core::state::{FinalizedHeadState, derive_next_log_id, load_finalized_head_state};
+use crate::core::state::derive_next_log_id;
 use crate::error::Result;
 use crate::logs::types::LogSequencingState;
-use crate::store::publication::PublicationStore;
+use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -17,7 +17,7 @@ pub async fn startup_plan<M: MetaStore + PublicationStore, B: BlobStore>(
     tables: &Tables<M, B>,
     warm_streams: usize,
 ) -> Result<StartupPlan> {
-    let head_state = load_finalized_head_state(tables.meta_store()).await?;
+    let head_state = tables.meta_store().load_finalized_head_state().await?;
     let next_log_id = derive_next_log_id(tables, head_state.indexed_finalized_head).await?;
     Ok(build_startup_plan(
         head_state.indexed_finalized_head,

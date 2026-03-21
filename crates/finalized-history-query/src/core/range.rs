@@ -1,6 +1,6 @@
 use crate::core::page::QueryOrder;
 use crate::core::refs::BlockRef;
-use crate::core::state::{load_block_identity, load_finalized_head_state};
+use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -52,7 +52,9 @@ impl RangeResolver {
             ));
         }
 
-        let finalized_head = load_finalized_head_state(tables.meta_store())
+        let finalized_head = tables
+            .meta_store()
+            .load_finalized_head_state()
             .await?
             .indexed_finalized_head;
 

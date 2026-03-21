@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::core::state::load_finalized_head_state;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_KEY, block_record_key};
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
@@ -251,7 +250,9 @@ fn service_can_publish_a_contiguous_batch() {
             svc.ingest_finalized_blocks(blocks)
                 .await
                 .expect("batched ingest"),
-            load_finalized_head_state(&svc.ingest.meta_store)
+            svc.ingest
+                .meta_store
+                .load_finalized_head_state()
                 .await
                 .expect("head state"),
         );

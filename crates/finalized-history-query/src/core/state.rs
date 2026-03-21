@@ -1,24 +1,8 @@
 use crate::core::refs::BlockRef;
-use crate::domain::types::{BlockRecord, PublicationState};
+use crate::domain::types::BlockRecord;
 use crate::error::{Error, Result};
-use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FinalizedHeadState {
-    pub indexed_finalized_head: u64,
-    pub publication_epoch: u64,
-}
-
-impl From<&PublicationState> for FinalizedHeadState {
-    fn from(value: &PublicationState) -> Self {
-        Self {
-            indexed_finalized_head: value.indexed_finalized_head,
-            publication_epoch: value.epoch,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIdentity {
@@ -45,18 +29,6 @@ impl From<(u64, &BlockRecord)> for BlockIdentity {
             parent_hash: meta.parent_hash,
         }
     }
-}
-
-pub async fn load_finalized_head_state<P: PublicationStore>(
-    publication_store: &P,
-) -> Result<FinalizedHeadState> {
-    Ok(match publication_store.load().await? {
-        Some(state) => FinalizedHeadState::from(&state),
-        None => FinalizedHeadState {
-            indexed_finalized_head: 0,
-            publication_epoch: 0,
-        },
-    })
 }
 
 pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
@@ -87,7 +59,7 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
+    use super::{derive_next_log_id, load_block_identity};
     use crate::domain::keys::block_record_key;
     use crate::domain::types::{BlockRecord, PublicationState};
     use crate::store::blob::InMemoryBlobStore;
@@ -97,18 +69,6 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
     use std::sync::Arc;
-
-    #[test]
-    fn load_finalized_head_state_defaults_when_missing() {
-        block_on(async {
-            let meta = InMemoryMetaStore::default();
-            let state = load_finalized_head_state(&meta)
-                .await
-                .expect("load finalized head state");
-            assert_eq!(state.indexed_finalized_head, 0);
-            assert_eq!(state.publication_epoch, 0);
-        });
-    }
 
     #[test]
     fn load_block_identity_returns_shared_block_fields() {
@@ -144,7 +104,8 @@ mod tests {
             .await
             .expect("write block meta");
 
-            let state = load_finalized_head_state(&meta)
+            let state = meta
+                .load_finalized_head_state()
                 .await
                 .expect("load finalized head state");
             let identity = load_block_identity(&tables, 7)

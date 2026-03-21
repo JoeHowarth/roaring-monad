@@ -9,9 +9,25 @@ pub enum CasOutcome<T> {
     Failed { current: Option<T> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinalizedHeadState {
+    pub indexed_finalized_head: u64,
+    pub publication_epoch: u64,
+}
+
 #[allow(async_fn_in_trait)]
 pub trait PublicationStore: Send + Sync {
     async fn load(&self) -> Result<Option<PublicationState>>;
+
+    async fn load_finalized_head_state(&self) -> Result<FinalizedHeadState> {
+        Ok(match self.load().await? {
+            Some(state) => state.finalized_head_state(),
+            None => FinalizedHeadState {
+                indexed_finalized_head: 0,
+                publication_epoch: 0,
+            },
+        })
+    }
 
     async fn create_if_absent(
         &self,
@@ -28,6 +44,10 @@ pub trait PublicationStore: Send + Sync {
 impl<T: PublicationStore> PublicationStore for Arc<T> {
     async fn load(&self) -> Result<Option<PublicationState>> {
         self.as_ref().load().await
+    }
+
+    async fn load_finalized_head_state(&self) -> Result<FinalizedHeadState> {
+        self.as_ref().load_finalized_head_state().await
     }
 
     async fn create_if_absent(
