@@ -1,17 +1,17 @@
-mod handlers;
-mod startup;
-
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::error::Error;
-use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
+use crate::error::{Error, Result};
+use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::query::LogsQueryEngine;
-use crate::logs::types::HealthReport;
+use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
+use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
 use crate::store::publication::MetaPublicationStore;
+use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{BytesCacheMetrics, Tables};
+use crate::{ExecutionBudget, QueryLogsRequest};
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A, Arc<M>, Arc<B>>,
@@ -62,6 +62,64 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub(crate) fn tables(&self) -> &Tables<M, B> {
         &self.tables
+    }
+
+    pub async fn query_logs(
+        &self,
+        request: QueryLogsRequest,
+        budget: ExecutionBudget,
+    ) -> Result<crate::core::page::QueryPage<Log>> {
+        self.query
+            .query_logs(self.tables(), &self.publication_store, request, budget)
+            .await
+    }
+
+    pub async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
+        self.ingest_finalized_blocks(vec![block]).await
+    }
+
+    pub async fn ingest_finalized_blocks(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
+        self.ingest_blocks_with_startup(blocks).await
+    }
+
+    pub async fn startup(&self) -> Result<StartupPlan> {
+        if !self.allows_writes {
+            return startup_plan(self.tables(), &self.publication_store, 0).await;
+        }
+
+        self.startup_locked().await
+    }
+
+    pub async fn indexed_finalized_head(&self) -> Result<u64> {
+        self.publication_store
+            .load_finalized_head_state()
+            .await
+            .map(|state| state.indexed_finalized_head)
+    }
+
+    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
+        if !self.allows_writes {
+            return Err(reader_only_mode_error());
+        }
+
+        self.ingest.ingest_finalized_blocks(&blocks).await
+    }
+
+    pub(super) async fn startup_locked(&self) -> Result<StartupPlan> {
+        debug_assert!(self.allows_writes);
+        let session = self
+            .ingest
+            .authority
+            .begin_write(self.ingest.config.observe_upstream_finalized_block.as_ref()())
+            .await?;
+        self.recover_and_plan(session.state().indexed_finalized_head)
+            .await
+    }
+
+    async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
+        let next_log_id =
+            crate::core::state::derive_next_log_id(self.tables(), indexed_finalized_head).await?;
+        Ok(build_startup_plan(indexed_finalized_head, next_log_id, 0))
     }
 }
 
