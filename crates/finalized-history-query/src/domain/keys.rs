@@ -1,5 +1,5 @@
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
-use crate::store::traits::FamilyId;
+use crate::store::traits::{FamilyId, ScannableFamilyId};
 
 pub const PUBLICATION_STATE_FAMILY: FamilyId = FamilyId::new("publication_state");
 pub const PUBLICATION_STATE_SUFFIX: &[u8] = b"state";
@@ -8,10 +8,10 @@ pub const BLOCK_LOG_HEADER_FAMILY: FamilyId = FamilyId::new("block_log_header");
 pub const BLOCK_HASH_INDEX_FAMILY: FamilyId = FamilyId::new("block_hash_index");
 pub const LOG_DIR_BUCKET_FAMILY: FamilyId = FamilyId::new("log_dir_bucket");
 pub const LOG_DIR_SUB_BUCKET_FAMILY: FamilyId = FamilyId::new("log_dir_sub_bucket");
-pub const LOG_DIR_BY_BLOCK_FAMILY: FamilyId = FamilyId::new("log_dir_by_block");
-pub const BITMAP_BY_BLOCK_FAMILY: FamilyId = FamilyId::new("bitmap_by_block");
+pub const LOG_DIR_BY_BLOCK_FAMILY: ScannableFamilyId = ScannableFamilyId::new("log_dir_by_block");
+pub const BITMAP_BY_BLOCK_FAMILY: ScannableFamilyId = ScannableFamilyId::new("bitmap_by_block");
 pub const BITMAP_PAGE_META_FAMILY: FamilyId = FamilyId::new("bitmap_page_meta");
-pub const OPEN_BITMAP_PAGE_FAMILY: FamilyId = FamilyId::new("open_bitmap_page");
+pub const OPEN_BITMAP_PAGE_FAMILY: ScannableFamilyId = ScannableFamilyId::new("open_bitmap_page");
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;

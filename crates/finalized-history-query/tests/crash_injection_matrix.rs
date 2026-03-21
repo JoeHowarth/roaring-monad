@@ -23,7 +23,7 @@ use finalized_history_query::store::publication::{
     CasOutcome, MetaPublicationStore, PublicationStore,
 };
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
 };
 use futures::executor::block_on;
 
@@ -108,7 +108,7 @@ impl FaultyMetaStore {
         out
     }
 
-    fn scan_logical_key(family: FamilyId, partition: &[u8], clustering: &[u8]) -> Vec<u8> {
+    fn scan_logical_key(family: ScannableFamilyId, partition: &[u8], clustering: &[u8]) -> Vec<u8> {
         let mut out = family.as_str().as_bytes().to_vec();
         if !partition.is_empty() {
             out.push(b'/');
@@ -154,7 +154,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -163,7 +163,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -178,7 +178,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -190,7 +190,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

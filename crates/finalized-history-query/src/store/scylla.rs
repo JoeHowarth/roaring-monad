@@ -10,7 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
 use crate::error::{Error, Result};
-use crate::store::traits::{DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::traits::{
+    DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+};
 
 const DEFAULT_FENCE_KEY: &str = "global";
 const META_BUCKETS: u16 = 256;
@@ -489,7 +491,7 @@ impl MetaStore for ScyllaMetaStore {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -515,7 +517,7 @@ impl MetaStore for ScyllaMetaStore {
 
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -615,7 +617,7 @@ impl MetaStore for ScyllaMetaStore {
 
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -662,7 +664,7 @@ impl MetaStore for ScyllaMetaStore {
 
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

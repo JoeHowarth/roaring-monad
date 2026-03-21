@@ -12,7 +12,7 @@ use crate::domain::keys::{
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, FamilyId, MetaStore, PutCond};
+use crate::store::traits::{BlobStore, FamilyId, MetaStore, PutCond, ScannableFamilyId};
 
 pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
@@ -26,7 +26,7 @@ pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
 
 pub(in crate::logs) async fn put_scannable_artifact_meta<M: MetaStore>(
     meta_store: &M,
-    family: FamilyId,
+    family: ScannableFamilyId,
     partition: &[u8],
     clustering: &[u8],
     value: Bytes,

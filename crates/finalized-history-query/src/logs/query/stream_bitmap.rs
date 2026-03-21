@@ -242,7 +242,9 @@ mod tests {
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::traits::{BlobStore, MetaStore, Page, PutCond, PutResult, Record};
+    use crate::store::traits::{
+        BlobStore, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+    };
     use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
@@ -250,7 +252,7 @@ mod tests {
 
     struct CountingMetaStore {
         inner: InMemoryMetaStore,
-        target_family: crate::store::traits::FamilyId,
+        target_family: FamilyId,
         target_key: Vec<u8>,
         get_count: Arc<AtomicU64>,
     }
@@ -288,7 +290,7 @@ mod tests {
 
         async fn scan_get(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: ScannableFamilyId,
             partition: &[u8],
             clustering: &[u8],
         ) -> crate::Result<Option<Record>> {
@@ -297,7 +299,7 @@ mod tests {
 
         async fn scan_put(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: ScannableFamilyId,
             partition: &[u8],
             clustering: &[u8],
             value: Bytes,
@@ -310,7 +312,7 @@ mod tests {
 
         async fn scan_delete(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: ScannableFamilyId,
             partition: &[u8],
             clustering: &[u8],
             cond: crate::store::traits::DelCond,
@@ -322,7 +324,7 @@ mod tests {
 
         async fn scan_list(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: ScannableFamilyId,
             partition: &[u8],
             prefix: &[u8],
             cursor: Option<Vec<u8>>,

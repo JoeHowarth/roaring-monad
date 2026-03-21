@@ -17,6 +17,19 @@ impl FamilyId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScannableFamilyId(&'static str);
+
+impl ScannableFamilyId {
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Record {
     pub value: Bytes,
@@ -121,15 +134,15 @@ impl<M: MetaStore> KvTableRef<'_, M> {
 #[derive(Debug)]
 pub struct ScannableKvTable<M> {
     store: Arc<M>,
-    family: FamilyId,
+    family: ScannableFamilyId,
 }
 
 impl<M> ScannableKvTable<M> {
-    pub fn new(store: Arc<M>, family: FamilyId) -> Self {
+    pub fn new(store: Arc<M>, family: ScannableFamilyId) -> Self {
         Self { store, family }
     }
 
-    pub fn family(&self) -> FamilyId {
+    pub fn family(&self) -> ScannableFamilyId {
         self.family
     }
 }
@@ -184,15 +197,15 @@ impl<M: MetaStore> ScannableKvTable<M> {
 #[derive(Debug, Clone, Copy)]
 pub struct ScannableKvTableRef<'a, M> {
     store: &'a M,
-    family: FamilyId,
+    family: ScannableFamilyId,
 }
 
 impl<'a, M> ScannableKvTableRef<'a, M> {
-    pub fn new(store: &'a M, family: FamilyId) -> Self {
+    pub fn new(store: &'a M, family: ScannableFamilyId) -> Self {
         Self { store, family }
     }
 
-    pub fn family(&self) -> FamilyId {
+    pub fn family(&self) -> ScannableFamilyId {
         self.family
     }
 }
@@ -251,14 +264,14 @@ pub trait MetaStore: Send + Sync {
         KvTableRef::new(self, family)
     }
 
-    fn scannable_table(self: Arc<Self>, family: FamilyId) -> ScannableKvTable<Self>
+    fn scannable_table(self: Arc<Self>, family: ScannableFamilyId) -> ScannableKvTable<Self>
     where
         Self: Sized,
     {
         ScannableKvTable::new(self, family)
     }
 
-    fn scannable_table_ref(&self, family: FamilyId) -> ScannableKvTableRef<'_, Self>
+    fn scannable_table_ref(&self, family: ScannableFamilyId) -> ScannableKvTableRef<'_, Self>
     where
         Self: Sized,
     {
@@ -276,13 +289,13 @@ pub trait MetaStore: Send + Sync {
     async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>>;
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -290,14 +303,14 @@ pub trait MetaStore: Send + Sync {
     ) -> Result<PutResult>;
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
     ) -> Result<()>;
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -326,7 +339,7 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -335,7 +348,7 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -348,7 +361,7 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -360,7 +373,7 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

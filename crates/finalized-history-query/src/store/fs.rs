@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{
-    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record,
+    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
 };
 
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ impl FsMetaStore {
         p
     }
 
-    fn scan_family_dir(&self, family: FamilyId) -> PathBuf {
+    fn scan_family_dir(&self, family: ScannableFamilyId) -> PathBuf {
         let mut p = self.root.join("meta_scan");
         p.push(family.as_str());
         p
@@ -51,19 +51,29 @@ impl FsMetaStore {
         p
     }
 
-    fn scan_partition_dir(&self, family: FamilyId, partition: &[u8]) -> PathBuf {
+    fn scan_partition_dir(&self, family: ScannableFamilyId, partition: &[u8]) -> PathBuf {
         let mut p = self.scan_family_dir(family);
         p.push(hex(partition));
         p
     }
 
-    fn scan_key_path(&self, family: FamilyId, partition: &[u8], clustering: &[u8]) -> PathBuf {
+    fn scan_key_path(
+        &self,
+        family: ScannableFamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> PathBuf {
         let mut p = self.scan_partition_dir(family, partition);
         p.push(hex(clustering));
         p
     }
 
-    fn scan_version_path(&self, family: FamilyId, partition: &[u8], clustering: &[u8]) -> PathBuf {
+    fn scan_version_path(
+        &self,
+        family: ScannableFamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> PathBuf {
         let mut p = self.scan_partition_dir(family, partition);
         p.push(format!("{}.ver", hex(clustering)));
         p
@@ -75,7 +85,7 @@ impl FsMetaStore {
 
     fn scan_key_lock(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Arc<Mutex<()>>> {
@@ -204,7 +214,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -234,7 +244,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -289,7 +299,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -323,7 +333,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

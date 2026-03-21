@@ -4,12 +4,14 @@ use std::sync::{Arc, RwLock};
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
-use crate::store::traits::{DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::traits::{
+    DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+};
 
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
     inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>), Record>>>,
-    scan_inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>, Vec<u8>), Record>>>,
+    scan_inner: Arc<RwLock<BTreeMap<(ScannableFamilyId, Vec<u8>, Vec<u8>), Record>>>,
 }
 
 impl InMemoryMetaStore {
@@ -101,7 +103,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -116,7 +118,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -160,7 +162,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -186,7 +188,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

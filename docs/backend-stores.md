@@ -13,6 +13,7 @@ The core trait supports both:
 
 ```rust
 pub struct FamilyId(&'static str);
+pub struct ScannableFamilyId(&'static str);
 
 pub trait MetaStore: Send + Sync {
     async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>>;
@@ -27,13 +28,13 @@ pub trait MetaStore: Send + Sync {
 
     async fn scan_get(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>>;
     async fn scan_put(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -41,14 +42,14 @@ pub trait MetaStore: Send + Sync {
     ) -> Result<PutResult>;
     async fn scan_delete(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
     ) -> Result<()>;
     async fn scan_list(
         &self,
-        family: FamilyId,
+        family: ScannableFamilyId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
