@@ -77,8 +77,17 @@ fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
             .await
             .expect("acquire publication");
 
-        assert_eq!(lease.session_id, [7u8; 16]);
-        assert_eq!(lease.indexed_finalized_head, 0);
+        assert_eq!(lease, 0);
+        assert_eq!(
+            authority
+                .publication_store
+                .load()
+                .await
+                .expect("load")
+                .expect("state")
+                .session_id,
+            [7u8; 16]
+        );
     });
 }
 
@@ -109,16 +118,30 @@ fn same_owner_restart_after_expiry_uses_new_session() {
         let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
         let second = LeaseAuthority::with_session(store, 7, [2u8; 16], 50, 0);
 
-        let first_token = first
+        first
             .acquire(Some(100))
             .await
             .expect("first acquire publication");
-        let second_token = second
+        let first_session = first
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+        second
             .acquire(Some(151))
             .await
             .expect("same owner restart after expiry");
+        let second_session = second
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
 
-        assert_ne!(second_token.session_id, first_token.session_id);
+        assert_ne!(second_session, first_session);
     });
 }
 
@@ -129,16 +152,18 @@ fn same_owner_restart_before_expiry_uses_new_session() {
         let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
         let second = LeaseAuthority::with_session(store.clone(), 7, [2u8; 16], 50, 0);
 
-        let first_token = first
+        first
             .acquire(Some(100))
             .await
             .expect("first acquire publication");
-        let second_token = second
+        let first_session = store.load().await.expect("load").expect("state").session_id;
+        second
             .acquire(Some(120))
             .await
             .expect("same owner restart before expiry");
+        let second_session = store.load().await.expect("load").expect("state").session_id;
 
-        assert_ne!(second_token.session_id, first_token.session_id);
+        assert_ne!(second_session, first_session);
 
         let state = store
             .load()
@@ -155,12 +180,12 @@ fn authorize_returns_lease_lost_after_external_takeover() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 10);
-        let token = authority.acquire(Some(100)).await.expect("acquire");
+        authority.acquire(Some(100)).await.expect("acquire");
         let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 10);
         let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
         let err = authority
-            .authorize(&token, Some(151))
+            .authorize(Some(151))
             .await
             .expect_err("authorize should observe takeover");
 
@@ -173,12 +198,12 @@ fn publish_returns_lease_lost_on_session_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        let token = authority.acquire(Some(100)).await.expect("acquire");
+        authority.acquire(Some(100)).await.expect("acquire");
         let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
         let _ = takeover.acquire(Some(151)).await.expect("takeover");
 
         let err = authority
-            .publish(&token, 1)
+            .publish(1)
             .await
             .expect_err("publish should fail after takeover");
 
@@ -191,7 +216,7 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        let token = authority.acquire(Some(100)).await.expect("acquire");
+        authority.acquire(Some(100)).await.expect("acquire");
         let current = store.load().await.expect("load").expect("state");
         let next = PublicationState {
             indexed_finalized_head: 9,
@@ -203,7 +228,7 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
             .expect("mutate state");
 
         let err = authority
-            .publish(&token, 1)
+            .publish(1)
             .await
             .expect_err("publish should reject head mismatch");
 
@@ -217,14 +242,28 @@ fn same_session_acquire_after_expiry_keeps_session() {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
 
-        let first = authority.acquire(Some(100)).await.expect("first acquire");
+        authority.acquire(Some(100)).await.expect("first acquire");
+        let first_session = authority
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
         // valid_through = 100 + 49 = 149; observed 150 > 149 -> expired
-        let second = authority
+        authority
             .acquire(Some(150))
             .await
             .expect("re-acquire after expiry");
+        let second_session = authority
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
 
-        assert_eq!(second.session_id, first.session_id);
+        assert_eq!(second_session, first_session);
     });
 }
 
@@ -234,14 +273,28 @@ fn same_session_acquire_before_expiry_keeps_session() {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
 
-        let first = authority.acquire(Some(100)).await.expect("first acquire");
+        authority.acquire(Some(100)).await.expect("first acquire");
+        let first_session = authority
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
         // valid_through = 149; observed 140 <= 149 -> still valid
-        let second = authority
+        authority
             .acquire(Some(140))
             .await
             .expect("re-acquire before expiry");
+        let second_session = authority
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
 
-        assert_eq!(second.session_id, first.session_id);
+        assert_eq!(second_session, first_session);
     });
 }
 
@@ -251,10 +304,10 @@ fn authorize_returns_lease_lost_after_own_expiry() {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 10);
 
-        let token = authority.acquire(Some(100)).await.expect("acquire");
+        authority.acquire(Some(100)).await.expect("acquire");
         // valid_through = 149; observed 150 > 149 -> expired, no external takeover
         let err = authority
-            .authorize(&token, Some(150))
+            .authorize(Some(150))
             .await
             .expect_err("authorize should fail after own expiry");
 
@@ -278,11 +331,20 @@ fn lease_blocks_grants_exact_n_blocks() {
         assert!(matches!(err, Error::LeaseStillFresh));
 
         // observed 110 > 109 -> expired, takeover allowed
-        let token = second
+        second
             .acquire(Some(110))
             .await
             .expect("takeover at first expired block");
-        assert_eq!(token.session_id, [2u8; 16]);
+        assert_eq!(
+            second
+                .publication_store
+                .load()
+                .await
+                .expect("load")
+                .expect("state")
+                .session_id,
+            [2u8; 16]
+        );
     });
 }
 

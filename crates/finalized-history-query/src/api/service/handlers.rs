@@ -37,19 +37,18 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         }
 
         let mut writer = self.writer.lock().await;
-        if writer.is_none() {
+        if !*writer {
             let _ = self.startup_locked(&mut writer).await?;
         }
 
-        let token = (*writer).ok_or(Error::PublicationConflict)?;
-        match self.ingest.ingest_finalized_blocks(&blocks, token).await {
-            Ok((outcome, next_token)) => {
-                *writer = Some(next_token);
+        match self.ingest.ingest_finalized_blocks(&blocks).await {
+            Ok(outcome) => {
+                *writer = true;
                 Ok(outcome)
             }
             Err(error) => {
                 if should_clear_writer(&error) {
-                    *writer = None;
+                    *writer = false;
                 }
                 Err(error)
             }

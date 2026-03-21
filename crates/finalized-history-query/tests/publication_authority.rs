@@ -91,7 +91,7 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let first = acquire_lease_token(meta.clone(), 7, 100, 50)
+        let first_head = acquire_lease(meta.clone(), 7, 100, 50)
             .await
             .expect("bootstrap");
         let first_state = meta
@@ -100,10 +100,9 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
             .expect("load publication state")
             .expect("publication state");
         assert_eq!(first_state.owner_id, 7);
-        assert_eq!(first.session_id, first_state.session_id);
-        assert_eq!(first.indexed_finalized_head, 0);
+        assert_eq!(first_head, 0);
 
-        let second = acquire_lease_token(meta.clone(), 9, 151, 50)
+        let second_head = acquire_lease(meta.clone(), 9, 151, 50)
             .await
             .expect("takeover after expiry");
         let second_state = meta
@@ -112,8 +111,8 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
             .expect("load publication state")
             .expect("publication state");
         assert_eq!(second_state.owner_id, 9);
-        assert_eq!(second.session_id, second_state.session_id);
-        assert_eq!(second.indexed_finalized_head, 0);
+        assert_eq!(second_head, 0);
+        assert_ne!(second_state.session_id, first_state.session_id);
     });
 }
 
@@ -122,7 +121,7 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
-        let _first = acquire_lease_token(meta.clone(), 7, 100, 50)
+        let _first = acquire_lease(meta.clone(), 7, 100, 50)
             .await
             .expect("bootstrap");
         let first_state = meta
@@ -130,7 +129,7 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
             .await
             .expect("load publication state")
             .expect("publication state");
-        let err = acquire_lease_token(meta.clone(), 9, 120, 50)
+        let err = acquire_lease(meta.clone(), 9, 120, 50)
             .await
             .expect_err("fresh lease should reject standby takeover");
         assert!(matches!(err, Error::LeaseStillFresh));
@@ -222,17 +221,14 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
         let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
         let engine = IngestEngine::new(config, authority, meta, blob);
 
-        let lease = engine
+        engine
             .authority
             .acquire(controlled_observed_finalized_block())
             .await
             .expect("bootstrap");
 
         let err = engine
-            .ingest_finalized_block(
-                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
-                lease,
-            )
+            .ingest_finalized_block(&mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
             .await
             .expect_err("mid-batch lease expiry should fail with LeaseLost");
         assert!(matches!(err, Error::LeaseLost));
@@ -247,7 +243,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         let authority = LeaseAuthority::new(meta.clone(), 1, 50, 0);
         let engine = IngestEngine::new(lease_writer_config(), authority, meta.clone(), blob);
 
-        let stale_lease = engine
+        engine
             .authority
             .acquire(Some(100))
             .await
@@ -259,10 +255,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
             .expect("writer 2 takes over publication");
 
         let err = engine
-            .ingest_finalized_block(
-                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
-                stale_lease,
-            )
+            .ingest_finalized_block(&mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
             .await
             .expect_err("stale writer ingest should fail");
         assert!(matches!(err, Error::LeaseLost));

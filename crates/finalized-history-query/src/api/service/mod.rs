@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use crate::config::Config;
 use crate::core::runtime::RuntimeState;
 use crate::error::{Error, Result};
-use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteToken};
+use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::HealthReport;
@@ -22,7 +22,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     config: Config,
     state: Arc<RuntimeState>,
     allows_writes: bool,
-    writer: Arc<futures::lock::Mutex<Option<WriteToken>>>,
+    writer: Arc<futures::lock::Mutex<bool>>,
 }
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
@@ -51,7 +51,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             config,
             state: Arc::new(RuntimeState::default()),
             allows_writes,
-            writer: Arc::new(futures::lock::Mutex::new(None)),
+            writer: Arc::new(futures::lock::Mutex::new(false)),
         }
     }
 

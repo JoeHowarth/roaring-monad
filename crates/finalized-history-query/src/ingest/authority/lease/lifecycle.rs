@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::ingest::authority::{WriteAuthority, WriteToken};
+use crate::ingest::authority::WriteAuthority;
 use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};
@@ -60,34 +60,20 @@ impl<P: PublicationStore> LeaseAuthority<P> {
 }
 
 impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
-    async fn authorize(
-        &self,
-        current: &WriteToken,
-        observed_upstream_finalized_block: Option<u64>,
-    ) -> Result<WriteToken> {
+    async fn authorize(&self, observed_upstream_finalized_block: Option<u64>) -> Result<u64> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
-        if lease.as_token().session_id != current.session_id
-            || lease.as_token().indexed_finalized_head != current.indexed_finalized_head
-        {
-            return Err(Error::PublicationConflict);
-        }
 
         let renewed = self
             .renew_if_needed(lease, observed_upstream_finalized_block)
             .await?;
         *guard = Some(renewed);
-        Ok(renewed.as_token())
+        Ok(renewed.indexed_finalized_head)
     }
 
-    async fn publish(&self, current: &WriteToken, new_head: u64) -> Result<WriteToken> {
+    async fn publish(&self, new_head: u64) -> Result<()> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
-        if lease.session_id != current.session_id
-            || lease.indexed_finalized_head != current.indexed_finalized_head
-        {
-            return Err(Error::PublicationConflict);
-        }
 
         let expected_state = lease.as_state();
         let next_lease = PublicationLease {
@@ -104,7 +90,7 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
         {
             CasOutcome::Applied(_) => {
                 *guard = Some(next_lease);
-                Ok(next_lease.as_token())
+                Ok(())
             }
             CasOutcome::Failed {
                 current: Some(state),
@@ -118,11 +104,11 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
         }
     }
 
-    async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<WriteToken> {
+    async fn acquire(&self, observed_upstream_finalized_block: Option<u64>) -> Result<u64> {
         let lease = self
             .acquire_publication_with_session(observed_upstream_finalized_block)
             .await?;
         *self.lease.lock().await = Some(lease);
-        Ok(lease.as_token())
+        Ok(lease.indexed_finalized_head)
     }
 }

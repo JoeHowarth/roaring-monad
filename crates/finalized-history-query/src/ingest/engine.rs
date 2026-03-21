@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::core::state::{derive_next_log_id, load_block_identity};
 use crate::domain::types::{Block, IngestOutcome};
 use crate::error::{Error, Result};
-use crate::ingest::authority::{WriteAuthority, WriteToken};
+use crate::ingest::authority::WriteAuthority;
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
@@ -31,38 +31,27 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
         }
     }
 
-    pub async fn ingest_finalized_block(
-        &self,
-        block: &Block,
-        token: WriteToken,
-    ) -> Result<(IngestOutcome, WriteToken)> {
-        self.ingest_finalized_blocks(core::slice::from_ref(block), token)
+    pub async fn ingest_finalized_block(&self, block: &Block) -> Result<IngestOutcome> {
+        self.ingest_finalized_blocks(core::slice::from_ref(block))
             .await
     }
 
-    pub async fn ingest_finalized_blocks(
-        &self,
-        blocks: &[Block],
-        token: WriteToken,
-    ) -> Result<(IngestOutcome, WriteToken)> {
+    pub async fn ingest_finalized_blocks(&self, blocks: &[Block]) -> Result<IngestOutcome> {
         let Some(last_block) = blocks.last() else {
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
 
-        let token = self
+        let indexed_finalized_head = self
             .authority
-            .authorize(
-                &token,
-                self.config.observe_upstream_finalized_block.as_ref()(),
-            )
+            .authorize(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
 
         let tables = Tables::without_cache(
             std::sync::Arc::new(self.meta_store.clone()),
             std::sync::Arc::new(self.blob_store.clone()),
         );
-        validate_block_sequence(&tables, blocks, &token).await?;
-        let from_next_log_id = derive_next_log_id(&tables, token.indexed_finalized_head).await?;
+        validate_block_sequence(&tables, blocks, indexed_finalized_head).await?;
+        let from_next_log_id = derive_next_log_id(&tables, indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenBitmapPage>::new();
 
@@ -126,34 +115,24 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
             delete_open_bitmap_page(&self.meta_store, &page).await?;
         }
 
-        let publish_token = self
-            .authority
-            .authorize(
-                &token,
-                self.config.observe_upstream_finalized_block.as_ref()(),
-            )
+        self.authority
+            .authorize(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
-        let next_token = self
-            .authority
-            .publish(&publish_token, last_block.block_num)
-            .await?;
+        self.authority.publish(last_block.block_num).await?;
 
-        Ok((
-            IngestOutcome {
-                indexed_finalized_head: last_block.block_num,
-                written_logs: blocks.iter().map(|block| block.logs.len()).sum(),
-            },
-            next_token,
-        ))
+        Ok(IngestOutcome {
+            indexed_finalized_head: last_block.block_num,
+            written_logs: blocks.iter().map(|block| block.logs.len()).sum(),
+        })
     }
 }
 
 async fn validate_block_sequence<M: MetaStore + Clone, B: BlobStore + Clone>(
     tables: &Tables<M, B>,
     blocks: &[Block],
-    token: &WriteToken,
+    indexed_finalized_head: u64,
 ) -> Result<()> {
-    let expected_first = token.indexed_finalized_head.saturating_add(1);
+    let expected_first = indexed_finalized_head.saturating_add(1);
     if blocks[0].block_num != expected_first {
         return Err(Error::InvalidSequence {
             expected: expected_first,
@@ -161,10 +140,10 @@ async fn validate_block_sequence<M: MetaStore + Clone, B: BlobStore + Clone>(
         });
     }
 
-    let expected_parent = if token.indexed_finalized_head == 0 {
+    let expected_parent = if indexed_finalized_head == 0 {
         [0u8; 32]
     } else {
-        load_block_identity(tables, token.indexed_finalized_head)
+        load_block_identity(tables, indexed_finalized_head)
             .await?
             .ok_or(Error::NotFound)?
             .hash

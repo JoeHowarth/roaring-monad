@@ -122,12 +122,12 @@ where
     .await
 }
 
-pub async fn acquire_lease_token<P: PublicationStore + Clone>(
+pub async fn acquire_lease<P: PublicationStore + Clone>(
     publication_store: P,
     owner_id: u64,
     observed_upstream_finalized_block: u64,
     lease_blocks: u64,
-) -> finalized_history_query::Result<finalized_history_query::ingest::authority::WriteToken> {
+) -> finalized_history_query::Result<u64> {
     let authority = LeaseAuthority::new(publication_store, owner_id, lease_blocks, 0);
     authority
         .acquire(Some(observed_upstream_finalized_block))

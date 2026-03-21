@@ -94,13 +94,6 @@ impl PublicationLease {
         }
     }
 
-    fn as_token(self) -> crate::ingest::authority::WriteToken {
-        crate::ingest::authority::WriteToken {
-            session_id: self.session_id,
-            indexed_finalized_head: self.indexed_finalized_head,
-        }
-    }
-
     fn needs_renewal(
         self,
         observed_upstream_finalized_block: u64,

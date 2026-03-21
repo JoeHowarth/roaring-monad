@@ -1,6 +1,6 @@
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
-use crate::ingest::authority::{WriteAuthority, WriteToken};
+use crate::ingest::authority::WriteAuthority;
 use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -37,60 +37,49 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         result
     }
 
-    pub(super) async fn startup_locked(
-        &self,
-        writer: &mut Option<WriteToken>,
-    ) -> Result<StartupPlan>
+    pub(super) async fn startup_locked(&self, writer: &mut bool) -> Result<StartupPlan>
     where
         M: PublicationStore,
     {
         debug_assert!(self.allows_writes);
-        if let Some(token) = *writer {
+        if *writer {
             let result = self
                 .ingest
                 .authority
-                .authorize(
-                    &token,
-                    self.config.observe_upstream_finalized_block.as_ref()(),
-                )
+                .authorize(self.config.observe_upstream_finalized_block.as_ref()())
                 .await;
-            let token = match result {
-                Ok(token) => token,
+            let indexed_finalized_head = match result {
+                Ok(indexed_finalized_head) => indexed_finalized_head,
                 Err(error) => {
                     if should_clear_writer(&error) {
-                        *writer = None;
+                        *writer = false;
                     }
                     return Err(error);
                 }
             };
-            *writer = Some(token);
-            match self.recover_and_plan(token).await {
+            match self.recover_and_plan(indexed_finalized_head).await {
                 Ok(plan) => return Ok(plan),
                 Err(error) => {
                     if should_clear_writer(&error) {
-                        *writer = None;
+                        *writer = false;
                     }
                     return Err(error);
                 }
             }
         }
 
-        let token = self
+        let indexed_finalized_head = self
             .ingest
             .authority
             .acquire(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
-        let plan = self.recover_and_plan(token).await?;
-        *writer = Some(token);
+        let plan = self.recover_and_plan(indexed_finalized_head).await?;
+        *writer = true;
         Ok(plan)
     }
 
-    async fn recover_and_plan(&self, token: WriteToken) -> Result<StartupPlan> {
-        let next_log_id = derive_next_log_id(self.tables(), token.indexed_finalized_head).await?;
-        Ok(build_startup_plan(
-            token.indexed_finalized_head,
-            next_log_id,
-            0,
-        ))
+    async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
+        let next_log_id = derive_next_log_id(self.tables(), indexed_finalized_head).await?;
+        Ok(build_startup_plan(indexed_finalized_head, next_log_id, 0))
     }
 }

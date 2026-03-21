@@ -254,7 +254,7 @@ The crate intentionally does not implement:
 ### Pass 5: Ingest orchestration
 
 25. `src/ingest/engine.rs` — ingest orchestrator
-26. `src/ingest/authority.rs` — `WriteToken`, `WriteAuthority` contract
+26. `src/ingest/authority.rs` — `WriteAuthority` contract
 27. `src/ingest/authority/lease/` — lease-backed multi-writer authority
 28. `src/startup.rs` — startup view and next-position derivation
 
