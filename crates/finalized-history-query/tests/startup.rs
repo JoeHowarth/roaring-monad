@@ -8,6 +8,7 @@ use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
+use finalized_history_query::family::Families;
 use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
 use finalized_history_query::logs::table_specs::BlockRecordSpec;
 use finalized_history_query::logs::types::BlockRecord;
@@ -183,7 +184,7 @@ fn startup_plan_should_not_take_publication_ownership() {
             blob.clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let _ = startup_plan(&runtime, &publication_store, 0)
+        let _ = startup_plan(&runtime, &publication_store, &Families::default(), 0)
             .await
             .expect("startup plan should succeed");
 

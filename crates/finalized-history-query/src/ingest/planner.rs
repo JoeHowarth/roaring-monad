@@ -1,4 +1,4 @@
-use crate::logs::types::Block;
+use crate::block::FinalizedBlock;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamAppendStats {
@@ -6,7 +6,7 @@ pub struct StreamAppendStats {
     pub topics: usize,
 }
 
-pub fn estimate_stream_appends(block: &Block) -> StreamAppendStats {
+pub fn estimate_stream_appends(block: &FinalizedBlock) -> StreamAppendStats {
     let addressed = block.logs.len();
     let topics = block
         .logs
@@ -19,11 +19,12 @@ pub fn estimate_stream_appends(block: &Block) -> StreamAppendStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logs::types::{Block, Log};
+    use crate::block::FinalizedBlock;
+    use crate::logs::types::Log;
 
     #[test]
     fn estimate_counts_address_and_topics() {
-        let b = Block {
+        let b = FinalizedBlock {
             block_num: 1,
             block_hash: [1; 32],
             parent_hash: [0; 32],

@@ -79,7 +79,7 @@ This crate executes queries and ingest. It does not format JSON-RPC responses.
 
 The shared layer owns:
 
-- the explicit family boundary used by generic startup/ingest machinery
+- the explicit family boundary and concrete family registry used by startup and ingest
 - the shared finalized block envelope used by concrete ingest entrypoints
 - the long-lived runtime that shares store handles and typed tables across query/startup/ingest
 - the multi-family ingest coordinator that validates sequence once and publishes once per batch

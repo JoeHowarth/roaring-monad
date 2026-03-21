@@ -5,12 +5,13 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::core::ids::LogId;
-use finalized_history_query::logs::types::{Block, Log};
+use finalized_history_query::family::Families;
+use finalized_history_query::logs::types::Log;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
-use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
+use finalized_history_query::{Clause, FinalizedBlock, LeaseAuthority, LogFilter};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -25,8 +26,8 @@ fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_
     }
 }
 
-fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
-    Block {
+fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
+    FinalizedBlock {
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
@@ -37,7 +38,7 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
 }
 
 fn naive_query(
-    blocks: &[Block],
+    blocks: &[FinalizedBlock],
     from_block: u64,
     to_block: u64,
     filter: &LogFilter,
@@ -213,7 +214,7 @@ fn recovery_startup_smoke_check() {
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
         let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta));
-        let rec = startup_plan(&runtime, &publication_store, 0)
+        let rec = startup_plan(&runtime, &publication_store, &Families::default(), 0)
             .await
             .expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);

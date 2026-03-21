@@ -3,22 +3,22 @@ use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
-use crate::family::{Families, Family, FamilyBlockWrites};
+use crate::family::{Families, FamilyBlockWrites};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
-pub struct IngestEngine<A: WriteAuthority, L, T, R> {
+pub struct IngestEngine<A: WriteAuthority> {
     pub config: Config,
     pub authority: A,
-    pub families: Families<L, T, R>,
+    pub families: Families,
 }
 
-impl<A, L, T, R> IngestEngine<A, L, T, R>
+impl<A> IngestEngine<A>
 where
     A: WriteAuthority,
 {
-    pub fn new(config: Config, authority: A, families: Families<L, T, R>) -> Self {
+    pub fn new(config: Config, authority: A, families: Families) -> Self {
         Self {
             config,
             authority,
@@ -34,9 +34,6 @@ where
     where
         M: MetaStore,
         B: BlobStore,
-        L: Family<M, B>,
-        T: Family<M, B>,
-        R: Family<M, B>,
     {
         self.ingest_finalized_blocks(runtime, core::slice::from_ref(block))
             .await
@@ -50,9 +47,6 @@ where
     where
         M: MetaStore,
         B: BlobStore,
-        L: Family<M, B>,
-        T: Family<M, B>,
-        R: Family<M, B>,
     {
         if blocks.is_empty() {
             return Err(Error::InvalidParams("ingest requires at least one block"));

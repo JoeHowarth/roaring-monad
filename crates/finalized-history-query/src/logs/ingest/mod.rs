@@ -16,6 +16,7 @@ pub use stream::{
 
 #[cfg(test)]
 mod tests {
+    use crate::block::FinalizedBlock;
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::logs::codec::validate_log;
@@ -34,7 +35,6 @@ mod tests {
         BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
     };
-    use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
@@ -57,8 +57,8 @@ mod tests {
         }
     }
 
-    fn sample_block(block_num: u64, seed: u8, logs: Vec<Log>) -> Block {
-        Block {
+    fn sample_block(block_num: u64, seed: u8, logs: Vec<Log>) -> FinalizedBlock {
+        FinalizedBlock {
             block_num,
             block_hash: [seed; 32],
             parent_hash: [seed.wrapping_add(1); 32],

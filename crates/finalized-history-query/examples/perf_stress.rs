@@ -8,12 +8,12 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::logs::types::{Block, Log};
+use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
-use finalized_history_query::{Clause, LogFilter, WriteAuthority};
+use finalized_history_query::{Clause, FinalizedBlock, LogFilter, WriteAuthority};
 use futures::executor::block_on;
 
 fn static_observed_finalized_block() -> Option<u64> {
@@ -32,8 +32,8 @@ fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_
     }
 }
 
-fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
-    Block {
+fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
+    FinalizedBlock {
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,

@@ -1,12 +1,13 @@
 use bytes::Bytes;
 
+use crate::block::FinalizedBlock;
 use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
 use crate::domain::table_specs::PointTableSpec;
 use crate::error::{Error, Result};
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{BlockHashIndexSpec, LogDirSubBucketSpec};
-use crate::logs::types::{Block, BlockLogHeader, BlockRecord, DirByBlock, Log};
+use crate::logs::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::store::traits::{BlobStore, MetaStore, PutCond};
 use crate::tables::Tables;
 
@@ -31,7 +32,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
 pub async fn persist_log_block_record<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     meta_store: &M,
-    block: &Block,
+    block: &FinalizedBlock,
     first_log_id: u64,
 ) -> Result<()> {
     let block_record = BlockRecord {

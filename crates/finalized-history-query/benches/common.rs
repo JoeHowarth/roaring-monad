@@ -25,14 +25,14 @@ use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
     self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
 };
-use finalized_history_query::logs::types::{Block, BlockLogHeader, BlockRecord, DirBucket, Log};
+use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord, DirBucket, Log};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
 use finalized_history_query::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, TableId};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
-    Clause, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
+    Clause, FinalizedBlock, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
 };
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
@@ -272,8 +272,8 @@ pub fn mk_log(
     }
 }
 
-pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
-    Block {
+pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
+    FinalizedBlock {
         block_num,
         block_hash: bench_hash(block_num),
         parent_hash,

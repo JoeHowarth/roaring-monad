@@ -1,22 +1,28 @@
 use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::error::Result;
+use crate::logs::family::LogsFamily;
+use crate::logs::types::LogSequencingState;
 use crate::runtime::Runtime;
 use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::traces::family::TracesFamily;
+use crate::traces::types::TraceStartupState;
+use crate::txs::family::TxsFamily;
+use crate::txs::types::TxStartupState;
 
 #[derive(Debug, Clone)]
-pub struct StartupState<L, T, R> {
+pub struct StartupState {
     pub head_state: FinalizedHeadState,
-    pub family_states: FamilyStates<L, T, R>,
+    pub family_states: FamilyStates,
     pub warm_streams: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct FamilyStates<L, T, R> {
-    pub logs: L,
-    pub txs: T,
-    pub traces: R,
+pub struct FamilyStates {
+    pub logs: LogSequencingState,
+    pub txs: TxStartupState,
+    pub traces: TraceStartupState,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -53,47 +59,22 @@ pub trait Family<M: MetaStore, B: BlobStore>: Send + Sync {
     ) -> Result<usize>;
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Families<L, T, R> {
-    pub logs: L,
-    pub txs: T,
-    pub traces: R,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Families {
+    pub logs: LogsFamily,
+    pub txs: TxsFamily,
+    pub traces: TracesFamily,
 }
 
-impl<L, T, R> Families<L, T, R> {
-    pub const fn new(logs: L, txs: T, traces: R) -> Self {
-        Self { logs, txs, traces }
-    }
-}
-
-impl Default
-    for Families<
-        crate::logs::family::LogsFamily,
-        crate::txs::family::TxsFamily,
-        crate::traces::family::TracesFamily,
-    >
-{
-    fn default() -> Self {
-        Self::new(
-            crate::logs::family::LogsFamily,
-            crate::txs::family::TxsFamily,
-            crate::traces::family::TracesFamily,
-        )
-    }
-}
-
-impl<L, T, R> Families<L, T, R> {
+impl Families {
     pub async fn load_startup_state<M, B>(
         &self,
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
-    ) -> Result<FamilyStates<L::State, T::State, R::State>>
+    ) -> Result<FamilyStates>
     where
         M: MetaStore,
         B: BlobStore,
-        L: Family<M, B>,
-        T: Family<M, B>,
-        R: Family<M, B>,
     {
         Ok(FamilyStates {
             logs: self
@@ -115,15 +96,12 @@ impl<L, T, R> Families<L, T, R> {
         &self,
         config: &Config,
         runtime: &Runtime<M, B>,
-        states: &mut FamilyStates<L::State, T::State, R::State>,
+        states: &mut FamilyStates,
         block: &FinalizedBlock,
     ) -> Result<FamilyBlockWrites>
     where
         M: MetaStore,
         B: BlobStore,
-        L: Family<M, B>,
-        T: Family<M, B>,
-        R: Family<M, B>,
     {
         Ok(FamilyBlockWrites {
             logs: self
@@ -142,19 +120,16 @@ impl<L, T, R> Families<L, T, R> {
     }
 }
 
-pub async fn startup_state<M, P, B, L, T, R>(
+pub async fn startup_state<M, P, B>(
     runtime: &Runtime<M, B>,
     publication_store: &P,
-    families: &Families<L, T, R>,
+    families: &Families,
     warm_streams: usize,
-) -> Result<StartupState<L::State, T::State, R::State>>
+) -> Result<StartupState>
 where
     M: MetaStore,
     P: PublicationStore,
     B: BlobStore,
-    L: Family<M, B>,
-    T: Family<M, B>,
-    R: Family<M, B>,
 {
     let head_state = publication_store.load_finalized_head_state().await?;
     let family_states = families

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use finalized_history_query::Clause;
+use finalized_history_query::FinalizedBlock;
 use finalized_history_query::LeaseAuthority;
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
@@ -11,6 +12,7 @@ use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use finalized_history_query::domain::types::PublicationState;
 use finalized_history_query::error::{Error, Result};
+use finalized_history_query::family::Families;
 use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -18,7 +20,7 @@ use finalized_history_query::logs::keys::{
 use finalized_history_query::logs::table_specs::{
     self, BitmapPageMetaSpec, BlockRecordSpec, LogDirSubBucketSpec,
 };
-use finalized_history_query::logs::types::{Block, BlockRecord, Log};
+use finalized_history_query::logs::types::{BlockRecord, Log};
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -261,8 +263,8 @@ fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_
     }
 }
 
-fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
-    Block {
+fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
+    FinalizedBlock {
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
@@ -578,9 +580,14 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             takeover_writer.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(&runtime, &MetaPublicationStore::new(Arc::clone(&meta)), 0)
-            .await
-            .expect("post conflict startup plan");
+        let plan = startup_plan(
+            &runtime,
+            &MetaPublicationStore::new(Arc::clone(&meta)),
+            &Families::default(),
+            0,
+        )
+        .await
+        .expect("post conflict startup plan");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);
         let items = query_range(&takeover_writer, 2, 2).await;
         assert_eq!(items.len(), 4);

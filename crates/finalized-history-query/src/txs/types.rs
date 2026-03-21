@@ -1,4 +1,4 @@
-pub type Hash32 = [u8; 32];
+use crate::primitives::Hash32;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Tx {

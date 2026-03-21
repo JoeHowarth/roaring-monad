@@ -10,7 +10,7 @@ use finalized_history_query::domain::keys::PUBLICATION_STATE_TABLE;
 use finalized_history_query::domain::types::PublicationState;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::logs::table_specs::{BlobTableSpec, BlockLogBlobSpec};
-use finalized_history_query::logs::types::{Block, Log};
+use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
@@ -18,7 +18,9 @@ use finalized_history_query::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
     TableId,
 };
-use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority, WriteSession};
+use finalized_history_query::{
+    Clause, Error, FinalizedBlock, LogFilter, WriteAuthority, WriteSession,
+};
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
 
@@ -41,8 +43,8 @@ pub fn mk_log(
     }
 }
 
-pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Block {
-    Block {
+pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
+    FinalizedBlock {
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,

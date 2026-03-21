@@ -1,4 +1,5 @@
-use crate::logs::types::{Hash32, Log};
+use crate::logs::types::Log;
+use crate::primitives::Hash32;
 use crate::traces::types::Trace;
 use crate::txs::types::Tx;
 
@@ -11,5 +12,3 @@ pub struct FinalizedBlock {
     pub txs: Vec<Tx>,
     pub traces: Vec<Trace>,
 }
-
-pub type Block = FinalizedBlock;

@@ -1,8 +1,7 @@
-pub use crate::block::{Block, FinalizedBlock};
 use crate::core::ids::LogId;
 pub use crate::domain::types::PublicationState;
+pub use crate::primitives::Hash32;
 
-pub type Hash32 = [u8; 32];
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];
 

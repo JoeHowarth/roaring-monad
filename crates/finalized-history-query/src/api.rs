@@ -6,18 +6,15 @@ use crate::error::{Error, Result};
 use crate::family::Families;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
-use crate::logs::family::LogsFamily;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::Log;
 use crate::runtime::Runtime;
 pub use crate::startup::StartupPlan;
-use crate::startup::startup_plan;
+use crate::startup::{startup_plan, startup_plan_at_head};
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::BytesCacheMetrics;
-use crate::traces::family::TracesFamily;
-use crate::txs::family::TxsFamily;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryLogsRequest {
@@ -49,7 +46,7 @@ pub struct HealthReport {
 }
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A, LogsFamily, TxsFamily, TracesFamily>,
+    pub ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
     query: LogsQueryEngine,
     runtime: Runtime<M, B>,
@@ -128,7 +125,13 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
-            return startup_plan(self.runtime(), &self.publication_store, 0).await;
+            return startup_plan(
+                self.runtime(),
+                &self.publication_store,
+                &self.ingest.families,
+                0,
+            )
+            .await;
         }
 
         self.startup_locked().await
@@ -166,20 +169,13 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        let family_states = self
-            .ingest
-            .families
-            .load_startup_state(self.runtime(), indexed_finalized_head)
-            .await?;
-        Ok(StartupPlan {
-            head_state: crate::store::publication::FinalizedHeadState {
-                indexed_finalized_head,
-            },
-            log_state: family_states.logs,
-            tx_state: family_states.txs,
-            trace_state: family_states.traces,
-            warm_streams: 0,
-        })
+        startup_plan_at_head(
+            self.runtime(),
+            &self.ingest.families,
+            indexed_finalized_head,
+            0,
+        )
+        .await
     }
 }
 

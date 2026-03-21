@@ -2,16 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roaring::RoaringBitmap;
 
+use crate::block::FinalizedBlock;
 use crate::core::ids::LogId;
 use crate::error::Result;
 use crate::logs::table_specs;
-use crate::logs::types::Block;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 use crate::tables::Tables;
 
-pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<String, Vec<u32>> {
+pub fn collect_stream_appends(
+    block: &FinalizedBlock,
+    first_log_id: u64,
+) -> BTreeMap<String, Vec<u32>> {
     let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
 
     for (index, log) in block.logs.iter().enumerate() {
@@ -49,7 +52,7 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
 
 pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
-    block: &Block,
+    block: &FinalizedBlock,
     first_log_id: u64,
 ) -> Result<Vec<(String, u32)>> {
     let mut touched_pages = BTreeSet::<(String, u32)>::new();
