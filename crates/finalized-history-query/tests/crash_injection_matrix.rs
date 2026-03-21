@@ -376,7 +376,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             meta.create_if_absent(&PublicationState {
                 owner_id: 1,
                 session_id: [1u8; 16],
-                epoch: 1,
                 indexed_finalized_head: 1,
                 lease_valid_through_block: 0,
             })

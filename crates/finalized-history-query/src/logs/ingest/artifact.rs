@@ -16,9 +16,7 @@ pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
     key: &[u8],
     value: Bytes,
-    epoch: u64,
 ) -> Result<()> {
-    let _ = epoch;
     let _ = meta_store.put(key, value, PutCond::Any).await?;
     Ok(())
 }
@@ -38,7 +36,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     block_num: u64,
     logs: &[Log],
     _first_log_id: u64,
-    epoch: u64,
 ) -> Result<()> {
     if logs.is_empty() {
         return Ok(());
@@ -50,7 +47,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
         meta_store,
         &block_log_header_key(block_num),
         header.encode(),
-        epoch,
     )
     .await?;
     Ok(())
@@ -60,7 +56,6 @@ pub async fn persist_log_block_record<M: MetaStore>(
     meta_store: &M,
     block: &Block,
     first_log_id: u64,
-    epoch: u64,
 ) -> Result<()> {
     let block_record = BlockRecord {
         block_hash: block.block_hash,
@@ -73,7 +68,6 @@ pub async fn persist_log_block_record<M: MetaStore>(
         meta_store,
         &block_record_key(block.block_num),
         block_record.encode(),
-        epoch,
     )
     .await?;
 
@@ -81,7 +75,6 @@ pub async fn persist_log_block_record<M: MetaStore>(
         meta_store,
         &block_hash_index_key(&block.block_hash),
         encode_u64(block.block_num),
-        epoch,
     )
     .await?;
 
@@ -93,7 +86,6 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     block_num: u64,
     first_log_id: u64,
     count: u32,
-    epoch: u64,
 ) -> Result<()> {
     let fragment = DirByBlock {
         block_num,
@@ -114,7 +106,6 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
             meta_store,
             &log_dir_by_block_key(sub_bucket_start, block_num),
             encoded_fragment.clone(),
-            epoch,
         )
         .await?;
         if sub_bucket_start == last_sub_bucket_start {

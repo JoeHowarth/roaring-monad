@@ -23,7 +23,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
             meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 1, 0,
+                1, [1u8; 16], 1, 0,
             ))
             .await
             .expect("seed publication state"),
@@ -67,7 +67,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         assert!(matches!(
             meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 1, 0,
+                1, [1u8; 16], 1, 0,
             ))
             .await
             .expect("seed publication state"),
@@ -127,7 +127,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
             meta.create_if_absent(&seeded_publication_state_with_valid_through(
-                1, [1u8; 16], 1, 1, 0,
+                1, [1u8; 16], 1, 0,
             ))
             .await
             .expect("seed publication state"),

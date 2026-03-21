@@ -219,7 +219,6 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
             blob_store,
             &page.stream_id,
             page.page_start_local,
-            0,
         )
         .await?;
         delete_open_bitmap_page(meta_store, &page).await?;

@@ -16,21 +16,19 @@ pub async fn compact_sealed_directory<M: MetaStore>(
     first_log_id: u64,
     count: u32,
     next_log_id: u64,
-    epoch: u64,
 ) -> Result<()> {
     let from_next_log_id = first_log_id;
     if count == 0 || next_log_id <= from_next_log_id {
         return Ok(());
     }
 
-    compact_newly_sealed_directory(meta_store, from_next_log_id, next_log_id, epoch).await
+    compact_newly_sealed_directory(meta_store, from_next_log_id, next_log_id).await
 }
 
 pub async fn compact_newly_sealed_directory<M: MetaStore>(
     meta_store: &M,
     from_next_log_id: u64,
     next_log_id: u64,
-    epoch: u64,
 ) -> Result<()> {
     if next_log_id <= from_next_log_id {
         return Ok(());
@@ -38,11 +36,11 @@ pub async fn compact_newly_sealed_directory<M: MetaStore>(
 
     for sub_bucket_start in newly_sealed_directory_sub_bucket_starts(from_next_log_id, next_log_id)
     {
-        compact_directory_sub_bucket(meta_store, sub_bucket_start, epoch).await?;
+        compact_directory_sub_bucket(meta_store, sub_bucket_start).await?;
     }
 
     for bucket_start in newly_sealed_directory_bucket_starts(from_next_log_id, next_log_id) {
-        compact_directory_bucket(meta_store, bucket_start, epoch).await?;
+        compact_directory_bucket(meta_store, bucket_start).await?;
     }
 
     Ok(())
@@ -100,7 +98,6 @@ fn sealed_directory_ranges(
 async fn compact_directory_sub_bucket<M: MetaStore>(
     meta_store: &M,
     sub_bucket_start: u64,
-    epoch: u64,
 ) -> Result<()> {
     let page = meta_store
         .list_prefix(&log_dir_by_block_prefix(sub_bucket_start), None, usize::MAX)
@@ -135,17 +132,12 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
         meta_store,
         &log_dir_sub_bucket_key(sub_bucket_start),
         bucket.encode(),
-        epoch,
     )
     .await?;
     Ok(())
 }
 
-async fn compact_directory_bucket<M: MetaStore>(
-    meta_store: &M,
-    bucket_start: u64,
-    epoch: u64,
-) -> Result<()> {
+async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u64) -> Result<()> {
     let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
     let mut boundaries = BTreeMap::<u64, u64>::new();
@@ -211,7 +203,6 @@ async fn compact_directory_bucket<M: MetaStore>(
             first_log_ids,
         }
         .encode(),
-        epoch,
     )
     .await?;
     Ok(())

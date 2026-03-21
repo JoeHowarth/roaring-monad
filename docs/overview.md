@@ -133,7 +133,6 @@ class QueryPage[T]:
 
 class FinalizedHeadState:
     indexed_finalized_head: int
-    publication_epoch: int
 
 
 class BlockIdentity:
@@ -164,7 +163,7 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 
 Shared metadata:
 
-- `publication_state -> PublicationState { owner_id, session_id, epoch, indexed_finalized_head, lease_valid_through_block }`
+- `publication_state -> PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
 - `block_record/<block_num> -> BlockRecord { block_hash, parent_hash, first_log_id, count }`
 - `block_hash_index/<block_hash> -> block_num`
 - `block_log_header/<block_num> -> BlockLogHeader { offsets }`

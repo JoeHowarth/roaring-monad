@@ -21,7 +21,6 @@ pub async fn startup_plan<M: MetaStore + PublicationStore, B: BlobStore>(
     let next_log_id = derive_next_log_id(tables, head_state.indexed_finalized_head).await?;
     Ok(build_startup_plan(
         head_state.indexed_finalized_head,
-        head_state.publication_epoch,
         next_log_id,
         warm_streams,
     ))
@@ -29,14 +28,12 @@ pub async fn startup_plan<M: MetaStore + PublicationStore, B: BlobStore>(
 
 pub(crate) fn build_startup_plan(
     indexed_finalized_head: u64,
-    publication_epoch: u64,
     next_log_id: u64,
     warm_streams: usize,
 ) -> StartupPlan {
     StartupPlan {
         head_state: FinalizedHeadState {
             indexed_finalized_head,
-            publication_epoch,
         },
         log_state: LogSequencingState {
             next_log_id: LogId::new(next_log_id),

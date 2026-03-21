@@ -69,7 +69,6 @@ impl<P> LeaseAuthority<P> {
 struct PublicationLease {
     owner_id: u64,
     session_id: SessionId,
-    epoch: u64,
     indexed_finalized_head: u64,
     lease_valid_through_block: u64,
 }
@@ -79,7 +78,6 @@ impl From<crate::domain::types::PublicationState> for PublicationLease {
         Self {
             owner_id: value.owner_id,
             session_id: value.session_id,
-            epoch: value.epoch,
             indexed_finalized_head: value.indexed_finalized_head,
             lease_valid_through_block: value.lease_valid_through_block,
         }
@@ -91,7 +89,6 @@ impl PublicationLease {
         crate::domain::types::PublicationState {
             owner_id: self.owner_id,
             session_id: self.session_id,
-            epoch: self.epoch,
             indexed_finalized_head: self.indexed_finalized_head,
             lease_valid_through_block: self.lease_valid_through_block,
         }
@@ -99,7 +96,7 @@ impl PublicationLease {
 
     fn as_token(self) -> crate::ingest::authority::WriteToken {
         crate::ingest::authority::WriteToken {
-            epoch: self.epoch,
+            session_id: self.session_id,
             indexed_finalized_head: self.indexed_finalized_head,
         }
     }

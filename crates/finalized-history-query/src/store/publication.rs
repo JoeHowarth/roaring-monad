@@ -12,7 +12,6 @@ pub enum CasOutcome<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizedHeadState {
     pub indexed_finalized_head: u64,
-    pub publication_epoch: u64,
 }
 
 #[allow(async_fn_in_trait)]
@@ -24,7 +23,6 @@ pub trait PublicationStore: Send + Sync {
             Some(state) => state.finalized_head_state(),
             None => FinalizedHeadState {
                 indexed_finalized_head: 0,
-                publication_epoch: 0,
             },
         })
     }

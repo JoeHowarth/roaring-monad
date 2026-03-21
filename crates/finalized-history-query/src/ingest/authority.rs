@@ -1,3 +1,4 @@
+use crate::domain::types::SessionId;
 use crate::error::Result;
 
 pub mod lease;
@@ -8,7 +9,7 @@ pub use read_only::ReadOnlyAuthority;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteToken {
-    pub epoch: u64,
+    pub session_id: SessionId,
     pub indexed_finalized_head: u64,
 }
 

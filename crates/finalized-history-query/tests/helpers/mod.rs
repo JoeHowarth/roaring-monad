@@ -60,13 +60,11 @@ pub fn indexed_address_filter(address: u8) -> LogFilter {
 pub fn seeded_publication_state(
     owner_id: u64,
     session_id: [u8; 16],
-    epoch: u64,
     indexed_finalized_head: u64,
 ) -> PublicationState {
     seeded_publication_state_with_valid_through(
         owner_id,
         session_id,
-        epoch,
         indexed_finalized_head,
         u64::MAX,
     )
@@ -75,14 +73,12 @@ pub fn seeded_publication_state(
 pub fn seeded_publication_state_with_valid_through(
     owner_id: u64,
     session_id: [u8; 16],
-    epoch: u64,
     indexed_finalized_head: u64,
     lease_valid_through_block: u64,
 ) -> PublicationState {
     PublicationState {
         owner_id,
         session_id,
-        epoch,
         indexed_finalized_head,
         lease_valid_through_block,
     }

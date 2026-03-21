@@ -15,7 +15,7 @@ This document describes the published artifact model and the block-keyed log-pay
 All read-path data artifacts are treated as immutable once published. The
 only shared mutable state is:
 
-- `publication_state` — ownership, epoch, indexed finalized head
+- `publication_state` — ownership session, lease validity, indexed finalized head
 - `open_bitmap_page/*` — write/recovery inventory markers
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.

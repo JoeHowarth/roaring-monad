@@ -49,7 +49,6 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
 
-        let prior_epoch = token.epoch;
         let token = self
             .authority
             .authorize(
@@ -57,7 +56,6 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
                 self.config.observe_upstream_finalized_block.as_ref()(),
             )
             .await?;
-        debug_assert_eq!(prior_epoch, token.epoch);
 
         let tables = Tables::without_cache(
             std::sync::Arc::new(self.meta_store.clone()),
@@ -67,7 +65,6 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
         let from_next_log_id = derive_next_log_id(&tables, token.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenBitmapPage>::new();
-        let epoch = token.epoch;
 
         for block in blocks {
             persist_log_artifacts(
@@ -77,26 +74,19 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
                 block.block_num,
                 &block.logs,
                 next_log_id,
-                epoch,
             )
             .await?;
-            persist_log_block_record(&self.meta_store, block, next_log_id, epoch).await?;
+            persist_log_block_record(&self.meta_store, block, next_log_id).await?;
             persist_log_dir_by_block(
                 &self.meta_store,
                 block.block_num,
                 next_log_id,
                 block.logs.len() as u32,
-                epoch,
             )
             .await?;
-            let touched_pages = persist_stream_fragments(
-                &self.meta_store,
-                &self.blob_store,
-                block,
-                next_log_id,
-                epoch,
-            )
-            .await?;
+            let touched_pages =
+                persist_stream_fragments(&self.meta_store, &self.blob_store, block, next_log_id)
+                    .await?;
             opened_during.extend(touched_pages.into_iter().filter_map(
                 |(stream_id, page_start)| {
                     parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
@@ -116,8 +106,7 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
             mark_open_bitmap_page_if_absent(&self.meta_store, page).await?;
         }
 
-        compact_newly_sealed_directory(&self.meta_store, from_next_log_id, next_log_id, epoch)
-            .await?;
+        compact_newly_sealed_directory(&self.meta_store, from_next_log_id, next_log_id).await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
             &self.meta_store,
@@ -132,7 +121,6 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
                 &self.blob_store,
                 &page.stream_id,
                 page.page_start_local,
-                epoch,
             )
             .await?;
             delete_open_bitmap_page(&self.meta_store, &page).await?;
@@ -145,7 +133,6 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
                 self.config.observe_upstream_finalized_block.as_ref()(),
             )
             .await?;
-        debug_assert_eq!(token.epoch, publish_token.epoch);
         let next_token = self
             .authority
             .publish(&publish_token, last_block.block_num)

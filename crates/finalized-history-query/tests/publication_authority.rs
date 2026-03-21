@@ -55,7 +55,6 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         )
         .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 1);
-        assert_eq!(publication_state.epoch, 1);
         assert_eq!(publication_state.indexed_finalized_head, 1);
         assert_eq!(
             publication_state.lease_valid_through_block,
@@ -88,7 +87,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
 }
 
 #[test]
-fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
+fn acquire_publication_bootstraps_and_takeover_switches_session() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
 
@@ -101,7 +100,7 @@ fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
             .expect("load publication state")
             .expect("publication state");
         assert_eq!(first_state.owner_id, 7);
-        assert_eq!(first.epoch, 1);
+        assert_eq!(first.session_id, first_state.session_id);
         assert_eq!(first.indexed_finalized_head, 0);
 
         let second = acquire_lease_token(meta.clone(), 9, 151, 50)
@@ -113,7 +112,7 @@ fn acquire_publication_bootstraps_and_takeover_increments_epoch() {
             .expect("load publication state")
             .expect("publication state");
         assert_eq!(second_state.owner_id, 9);
-        assert_eq!(second.epoch, 2);
+        assert_eq!(second.session_id, second_state.session_id);
         assert_eq!(second.indexed_finalized_head, 0);
     });
 }
@@ -140,7 +139,6 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
         let publication_state = publication_state.expect("publication state");
         assert_eq!(publication_state.owner_id, first_state.owner_id);
         assert_eq!(publication_state.session_id, first_state.session_id);
-        assert_eq!(publication_state.epoch, first_state.epoch);
     });
 }
 
@@ -150,7 +148,7 @@ fn readers_use_only_publication_state() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 4, 3))
+            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
                 .await
                 .expect("create publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
@@ -178,7 +176,6 @@ fn readers_use_only_publication_state() {
             .await
             .expect("load finalized head state");
         assert_eq!(state.indexed_finalized_head, 3);
-        assert_eq!(state.publication_epoch, 4);
     });
 }
 
@@ -188,7 +185,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
         let meta = InMemoryMetaStore::default();
         meta.put(
             PUBLICATION_STATE_KEY,
-            seeded_publication_state(1, [1u8; 16], 2, 3).encode(),
+            seeded_publication_state(1, [1u8; 16], 3).encode(),
             PutCond::Any,
         )
         .await

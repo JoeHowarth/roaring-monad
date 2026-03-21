@@ -21,7 +21,6 @@ impl<P: PublicationStore> LeaseAuthority<P> {
                 let initial = PublicationState {
                     owner_id: self.owner_id,
                     session_id: self.session_id,
-                    epoch: 1,
                     indexed_finalized_head: 0,
                     lease_valid_through_block: self
                         .lease_valid_through_block(observed_upstream_finalized_block),
@@ -46,7 +45,6 @@ impl<P: PublicationStore> LeaseAuthority<P> {
                 let next = PublicationState {
                     owner_id: self.owner_id,
                     session_id: self.session_id,
-                    epoch: current.epoch,
                     indexed_finalized_head: current.indexed_finalized_head,
                     lease_valid_through_block: self
                         .lease_valid_through_block(observed_upstream_finalized_block),
@@ -82,7 +80,6 @@ impl<P: PublicationStore> LeaseAuthority<P> {
             let next = PublicationState {
                 owner_id: self.owner_id,
                 session_id: self.session_id,
-                epoch: current.epoch.saturating_add(1),
                 indexed_finalized_head: current.indexed_finalized_head,
                 lease_valid_through_block: self
                     .lease_valid_through_block(observed_upstream_finalized_block),

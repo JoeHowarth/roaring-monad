@@ -67,7 +67,6 @@ fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
         let store = BootstrapRaceStore::new(PublicationState {
             owner_id: 9,
             session_id: [9u8; 16],
-            epoch: 1,
             indexed_finalized_head: 0,
             lease_valid_through_block: 500,
         });
@@ -78,7 +77,7 @@ fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
             .await
             .expect("acquire publication");
 
-        assert_eq!(lease.epoch, 2);
+        assert_eq!(lease.session_id, [7u8; 16]);
         assert_eq!(lease.indexed_finalized_head, 0);
     });
 }
@@ -104,7 +103,7 @@ fn fresh_lease_rejects_takeover_until_expiry() {
 }
 
 #[test]
-fn same_owner_restart_after_expiry_bumps_epoch_and_session() {
+fn same_owner_restart_after_expiry_uses_new_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
@@ -119,12 +118,12 @@ fn same_owner_restart_after_expiry_bumps_epoch_and_session() {
             .await
             .expect("same owner restart after expiry");
 
-        assert!(second_token.epoch > first_token.epoch);
+        assert_ne!(second_token.session_id, first_token.session_id);
     });
 }
 
 #[test]
-fn same_owner_restart_before_expiry_bumps_epoch_and_session() {
+fn same_owner_restart_before_expiry_uses_new_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
@@ -139,7 +138,7 @@ fn same_owner_restart_before_expiry_bumps_epoch_and_session() {
             .await
             .expect("same owner restart before expiry");
 
-        assert!(second_token.epoch > first_token.epoch);
+        assert_ne!(second_token.session_id, first_token.session_id);
 
         let state = store
             .load()
@@ -148,7 +147,6 @@ fn same_owner_restart_before_expiry_bumps_epoch_and_session() {
             .expect("publication state");
         assert_eq!(state.owner_id, 7);
         assert_eq!(state.session_id, [2u8; 16]);
-        assert_eq!(state.epoch, second_token.epoch);
     });
 }
 
@@ -171,7 +169,7 @@ fn authorize_returns_lease_lost_after_external_takeover() {
 }
 
 #[test]
-fn publish_returns_lease_lost_on_epoch_mismatch() {
+fn publish_returns_lease_lost_on_session_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
@@ -214,7 +212,7 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
 }
 
 #[test]
-fn same_session_acquire_after_expiry_bumps_epoch() {
+fn same_session_acquire_after_expiry_keeps_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
@@ -226,12 +224,12 @@ fn same_session_acquire_after_expiry_bumps_epoch() {
             .await
             .expect("re-acquire after expiry");
 
-        assert!(second.epoch > first.epoch);
+        assert_eq!(second.session_id, first.session_id);
     });
 }
 
 #[test]
-fn same_session_acquire_before_expiry_keeps_epoch() {
+fn same_session_acquire_before_expiry_keeps_session() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
@@ -243,7 +241,7 @@ fn same_session_acquire_before_expiry_keeps_epoch() {
             .await
             .expect("re-acquire before expiry");
 
-        assert_eq!(second.epoch, first.epoch);
+        assert_eq!(second.session_id, first.session_id);
     });
 }
 
@@ -284,7 +282,7 @@ fn lease_blocks_grants_exact_n_blocks() {
             .acquire(Some(110))
             .await
             .expect("takeover at first expired block");
-        assert_eq!(token.epoch, 2);
+        assert_eq!(token.session_id, [2u8; 16]);
     });
 }
 

@@ -1,6 +1,6 @@
 # Write Authority
 
-This document describes the write-authority model: leases, epochs, service roles, and startup behavior.
+This document describes the write-authority model: leases, session-based ownership, service roles, and startup behavior.
 
 ## Service Roles
 
@@ -33,12 +33,12 @@ The ingest engine owns:
 
 ```rust
 WriteToken {
-    epoch: u64,
+    session_id: [u8; 16],
     indexed_finalized_head: u64,
 }
 ```
 
-The `epoch` is the ownership/version clock for lease acquisition and publish.
+The `session_id` is the writer-incarnation token for lease acquisition, authorize, and publish.
 
 ## PublicationState
 
@@ -46,7 +46,6 @@ The `epoch` is the ownership/version clock for lease acquisition and publish.
 PublicationState {
     owner_id: u64,          // stable node identity
     session_id: [u8; 16],   // process instance identity
-    epoch: u64,             // ownership version
     indexed_finalized_head: u64,  // only reader-visible publication head
     lease_valid_through_block: u64,  // inclusive external-block lease validity bound
 }
@@ -82,20 +81,20 @@ Renewal rule: renew when the observed upstream finalized block enters the renew 
 
 1. load current `publication_state`
 2. if absent, `create_if_absent` with the initial state
-3. if present and lease expired (or same owner), CAS to claim ownership with `epoch + 1`
+3. if present and lease expired (or same owner), CAS to claim ownership with a fresh `session_id`
 4. return `WriteToken`
 
 ### Authorization (cached writer re-auth)
 
 When a writer token is cached from a previous startup:
 
-1. check the cached token's epoch against the current `publication_state`
+1. check the cached token's `session_id` against the current `publication_state`
 2. verify the lease is still valid against the current upstream observation
-3. if valid, reuse the token without an epoch bump
+3. if valid, reuse the token without changing `session_id`
 
 ### Renewal
 
-Renewal happens during ingest when the observed upstream block enters the renew window. It extends `lease_valid_through_block` via CAS without bumping epoch.
+Renewal happens during ingest when the observed upstream block enters the renew window. It extends `lease_valid_through_block` via CAS without changing `session_id`.
 
 ### Publish (head advance)
 
@@ -106,11 +105,11 @@ After all artifacts for a block batch are durable:
 
 ## Hard Expiry
 
-Once a lease has expired, ownership must be reacquired with an epoch bump — even if the same session attempts to renew. There is no silent same-session renewal after expiry.
+Once a lease has expired, ownership must be reacquired through a fresh acquisition attempt. There is no silent same-session renewal after expiry.
 
 This ensures:
 
-- any gap in liveness is visible in the epoch sequence
+- any gap in liveness forces the writer to re-prove ownership from `publication_state`
 
 The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing re-acquisition through the service layer.
 
@@ -152,7 +151,7 @@ async def startup_reader_only():
 3. standby compares `observed_upstream_finalized_block` to `lease_valid_through_block`
 4. if the observed block is still within the validity window, standby remains passive
 5. once the observed block is past the validity bound, standby attempts takeover by CAS
-6. the winning CAS writes: standby's `owner_id`, fresh `session_id`, `epoch = current.epoch + 1`, unchanged `indexed_finalized_head`, new `lease_valid_through_block`
+6. the winning CAS writes: standby's `owner_id`, fresh `session_id`, unchanged `indexed_finalized_head`, new `lease_valid_through_block`
 7. after acquisition, the new primary derives next sequencing state from the published head and resumes ingest
 
 If the takeover CAS fails, the standby reloads `publication_state` and re-evaluates rather than retrying blindly.
@@ -170,7 +169,7 @@ Using the last observed block number after observation has been lost is not allo
 
 ## Same-Node Restart
 
-Reacquiring with the same node identity must still bump `epoch`. Node identity is not process identity — a restarted process generates a new `session_id`, so it always takes the foreign-session takeover path.
+Reacquiring with the same node identity must still use a fresh `session_id`. Node identity is not process identity — a restarted process generates a new `session_id`, so it always takes the foreign-session takeover path.
 
 ## Ownership Rules
 

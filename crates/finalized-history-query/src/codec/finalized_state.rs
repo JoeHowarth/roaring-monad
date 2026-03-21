@@ -3,7 +3,7 @@ use bytes::Bytes;
 use crate::domain::types::{BlockRecord, PublicationState};
 use crate::error::{Error, Result};
 
-const PUBLICATION_STATE_VERSION: u8 = 3;
+const PUBLICATION_STATE_VERSION: u8 = 4;
 
 fixed_codec! {
     impl PublicationState {
@@ -13,7 +13,6 @@ fixed_codec! {
         fields {
             owner_id: u64,
             session_id: [u8; 16],
-            epoch: u64,
             indexed_finalized_head: u64,
             lease_valid_through_block: u64,
         }
@@ -54,7 +53,6 @@ mod tests {
         let publication_state = PublicationState {
             owner_id: 8,
             session_id: [7u8; 16],
-            epoch: 13,
             indexed_finalized_head: 21,
             lease_valid_through_block: 34,
         };

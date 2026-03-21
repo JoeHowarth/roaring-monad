@@ -30,7 +30,6 @@ fn service_startup_bootstraps_publication_ownership() {
 
         let plan = svc.startup().await.expect("startup");
         assert_eq!(plan.head_state.indexed_finalized_head, 0);
-        assert_eq!(plan.head_state.publication_epoch, 1);
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
     });
 }
@@ -124,7 +123,7 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 4, 3))
+            meta.create_if_absent(&seeded_publication_state(11, [11u8; 16], 3))
                 .await
                 .expect("create publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
@@ -153,7 +152,7 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
 
         assert_eq!(plan.head_state.indexed_finalized_head, 3);
         assert_eq!(state.owner_id, 11);
-        assert_eq!(state.epoch, 4);
+        assert_eq!(state.session_id, [11u8; 16]);
         assert!(matches!(err, Error::ReadOnlyMode(_)));
     });
 }
@@ -164,7 +163,7 @@ fn startup_plan_should_not_take_publication_ownership() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
         assert!(matches!(
-            meta.create_if_absent(&seeded_publication_state(7, [7u8; 16], 3, 0))
+            meta.create_if_absent(&seeded_publication_state(7, [7u8; 16], 0))
                 .await
                 .expect("seed publication state"),
             finalized_history_query::store::publication::CasOutcome::Applied(_)
@@ -188,7 +187,7 @@ fn startup_plan_should_not_take_publication_ownership() {
         )
         .expect("decode publication state");
         assert_eq!(publication_state.owner_id, 7);
-        assert_eq!(publication_state.epoch, 3);
+        assert_eq!(publication_state.session_id, [7u8; 16]);
     });
 }
 

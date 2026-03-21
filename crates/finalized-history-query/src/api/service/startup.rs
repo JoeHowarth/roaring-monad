@@ -89,7 +89,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         let next_log_id = derive_next_log_id(self.tables(), token.indexed_finalized_head).await?;
         Ok(build_startup_plan(
             token.indexed_finalized_head,
-            token.epoch,
             next_log_id,
             0,
         ))

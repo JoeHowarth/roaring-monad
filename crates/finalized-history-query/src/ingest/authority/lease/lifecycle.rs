@@ -25,10 +25,7 @@ impl<P: PublicationStore> LeaseAuthority<P> {
             .await?
             .ok_or(Error::LeaseLost)?;
         loop {
-            if current.owner_id != lease.owner_id
-                || current.session_id != lease.session_id
-                || current.epoch != lease.epoch
-            {
+            if current.owner_id != lease.owner_id || current.session_id != lease.session_id {
                 return Err(Error::LeaseLost);
             }
 
@@ -39,7 +36,6 @@ impl<P: PublicationStore> LeaseAuthority<P> {
             let next = crate::domain::types::PublicationState {
                 owner_id: current.owner_id,
                 session_id: current.session_id,
-                epoch: current.epoch,
                 indexed_finalized_head: current.indexed_finalized_head,
                 lease_valid_through_block: self
                     .lease_valid_through_block(observed_upstream_finalized_block),
@@ -71,7 +67,7 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
     ) -> Result<WriteToken> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
-        if lease.as_token().epoch != current.epoch
+        if lease.as_token().session_id != current.session_id
             || lease.as_token().indexed_finalized_head != current.indexed_finalized_head
         {
             return Err(Error::PublicationConflict);
@@ -87,7 +83,7 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
     async fn publish(&self, current: &WriteToken, new_head: u64) -> Result<WriteToken> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
-        if lease.epoch != current.epoch
+        if lease.session_id != current.session_id
             || lease.indexed_finalized_head != current.indexed_finalized_head
         {
             return Err(Error::PublicationConflict);
@@ -97,7 +93,6 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
         let next_lease = PublicationLease {
             owner_id: lease.owner_id,
             session_id: lease.session_id,
-            epoch: lease.epoch,
             indexed_finalized_head: new_head,
             lease_valid_through_block: lease.lease_valid_through_block,
         };
@@ -114,10 +109,7 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
             CasOutcome::Failed {
                 current: Some(state),
             } => {
-                if state.owner_id != lease.owner_id
-                    || state.session_id != lease.session_id
-                    || state.epoch != lease.epoch
-                {
+                if state.owner_id != lease.owner_id || state.session_id != lease.session_id {
                     return Err(Error::LeaseLost);
                 }
                 Err(Error::PublicationConflict)

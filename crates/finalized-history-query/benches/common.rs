@@ -35,7 +35,7 @@ use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
 pub const HIGH_SHARD: u64 = 0x1_0000_0000;
-pub const DEFAULT_WRITER_EPOCH: u64 = 1;
+pub const DEFAULT_WRITER_ID: u64 = 1;
 
 fn bench_hash(block_num: u64) -> [u8; 32] {
     let mut hash = [0u8; 32];
@@ -203,7 +203,7 @@ pub fn build_service() -> BenchService {
         },
         InMemoryMetaStore::default(),
         InMemoryBlobStore::default(),
-        DEFAULT_WRITER_EPOCH,
+        DEFAULT_WRITER_ID,
     )
 }
 
@@ -225,7 +225,7 @@ pub fn build_counting_service() -> (CountingBenchService, Arc<BlobAccessCounters
         },
         InMemoryMetaStore::default(),
         blob_store,
-        DEFAULT_WRITER_EPOCH,
+        DEFAULT_WRITER_ID,
     );
     (svc, counters)
 }
@@ -242,7 +242,7 @@ pub fn build_service_with_stores(
         },
         meta_store,
         blob_store,
-        DEFAULT_WRITER_EPOCH,
+        DEFAULT_WRITER_ID,
     )
 }
 
@@ -696,9 +696,8 @@ pub fn seed_publication_state(
             meta_store,
             PUBLICATION_STATE_KEY,
             PublicationState {
-                owner_id: DEFAULT_WRITER_EPOCH,
+                owner_id: DEFAULT_WRITER_ID,
                 session_id: [0u8; 16],
-                epoch: DEFAULT_WRITER_EPOCH,
                 indexed_finalized_head,
                 lease_valid_through_block: u64::MAX,
             }

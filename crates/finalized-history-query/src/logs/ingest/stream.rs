@@ -56,7 +56,6 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     _blob_store: &B,
     block: &Block,
     first_log_id: u64,
-    epoch: u64,
 ) -> Result<Vec<(String, u32)>> {
     let mut touched_pages = BTreeSet::<(String, u32)>::new();
 
@@ -83,7 +82,6 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
                 meta_store,
                 &bitmap_by_block_key(&stream, page_start, block.block_num),
                 encode_bitmap_blob(&bitmap_blob)?,
-                epoch,
             )
             .await?;
             touched_pages.insert((stream.clone(), page_start));
@@ -97,14 +95,13 @@ pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
     meta_store: &M,
     blob_store: &B,
     sealed_pages: &[(String, u32)],
-    epoch: u64,
 ) -> Result<()> {
     if sealed_pages.is_empty() {
         return Ok(());
     }
 
     for (stream_id, page_start) in sealed_pages {
-        compact_stream_page(meta_store, blob_store, stream_id, *page_start, epoch).await?;
+        compact_stream_page(meta_store, blob_store, stream_id, *page_start).await?;
     }
 
     Ok(())
@@ -115,7 +112,6 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     stream_id: &str,
     page_start: u32,
-    epoch: u64,
 ) -> Result<bool> {
     let page = meta_store
         .list_prefix(
@@ -163,7 +159,6 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         meta_store,
         &bitmap_page_meta_key(stream_id, page_start),
         meta.encode(),
-        epoch,
     )
     .await?;
     Ok(true)

@@ -68,7 +68,7 @@ mod tests {
             let config = Config::default();
             let logs = vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 1, 2)];
 
-            persist_log_artifacts(&config, &meta, &blob, 7, &logs, 11, 5)
+            persist_log_artifacts(&config, &meta, &blob, 7, &logs, 11)
                 .await
                 .expect("persist artifacts");
 
@@ -104,10 +104,10 @@ mod tests {
             let first_log_id = crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
-            persist_log_dir_by_block(&meta, 700, first_log_id, count, 3)
+            persist_log_dir_by_block(&meta, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
+            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64)
                 .await
                 .expect("compact directory");
 
@@ -178,10 +178,10 @@ mod tests {
                 ],
             );
             let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 2);
-            let touched_pages = persist_stream_fragments(&meta, &blob, &block, first_log_id, 5)
+            let touched_pages = persist_stream_fragments(&meta, &blob, &block, first_log_id)
                 .await
                 .expect("persist stream fragments");
-            compact_sealed_stream_pages(&meta, &blob, &touched_pages, 5)
+            compact_sealed_stream_pages(&meta, &blob, &touched_pages)
                 .await
                 .expect("compact stream pages");
 
@@ -233,7 +233,7 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
 
-            persist_log_block_record(&meta, &block, 33, 7)
+            persist_log_block_record(&meta, &block, 33)
                 .await
                 .expect("persist block metadata");
 
@@ -259,10 +259,10 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
             let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
-            persist_log_dir_by_block(&meta, 700, first_log_id, count, 3)
+            persist_log_dir_by_block(&meta, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64, 3)
+            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64)
                 .await
                 .expect("compact directory");
 

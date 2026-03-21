@@ -82,7 +82,6 @@ mod tests {
                 meta.create_if_absent(&PublicationState {
                     owner_id: 5,
                     session_id: [5u8; 16],
-                    epoch: 12,
                     indexed_finalized_head: 7,
                     lease_valid_through_block: u64::MAX,
                 })
@@ -114,7 +113,6 @@ mod tests {
                 .expect("block identity present");
 
             assert_eq!(state.indexed_finalized_head, 7);
-            assert_eq!(state.publication_epoch, 12);
             assert_eq!(identity.number, 7);
             assert_eq!(identity.hash, [3; 32]);
             assert_eq!(identity.parent_hash, [4; 32]);
