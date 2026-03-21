@@ -9,7 +9,7 @@ use crate::codec::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::domain::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
     BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
-    PointTableSpec, ScannableTableSpec, point_log_payload_cache_key,
+    PointTableSpec, ScannableTableSpec,
 };
 use crate::domain::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
 use crate::error::{Error, Result};
@@ -195,6 +195,13 @@ fn estimated_items_capacity(max_bytes: u64) -> usize {
     const DEFAULT_ESTIMATED_ENTRY_BYTES: u64 = 256;
     let estimate = (max_bytes / DEFAULT_ESTIMATED_ENTRY_BYTES).max(1);
     usize::try_from(estimate).unwrap_or(usize::MAX)
+}
+
+fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
+    let mut key = b"point_log_payload/".to_vec();
+    key.extend_from_slice(&block_num.to_be_bytes());
+    key.extend_from_slice(&local_ordinal.to_be_bytes());
+    key
 }
 
 pub struct Tables<M: MetaStore, B: BlobStore> {

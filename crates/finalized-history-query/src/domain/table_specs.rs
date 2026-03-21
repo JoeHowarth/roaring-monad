@@ -173,13 +173,6 @@ impl BitmapPageBlobSpec {
     }
 }
 
-pub fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
-    let mut key = b"point_log_payload/".to_vec();
-    key.extend_from_slice(&u64_be(block_num));
-    key.extend_from_slice(&u64_be(local_ordinal));
-    key
-}
-
 pub fn log_shard(global_log_id: impl Into<crate::core::ids::LogId>) -> LogShard {
     global_log_id.into().shard()
 }
