@@ -4,16 +4,35 @@ This document describes the store trait abstractions and their implementations.
 
 ## MetaStore
 
-The `MetaStore` trait provides key-value storage with conditional writes:
+The `MetaStore` trait provides family-scoped key-value storage with conditional
+writes:
 
 ```rust
+pub struct FamilyId(&'static str);
+
 pub trait MetaStore: Send + Sync {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>>;
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult>;
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()>;
-    async fn list_prefix(&self, prefix: &[u8], cursor: Option<Vec<u8>>, limit: usize) -> Result<Page>;
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>>;
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult>;
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
+    async fn list_prefix(
+        &self,
+        family: FamilyId,
+        prefix: &[u8],
+        cursor: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Page>;
 }
 ```
+
+The generic storage boundary also exposes family-scoped handles such as
+`KvTable<M>` and `KvTableRef<'_, M>` so higher-level code can bind a family once
+and then operate only on suffix keys.
 
 - `Record { value: Bytes, version: u64 }` — every stored value carries a monotonic version
 - `PutCond` — `Any`, `IfAbsent`, or `IfVersion(u64)` for conditional writes
@@ -53,11 +72,15 @@ pub trait PublicationStore: Send + Sync {
 
 `CasOutcome` is either `Applied(T)` or `Failed { current: Option<T> }`.
 
+Backends no longer implement `PublicationStore` directly. The crate provides a
+`MetaPublicationStore<M>` wrapper that stores publication state in the
+`publication_state` metadata family on top of any `MetaStore`.
+
 ## InMemoryMetaStore / InMemoryBlobStore
 
 Test doubles backed by in-memory collections.
 
-- `InMemoryMetaStore` — `BTreeMap<Vec<u8>, Record>` behind `RwLock`, implements `MetaStore` + `PublicationStore`
+- `InMemoryMetaStore` — `BTreeMap<(FamilyId, Vec<u8>), Record>` behind `RwLock`, implements `MetaStore`
 - `InMemoryBlobStore` — `HashMap<Vec<u8>, Bytes>` behind `RwLock`, implements `BlobStore`
 
 ## FsMetaStore / FsBlobStore
@@ -65,17 +88,16 @@ Test doubles backed by in-memory collections.
 File-system backed stores for local development and testing.
 
 - Keys are hex-encoded into file paths under a `meta/` or `blob/` root directory
-- Keys are grouped by the prefix before the first `/` (e.g., `block_record/...` goes into the `block_record` group directory)
+- Metadata family names map to directories under `meta/<family>/`
+- Metadata files are keyed by the hex-encoded suffix bytes within that family
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
-- `PublicationStore` CAS operations are serialized via a per-path mutex to prevent races
-- `PublicationStore` CAS writes use temp-file + rename for crash safety; regular `MetaStore::put` writes directly (non-atomic)
 
-Implements `MetaStore` + `PublicationStore` (meta) and `BlobStore` (blob).
+Implements `MetaStore` (meta) and `BlobStore` (blob).
 
 ## ScyllaMetaStore
 
-Scylla (Cassandra-compatible) implementation for `MetaStore` + `PublicationStore`.
+Scylla (Cassandra-compatible) implementation for `MetaStore`.
 
 ### Schema
 
@@ -88,14 +110,19 @@ Two metadata tables are created:
 
 Keys are partitioned by:
 
-1. **Group** — derived from the key prefix before the first `/` (e.g., `block_record`, `log_dir_sub_bucket`)
-2. **Bucket** — FNV-1a hash of the full key modulo 256
+1. **Group** — the explicit metadata family (for example `block_record` or `log_dir_sub_bucket`)
+2. **Bucket** — FNV-1a hash of the suffix key modulo 256
 
-This distributes load across partitions while keeping related keys in the same group for efficient prefix listing.
+This distributes load across partitions while keeping related keys in the same
+family for efficient family-local prefix listing.
 
 ### CAS operations
 
-`PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions. `PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and conflicts in telemetry. Normal artifact writes now use unconditional puts on the write path; conditional writes remain for publication-state CAS and any callers that still need them.
+`PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions.
+`PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and
+conflicts in telemetry. Normal artifact writes now use unconditional puts on the
+write path; conditional writes remain for publication-state CAS and any callers
+that still need them through `MetaPublicationStore`.
 
 ### Retry policy
 

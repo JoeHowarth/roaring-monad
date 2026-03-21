@@ -4,20 +4,23 @@ use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_key, block_log_blob_key, block_log_header_key,
-    block_record_key, log_dir_by_block_key, log_dir_sub_bucket_start,
+    BLOCK_HASH_INDEX_FAMILY, BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_suffix, block_log_blob_key,
+    block_log_header_suffix, block_record_suffix, log_dir_by_block_suffix,
+    log_dir_sub_bucket_start,
 };
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, MetaStore, PutCond};
+use crate::store::traits::{BlobStore, FamilyId, MetaStore, PutCond};
 
 pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
+    family: FamilyId,
     key: &[u8],
     value: Bytes,
 ) -> Result<()> {
-    let _ = meta_store.put(key, value, PutCond::Any).await?;
+    let _ = meta_store.put(family, key, value, PutCond::Any).await?;
     Ok(())
 }
 
@@ -45,7 +48,8 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     put_artifact_blob(blob_store, &block_log_blob_key(block_num), block_blob).await?;
     put_artifact_meta(
         meta_store,
-        &block_log_header_key(block_num),
+        BLOCK_LOG_HEADER_FAMILY,
+        &block_log_header_suffix(block_num),
         header.encode(),
     )
     .await?;
@@ -66,14 +70,16 @@ pub async fn persist_log_block_record<M: MetaStore>(
 
     put_artifact_meta(
         meta_store,
-        &block_record_key(block.block_num),
+        BLOCK_RECORD_FAMILY,
+        &block_record_suffix(block.block_num),
         block_record.encode(),
     )
     .await?;
 
     put_artifact_meta(
         meta_store,
-        &block_hash_index_key(&block.block_hash),
+        BLOCK_HASH_INDEX_FAMILY,
+        &block_hash_index_suffix(&block.block_hash),
         encode_u64(block.block_num),
     )
     .await?;
@@ -104,7 +110,8 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     loop {
         put_artifact_meta(
             meta_store,
-            &log_dir_by_block_key(sub_bucket_start, block_num),
+            LOG_DIR_BY_BLOCK_FAMILY,
+            &log_dir_by_block_suffix(sub_bucket_start, block_num),
             encoded_fragment.clone(),
         )
         .await?;

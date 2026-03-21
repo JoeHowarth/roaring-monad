@@ -3,15 +3,12 @@ use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 
-use crate::domain::keys::PUBLICATION_STATE_KEY;
-use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::store::publication::{CasOutcome, PublicationStore};
-use crate::store::traits::{DelCond, MetaStore, Page, PutCond, PutResult, Record};
+use crate::store::traits::{DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record};
 
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
-    inner: Arc<RwLock<BTreeMap<Vec<u8>, Record>>>,
+    inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>), Record>>>,
 }
 
 impl InMemoryMetaStore {
@@ -29,21 +26,28 @@ impl Default for InMemoryMetaStore {
 }
 
 impl MetaStore for InMemoryMetaStore {
-    async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
+    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
         let guard = self
             .inner
             .read()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
-        Ok(guard.get(key).cloned())
+        Ok(guard.get(&(family, key.to_vec())).cloned())
     }
 
-    async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
+    async fn put(
+        &self,
+        family: FamilyId,
+        key: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
         let mut guard = self
             .inner
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let current = guard.get(key).cloned();
+        let entry_key = (family, key.to_vec());
+        let current = guard.get(&entry_key).cloned();
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
             (PutCond::IfAbsent, None) => true,
@@ -61,7 +65,7 @@ impl MetaStore for InMemoryMetaStore {
 
         let next_version = current.map_or(1, |r| r.version + 1);
         guard.insert(
-            key.to_vec(),
+            entry_key,
             Record {
                 value,
                 version: next_version,
@@ -73,13 +77,14 @@ impl MetaStore for InMemoryMetaStore {
         })
     }
 
-    async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
+    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
         let mut guard = self
             .inner
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let should_delete = match (cond, guard.get(key)) {
+        let entry_key = (family, key.to_vec());
+        let should_delete = match (cond, guard.get(&entry_key)) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
             (DelCond::IfVersion(v), Some(r)) => r.version == v,
@@ -87,13 +92,14 @@ impl MetaStore for InMemoryMetaStore {
         };
 
         if should_delete {
-            guard.remove(key);
+            guard.remove(&entry_key);
         }
         Ok(())
     }
 
     async fn list_prefix(
         &self,
+        family: FamilyId,
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
@@ -108,17 +114,20 @@ impl MetaStore for InMemoryMetaStore {
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
-        for k in guard.keys() {
-            if has_cursor && k <= &start {
+        for ((entry_family, key), _) in guard.iter() {
+            if *entry_family != family {
                 continue;
             }
-            if !has_cursor && k < &start {
+            if !key.starts_with(prefix) {
                 continue;
             }
-            if !k.starts_with(prefix) {
+            if has_cursor && key <= &start {
                 continue;
             }
-            keys.push(k.clone());
+            if !has_cursor && key < &start {
+                continue;
+            }
+            keys.push(key.clone());
             if keys.len() == limit {
                 next_cursor = keys.last().cloned();
                 break;
@@ -129,88 +138,29 @@ impl MetaStore for InMemoryMetaStore {
     }
 }
 
-impl PublicationStore for InMemoryMetaStore {
-    async fn load(&self) -> Result<Option<PublicationState>> {
-        let guard = self
-            .inner
-            .read()
-            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
-        let Some(record) = guard.get(PUBLICATION_STATE_KEY) else {
-            return Ok(None);
-        };
-        Ok(Some(PublicationState::decode(&record.value)?))
-    }
-
-    async fn create_if_absent(
-        &self,
-        initial: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let mut guard = self
-            .inner
-            .write()
-            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
-        if let Some(record) = guard.get(PUBLICATION_STATE_KEY) {
-            return Ok(CasOutcome::Failed {
-                current: Some(PublicationState::decode(&record.value)?),
-            });
-        }
-
-        guard.insert(
-            PUBLICATION_STATE_KEY.to_vec(),
-            Record {
-                value: initial.encode(),
-                version: 1,
-            },
-        );
-        Ok(CasOutcome::Applied(initial.clone()))
-    }
-
-    async fn compare_and_set(
-        &self,
-        expected: &PublicationState,
-        next: &PublicationState,
-    ) -> Result<CasOutcome<PublicationState>> {
-        let mut guard = self
-            .inner
-            .write()
-            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
-        let Some(record) = guard.get(PUBLICATION_STATE_KEY).cloned() else {
-            return Ok(CasOutcome::Failed { current: None });
-        };
-        let current = PublicationState::decode(&record.value)?;
-        if current != *expected {
-            return Ok(CasOutcome::Failed {
-                current: Some(current),
-            });
-        }
-
-        guard.insert(
-            PUBLICATION_STATE_KEY.to_vec(),
-            Record {
-                value: next.encode(),
-                version: record.version.saturating_add(1),
-            },
-        );
-        Ok(CasOutcome::Applied(next.clone()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
     use futures::executor::block_on;
 
     use super::InMemoryMetaStore;
-    use crate::store::traits::{MetaStore, PutCond};
+    use crate::domain::keys::BLOCK_RECORD_FAMILY;
+    use crate::store::traits::MetaStore;
+    use crate::store::traits::PutCond;
 
     #[test]
-    fn list_prefix_pagination_does_not_repeat_cursor_entry() {
+    fn list_pagination_does_not_repeat_cursor_entry() {
         block_on(async {
             let store = InMemoryMetaStore::default();
             for index in 0..1_025u64 {
-                let key = format!("list-prefix/{index:04}").into_bytes();
+                let key = format!("{index:04}").into_bytes();
                 store
-                    .put(&key, Bytes::from_static(b"v"), PutCond::Any)
+                    .put(
+                        BLOCK_RECORD_FAMILY,
+                        &key,
+                        Bytes::from_static(b"v"),
+                        PutCond::Any,
+                    )
                     .await
                     .expect("seed key");
             }
@@ -219,9 +169,9 @@ mod tests {
             let mut seen = Vec::new();
             loop {
                 let page = store
-                    .list_prefix(b"list-prefix/", cursor.take(), 1_024)
+                    .list_prefix(BLOCK_RECORD_FAMILY, b"", cursor.take(), 1_024)
                     .await
-                    .expect("list prefix");
+                    .expect("list");
                 seen.extend(page.keys.iter().cloned());
                 if page.next_cursor.is_none() {
                     break;

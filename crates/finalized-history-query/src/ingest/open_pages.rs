@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
 use crate::domain::keys::{
-    STREAM_PAGE_LOCAL_ID_SPAN, log_local, log_shard, open_bitmap_page_key, open_bitmap_page_prefix,
-    open_bitmap_page_shard_page_prefix, open_bitmap_page_shard_prefix, read_u64_be,
-    stream_page_start_local,
+    OPEN_BITMAP_PAGE_FAMILY, STREAM_PAGE_LOCAL_ID_SPAN, log_local, log_shard,
+    open_bitmap_page_shard_page_prefix_suffix, open_bitmap_page_shard_prefix_suffix,
+    open_bitmap_page_suffix, read_u64_be, stream_page_start_local,
 };
 use crate::error::{Error, Result};
 use crate::logs::ingest::compact_stream_page;
@@ -66,7 +66,8 @@ pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
 ) -> Result<()> {
     let _ = meta_store
         .put(
-            &open_bitmap_page_key(page.shard, page.page_start_local, &page.stream_id),
+            OPEN_BITMAP_PAGE_FAMILY,
+            &open_bitmap_page_suffix(page.shard, page.page_start_local, &page.stream_id),
             Bytes::new(),
             PutCond::IfAbsent,
         )
@@ -80,7 +81,8 @@ pub async fn delete_open_bitmap_page<M: MetaStore>(
 ) -> Result<()> {
     meta_store
         .delete(
-            &open_bitmap_page_key(page.shard, page.page_start_local, &page.stream_id),
+            OPEN_BITMAP_PAGE_FAMILY,
+            &open_bitmap_page_suffix(page.shard, page.page_start_local, &page.stream_id),
             DelCond::Any,
         )
         .await
@@ -89,14 +91,15 @@ pub async fn delete_open_bitmap_page<M: MetaStore>(
 pub async fn list_all_open_bitmap_pages<M: MetaStore>(
     meta_store: &M,
 ) -> Result<Vec<OpenBitmapPage>> {
-    list_open_bitmap_pages_with_prefix(meta_store, open_bitmap_page_prefix()).await
+    list_open_bitmap_pages_with_prefix(meta_store, b"").await
 }
 
 pub async fn list_open_bitmap_pages_for_shard<M: MetaStore>(
     meta_store: &M,
     shard: LogShard,
 ) -> Result<Vec<OpenBitmapPage>> {
-    list_open_bitmap_pages_with_prefix(meta_store, &open_bitmap_page_shard_prefix(shard)).await
+    list_open_bitmap_pages_with_prefix(meta_store, &open_bitmap_page_shard_prefix_suffix(shard))
+        .await
 }
 
 pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
@@ -106,7 +109,7 @@ pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
 ) -> Result<Vec<OpenBitmapPage>> {
     list_open_bitmap_pages_with_prefix(
         meta_store,
-        &open_bitmap_page_shard_page_prefix(shard, page_start_local),
+        &open_bitmap_page_shard_page_prefix_suffix(shard, page_start_local),
     )
     .await
 }
@@ -118,9 +121,11 @@ async fn list_open_bitmap_pages_with_prefix<M: MetaStore>(
     let mut cursor = None;
     let mut out = Vec::new();
     loop {
-        let page = meta_store.list_prefix(prefix, cursor.take(), 1_024).await?;
+        let page = meta_store
+            .list_prefix(OPEN_BITMAP_PAGE_FAMILY, prefix, cursor.take(), 1_024)
+            .await?;
         for key in page.keys {
-            out.push(decode_open_bitmap_page_key(&key)?);
+            out.push(decode_open_bitmap_page_suffix(&key)?);
         }
         if page.next_cursor.is_none() {
             break;
@@ -226,23 +231,22 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
     Ok(())
 }
 
-pub fn decode_open_bitmap_page_key(key: &[u8]) -> Result<OpenBitmapPage> {
-    let prefix_len = open_bitmap_page_prefix().len();
-    let min_len = prefix_len + 8 + 1 + 8 + 1;
-    if key.len() < min_len || !key.starts_with(open_bitmap_page_prefix()) {
-        return Err(Error::Decode("invalid open_bitmap_page key"));
+pub fn decode_open_bitmap_page_suffix(key: &[u8]) -> Result<OpenBitmapPage> {
+    let min_len = 8 + 1 + 8 + 1;
+    if key.len() < min_len {
+        return Err(Error::Decode("invalid open_bitmap_page suffix"));
     }
-    if key[prefix_len + 8] != b'/' || key[prefix_len + 17] != b'/' {
+    if key[8] != b'/' || key[17] != b'/' {
         return Err(Error::Decode("invalid open_bitmap_page separators"));
     }
 
-    let shard = read_u64_be(&key[prefix_len..prefix_len + 8])
+    let shard = read_u64_be(&key[..8])
         .and_then(|raw| LogShard::new(raw).ok())
         .ok_or(Error::Decode("invalid open_bitmap_page shard"))?;
-    let page_start_local = read_u64_be(&key[prefix_len + 9..prefix_len + 17])
+    let page_start_local = read_u64_be(&key[9..17])
         .and_then(|raw| u32::try_from(raw).ok())
         .ok_or(Error::Decode("invalid open_bitmap_page page"))?;
-    let stream_id = String::from_utf8(key[prefix_len + 18..].to_vec())
+    let stream_id = String::from_utf8(key[18..].to_vec())
         .map_err(|_| Error::Decode("invalid open_bitmap_page stream id"))?;
 
     Ok(OpenBitmapPage {

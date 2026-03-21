@@ -7,12 +7,10 @@ use crate::store::traits::{BlobStore, MetaStore};
 
 use super::FinalizedHistoryService;
 
-impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
-    FinalizedHistoryService<A, M, B>
-{
+impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M, B> {
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
-            let result = startup_plan(self.tables(), 0).await;
+            let result = startup_plan(self.tables(), &self.publication_store, 0).await;
             self.update_backend_state(&result);
             return result;
         }
@@ -22,13 +20,9 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         result
     }
 
-    pub async fn indexed_finalized_head(&self) -> Result<u64>
-    where
-        M: PublicationStore,
-    {
+    pub async fn indexed_finalized_head(&self) -> Result<u64> {
         let result = self
-            .ingest
-            .meta_store
+            .publication_store
             .load_finalized_head_state()
             .await
             .map(|state| state.indexed_finalized_head);
@@ -36,10 +30,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         result
     }
 
-    pub(super) async fn startup_locked(&self) -> Result<StartupPlan>
-    where
-        M: PublicationStore,
-    {
+    pub(super) async fn startup_locked(&self) -> Result<StartupPlan> {
         debug_assert!(self.allows_writes);
         let session = self
             .ingest

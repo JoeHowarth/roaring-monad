@@ -60,11 +60,11 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity};
-    use crate::domain::keys::block_record_key;
+    use crate::domain::keys::{BLOCK_RECORD_FAMILY, block_record_suffix};
     use crate::domain::types::{BlockRecord, PublicationState};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::store::publication::{CasOutcome, PublicationStore};
+    use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{MetaStore, PutCond};
     use crate::tables::Tables;
     use futures::executor::block_on;
@@ -78,19 +78,22 @@ mod tests {
                 Arc::new(meta.clone()),
                 Arc::new(InMemoryBlobStore::default()),
             );
+            let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
             assert!(matches!(
-                meta.create_if_absent(&PublicationState {
-                    owner_id: 5,
-                    session_id: [5u8; 16],
-                    indexed_finalized_head: 7,
-                    lease_valid_through_block: u64::MAX,
-                })
-                .await
-                .expect("write publication state"),
+                publication_store
+                    .create_if_absent(&PublicationState {
+                        owner_id: 5,
+                        session_id: [5u8; 16],
+                        indexed_finalized_head: 7,
+                        lease_valid_through_block: u64::MAX,
+                    })
+                    .await
+                    .expect("write publication state"),
                 CasOutcome::Applied(_)
             ));
             meta.put(
-                &block_record_key(7),
+                BLOCK_RECORD_FAMILY,
+                &block_record_suffix(7),
                 BlockRecord {
                     block_hash: [3; 32],
                     parent_hash: [4; 32],
@@ -103,7 +106,7 @@ mod tests {
             .await
             .expect("write block meta");
 
-            let state = meta
+            let state = publication_store
                 .load_finalized_head_state()
                 .await
                 .expect("load finalized head state");

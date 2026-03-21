@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use crate::domain::keys::{PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX};
 use crate::domain::types::PublicationState;
 use crate::error::Result;
+use crate::store::traits::{KvTable, MetaStore, PutCond};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CasOutcome<T> {
@@ -12,6 +14,19 @@ pub enum CasOutcome<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizedHeadState {
     pub indexed_finalized_head: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetaPublicationStore<M> {
+    table: KvTable<M>,
+}
+
+impl<M: MetaStore> MetaPublicationStore<M> {
+    pub fn new(meta_store: Arc<M>) -> Self {
+        Self {
+            table: meta_store.table(PUBLICATION_STATE_FAMILY),
+        }
+    }
 }
 
 #[allow(async_fn_in_trait)]
@@ -37,6 +52,67 @@ pub trait PublicationStore: Send + Sync {
         expected: &PublicationState,
         next: &PublicationState,
     ) -> Result<CasOutcome<PublicationState>>;
+}
+
+impl<M: MetaStore> PublicationStore for MetaPublicationStore<M> {
+    async fn load(&self) -> Result<Option<PublicationState>> {
+        let Some(record) = self.table.get(PUBLICATION_STATE_SUFFIX).await? else {
+            return Ok(None);
+        };
+        Ok(Some(PublicationState::decode(&record.value)?))
+    }
+
+    async fn create_if_absent(
+        &self,
+        initial: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let result = self
+            .table
+            .put(
+                PUBLICATION_STATE_SUFFIX,
+                initial.encode(),
+                PutCond::IfAbsent,
+            )
+            .await?;
+        if result.applied {
+            return Ok(CasOutcome::Applied(initial.clone()));
+        }
+        Ok(CasOutcome::Failed {
+            current: self.load().await?,
+        })
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> Result<CasOutcome<PublicationState>> {
+        let Some(current) = self.table.get(PUBLICATION_STATE_SUFFIX).await? else {
+            return Ok(CasOutcome::Failed { current: None });
+        };
+        let current_state = PublicationState::decode(&current.value)?;
+        if current_state != *expected {
+            return Ok(CasOutcome::Failed {
+                current: Some(current_state),
+            });
+        }
+
+        let result = self
+            .table
+            .put(
+                PUBLICATION_STATE_SUFFIX,
+                next.encode(),
+                PutCond::IfVersion(current.version),
+            )
+            .await?;
+        if result.applied {
+            return Ok(CasOutcome::Applied(next.clone()));
+        }
+
+        Ok(CasOutcome::Failed {
+            current: self.load().await?,
+        })
+    }
 }
 
 impl<T: PublicationStore> PublicationStore for Arc<T> {

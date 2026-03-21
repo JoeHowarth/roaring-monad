@@ -4,14 +4,11 @@ use crate::api::{ExecutionBudget, FinalizedHistoryWriter, FinalizedLogQueries, Q
 use crate::error::{Error, Result};
 use crate::ingest::authority::WriteAuthority;
 use crate::logs::types::{Block, IngestOutcome, Log};
-use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::{FinalizedHistoryService, reader_only_mode_error};
 
-impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
-    FinalizedHistoryService<A, M, B>
-{
+impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M, B> {
     pub async fn query_logs(
         &self,
         request: QueryLogsRequest,
@@ -28,10 +25,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         <Self as FinalizedHistoryWriter>::ingest_finalized_blocks(self, blocks).await
     }
 
-    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome>
-    where
-        M: PublicationStore,
-    {
+    async fn ingest_blocks_with_startup(&self, blocks: Vec<Block>) -> Result<IngestOutcome> {
         if !self.allows_writes {
             return Err(reader_only_mode_error());
         }
@@ -43,7 +37,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 impl<A, M, B> FinalizedHistoryWriter for FinalizedHistoryService<A, M, B>
 where
     A: WriteAuthority,
-    M: MetaStore + PublicationStore,
+    M: MetaStore,
     B: BlobStore,
 {
     async fn ingest_finalized_block(&self, block: Block) -> Result<IngestOutcome> {
@@ -68,7 +62,7 @@ where
 impl<A, M, B> FinalizedLogQueries for FinalizedHistoryService<A, M, B>
 where
     A: WriteAuthority,
-    M: MetaStore + PublicationStore,
+    M: MetaStore,
     B: BlobStore,
 {
     async fn query_logs(
@@ -80,7 +74,10 @@ where
             return Err(Error::Degraded(self.state.reason()));
         }
 
-        let result = self.query.query_logs(self.tables(), request, budget).await;
+        let result = self
+            .query
+            .query_logs(self.tables(), &self.publication_store, request, budget)
+            .await;
         self.update_backend_state(&result);
         result
     }

@@ -25,7 +25,7 @@ pub async fn load_log_block_window<M: MetaStore, B: BlobStore>(
 mod tests {
     use super::{load_log_block_record, load_log_block_window};
     use crate::core::ids::LogId;
-    use crate::domain::keys::block_record_key;
+    use crate::domain::keys::{BLOCK_RECORD_FAMILY, block_record_suffix};
     use crate::domain::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -43,7 +43,8 @@ mod tests {
                 Arc::new(InMemoryBlobStore::default()),
             );
             meta.put(
-                &block_record_key(14),
+                BLOCK_RECORD_FAMILY,
+                &block_record_suffix(14),
                 BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [2; 32],

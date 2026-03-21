@@ -48,9 +48,10 @@ impl LogsQueryEngine {
         }
     }
 
-    pub async fn query_logs<M: MetaStore + PublicationStore, B: BlobStore>(
+    pub async fn query_logs<M: MetaStore, P: PublicationStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
+        publication_store: &P,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
@@ -75,7 +76,13 @@ impl LogsQueryEngine {
 
         let block_range = self
             .range_resolver
-            .resolve(tables, request.from_block, request.to_block, request.order)
+            .resolve(
+                tables,
+                publication_store,
+                request.from_block,
+                request.to_block,
+                request.order,
+            )
             .await?;
         if block_range.is_empty() {
             return Ok(self.empty_page(&block_range));
