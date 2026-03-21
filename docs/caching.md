@@ -4,7 +4,8 @@ This document describes the immutable artifact-table and bytes-cache design.
 
 ## Design Principle
 
-Query code reads immutable artifacts through typed table readers. Each table reader owns:
+Query, startup, and ingest share one long-lived `Runtime<M, B>` that owns typed
+table readers over cheap-clone store handles. Each table reader owns:
 
 - backend access for that artifact table
 - its own bytes cache instance
@@ -12,6 +13,11 @@ Query code reads immutable artifacts through typed table readers. Each table rea
 - decode/load behavior
 
 The underlying cache still stores raw `Bytes` values, not decoded structs. This keeps the cache storage type-unaware while allowing zero-copy ref types to validate and read directly from cached bytes. `Bytes::clone()` is an Arc increment, making cache hits cheap.
+
+Ingest writes are write-through for the typed artifact surfaces owned by `Tables`.
+When a block is ingested, the just-written immutable artifacts are immediately
+seeded into the corresponding per-table cache so recency-biased reads do not
+need to miss once before warming.
 
 ## Tables
 
@@ -73,7 +79,6 @@ misses, inserts, evictions, and resident bytes.
 ## Deferred Scope
 
 - miss deduplication (concurrent fetches for the same key)
-- eager cache population on ingest writes
 - compression or alternate backing allocation inside the cache
 - payload-only stored log encoding (removing duplicated `block_num`/`block_hash`
   from stored log bytes)

@@ -16,9 +16,11 @@ The main path:
 4. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for the block exist
 5. `query_logs` resolves a finalized block window
 6. the logs family maps that block window to a log-ID window
-7. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
-8. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
-9. the query returns `QueryPage<Log>` with exact resume metadata
+7. query, startup, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
+8. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
+9. ingest writes seed those same typed caches immediately
+10. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
+11. the query returns `QueryPage<Log>` with exact resume metadata
 
 ## Crate Layout
 
@@ -34,7 +36,9 @@ The crate is organized in three layers.
 ### Method boundary
 
 - `src/api.rs`
+- `src/block.rs`
 - `src/family.rs`
+- `src/runtime.rs`
 
 ### Shared finalized-history substrate
 
@@ -72,6 +76,8 @@ This crate executes queries and ingest. It does not format JSON-RPC responses.
 The shared layer owns:
 
 - the explicit family boundary used by generic startup/ingest machinery
+- the shared finalized block envelope used by concrete ingest entrypoints
+- the long-lived runtime that shares store handles and typed tables across query/startup/ingest
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
@@ -93,6 +99,7 @@ The logs layer owns:
 - immutable directory fragment writes and summary compaction
 - immutable stream fragment writes and page compaction
 - stream fanout for address/topic indexes
+- logs-specific sequencing state (`next_log_id`) and per-block ingest behavior
 
 ## Main Types
 

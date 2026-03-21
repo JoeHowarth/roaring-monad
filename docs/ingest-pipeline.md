@@ -8,21 +8,9 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 async def ingest_finalized_blocks(blocks, lease):
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
 
-    first_log_id = derive_next_log_id_from_block_record(lease.indexed_finalized_head)
-    next_log_id = first_log_id
-    opened_during = []
-
+    log_state = logs.load_startup_state(lease.indexed_finalized_head)
     for block in blocks:
-        await logs.persist_log_artifacts(block.logs, next_log_id)
-        await logs.persist_log_block_record(block, next_log_id)
-        await logs.persist_log_dir_by_block(block, next_log_id)
-        opened_during.extend(await logs.persist_stream_fragments(block, next_log_id))
-        next_log_id += len(block.logs)
-
-    await mark_open_bitmap_pages_that_remain_open(opened_during, next_log_id)
-
-    await logs.compact_newly_sealed_directory_boundaries(first_log_id, next_log_id)
-    await seal_newly_sealed_stream_pages(first_log_id, next_log_id, opened_during)
+        await logs.ingest_block(block, log_state)
 
     await compare_and_set_publication_state(
         expected=lease,
@@ -30,7 +18,7 @@ async def ingest_finalized_blocks(blocks, lease):
     )
 ```
 
-The `IngestEngine` orchestrates this flow. It validates finalized sequencing and parent hashes, then delegates artifact writes to the logs family.
+The `IngestEngine` orchestrates this flow. It owns finalized sequencing validation, publication, and the shared block loop. Families derive their startup state from the published head and then ingest one shared finalized block at a time.
 
 ## Artifact Write Order
 
@@ -43,7 +31,7 @@ For each block in the batch:
 5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
 6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
 
-All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary.
+All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary. Writes flow through the service-owned typed `Tables` runtime so ingest also warms the same per-table caches that queries read.
 
 ## Directory Compaction
 
@@ -74,9 +62,10 @@ When a stream fragment is written to a page for the first time in a batch, an op
 ## Important Boundaries
 
 - `api.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
-- `family.rs`: generic startup/ingest boundary between the concrete API and family-owned logic
-- `ingest/engine.rs`: generic publication orchestration from current head to new tail for a selected family
-- `logs/family.rs`: logs-specific startup recovery and finalized ingest sequencing
+- `family.rs`: generic per-block family boundary between the concrete API and family-owned logic
+- `runtime.rs`: shared store-handle + typed-table runtime used by query/startup/ingest
+- `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
+- `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing
 - `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 

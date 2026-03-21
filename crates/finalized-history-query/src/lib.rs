@@ -1,4 +1,5 @@
 pub mod api;
+pub mod block;
 pub mod codec;
 pub mod config;
 pub mod core;
@@ -15,6 +16,7 @@ pub mod streams;
 pub mod tables;
 
 pub use api::{ExecutionBudget, FinalizedHistoryService, QueryLogsRequest};
+pub use block::Block;
 pub use config::Config;
 pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};
@@ -24,4 +26,4 @@ pub use ingest::authority::{
     AuthorityState, LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession,
 };
 pub use logs::filter::LogFilter;
-pub use logs::types::{Block, HealthReport, IngestOutcome, Log};
+pub use logs::types::{HealthReport, IngestOutcome, Log};

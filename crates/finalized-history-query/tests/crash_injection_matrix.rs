@@ -571,11 +571,12 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .await
             .expect("retry should overwrite unpublished artifacts");
 
-        let tables = finalized_history_query::tables::Tables::without_cache(
+        let runtime = finalized_history_query::runtime::Runtime::new(
             takeover_writer.meta_store().clone(),
             takeover_writer.blob_store().clone(),
+            finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(&tables, &MetaPublicationStore::new(Arc::clone(&meta)), 0)
+        let plan = startup_plan(&runtime, &MetaPublicationStore::new(Arc::clone(&meta)), 0)
             .await
             .expect("post conflict startup plan");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);

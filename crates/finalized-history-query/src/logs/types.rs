@@ -1,3 +1,4 @@
+pub use crate::block::Block;
 use crate::core::ids::LogId;
 pub use crate::domain::types::PublicationState;
 
@@ -48,14 +49,6 @@ pub struct BlockRecord {
     pub parent_hash: Hash32,
     pub first_log_id: u64,
     pub count: u32,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct Block {
-    pub block_num: u64,
-    pub block_hash: Hash32,
-    pub parent_hash: Hash32,
-    pub logs: Vec<Log>,
 }
 
 #[derive(Debug, Clone)]

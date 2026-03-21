@@ -1,14 +1,15 @@
+use crate::block::Block;
 use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::family::StartupFamily;
+use crate::family::BlockFamily;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::family::LogsFamily;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
-use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
+use crate::logs::types::{HealthReport, IngestOutcome, Log};
 use crate::runtime::Runtime;
 pub use crate::startup::StartupPlan;
 use crate::startup::startup_plan;
@@ -109,7 +110,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
-            return startup_plan(self.tables(), &self.publication_store, 0).await;
+            return startup_plan(self.runtime(), &self.publication_store, 0).await;
         }
 
         self.startup_locked().await
@@ -132,10 +133,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .await
     }
 
-    fn tables(&self) -> &crate::tables::Tables<M, B> {
-        self.runtime.tables()
-    }
-
     async fn startup_locked(&self) -> Result<StartupPlan> {
         debug_assert!(self.allows_writes);
         let session = self
@@ -151,7 +148,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         let log_state = self
             .ingest
             .family
-            .load_startup_state(self.runtime.tables(), indexed_finalized_head)
+            .load_startup_state(self.runtime(), indexed_finalized_head)
             .await?;
         Ok(StartupPlan {
             head_state: crate::store::publication::FinalizedHeadState {

@@ -205,12 +205,13 @@ fn recovery_startup_smoke_check() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
 
-        let tables = finalized_history_query::tables::Tables::without_cache(
-            std::sync::Arc::new(meta.clone()),
-            std::sync::Arc::new(blob.clone()),
+        let runtime = finalized_history_query::runtime::Runtime::new(
+            meta.clone(),
+            blob.clone(),
+            finalized_history_query::tables::BytesCacheConfig::default(),
         );
         let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta));
-        let rec = startup_plan(&tables, &publication_store, 0)
+        let rec = startup_plan(&runtime, &publication_store, 0)
             .await
             .expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
