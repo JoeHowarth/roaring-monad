@@ -60,6 +60,7 @@ mod tests {
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
 
+    #[derive(Clone)]
     struct CountingBlobStore {
         inner: InMemoryBlobStore,
         get_blob_count: Arc<AtomicU64>,
@@ -131,8 +132,7 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let tables =
-                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(LogId::new(12))
@@ -170,8 +170,7 @@ mod tests {
             .await
             .expect("write directory fragment");
 
-            let tables =
-                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(log_id)
@@ -211,8 +210,7 @@ mod tests {
             .await
             .expect("write directory bucket");
 
-            let tables =
-                Tables::without_cache(std::sync::Arc::new(meta), std::sync::Arc::new(blob));
+            let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
                 .resolve_log_id(log_id)
@@ -287,8 +285,8 @@ mod tests {
             .expect("write block log blob");
 
             let tables = Tables::new(
-                std::sync::Arc::new(meta),
-                std::sync::Arc::new(blob),
+                meta,
+                blob,
                 BytesCacheConfig {
                     point_log_payloads: TableCacheConfig {
                         max_bytes: 4 * 1024,
@@ -384,8 +382,8 @@ mod tests {
             .expect("write block log blob");
 
             let tables = Tables::new(
-                std::sync::Arc::new(meta),
-                std::sync::Arc::new(blob),
+                meta,
+                blob,
                 BytesCacheConfig {
                     point_log_payloads: TableCacheConfig {
                         max_bytes: 4 * 1024,

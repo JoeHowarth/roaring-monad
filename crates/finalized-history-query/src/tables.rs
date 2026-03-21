@@ -217,36 +217,36 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
 }
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
-    pub fn without_cache(meta_store: Arc<M>, blob_store: Arc<B>) -> Self {
+    pub fn without_cache(meta_store: M, blob_store: B) -> Self {
         let block_records = BlockRecordTable {
-            table: meta_store.clone().table(BlockRecordSpec::TABLE),
+            table: meta_store.table(BlockRecordSpec::TABLE),
             cache: HashMapTableBytesCache::default(),
         };
         let block_log_headers = BlockLogHeaderTable {
-            table: meta_store.clone().table(BlockLogHeaderSpec::TABLE),
+            table: meta_store.table(BlockLogHeaderSpec::TABLE),
             cache: HashMapTableBytesCache::default(),
         };
         Self {
             block_records,
             block_log_headers: block_log_headers.clone(),
             dir_buckets: DirBucketTable {
-                table: meta_store.clone().table(LogDirBucketSpec::TABLE),
+                table: meta_store.table(LogDirBucketSpec::TABLE),
                 cache: HashMapTableBytesCache::default(),
             },
             log_dir_sub_buckets: LogDirSubBucketTable {
-                table: meta_store.clone().table(LogDirSubBucketSpec::TABLE),
+                table: meta_store.table(LogDirSubBucketSpec::TABLE),
                 cache: HashMapTableBytesCache::default(),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().scannable_table(LogDirByBlockSpec::TABLE),
+                table: meta_store.scannable_table(LogDirByBlockSpec::TABLE),
             },
             point_log_payloads: PointLogPayloadTable {
-                blob_table: blob_store.clone().table(BlockLogBlobSpec::TABLE),
+                blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: HashMapTableBytesCache::default(),
                 block_log_headers,
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().scannable_table(BitmapByBlockSpec::TABLE),
+                table: meta_store.scannable_table(BitmapByBlockSpec::TABLE),
             },
             bitmap_page_meta: BitmapPageMetaTable {
                 table: meta_store.table(BitmapPageMetaSpec::TABLE),
@@ -259,35 +259,35 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
         }
     }
 
-    pub fn new(meta_store: Arc<M>, blob_store: Arc<B>, config: BytesCacheConfig) -> Self {
+    pub fn new(meta_store: M, blob_store: B, config: BytesCacheConfig) -> Self {
         let block_records = BlockRecordTable {
-            table: meta_store.clone().table(BlockRecordSpec::TABLE),
+            table: meta_store.table(BlockRecordSpec::TABLE),
             cache: HashMapTableBytesCache::new(config.block_records.max_bytes),
         };
         let block_log_headers = BlockLogHeaderTable {
-            table: meta_store.clone().table(BlockLogHeaderSpec::TABLE),
+            table: meta_store.table(BlockLogHeaderSpec::TABLE),
             cache: HashMapTableBytesCache::new(config.block_log_header.max_bytes),
         };
         Self {
             block_records,
             dir_buckets: DirBucketTable {
-                table: meta_store.clone().table(LogDirBucketSpec::TABLE),
+                table: meta_store.table(LogDirBucketSpec::TABLE),
                 cache: HashMapTableBytesCache::new(config.log_dir_buckets.max_bytes),
             },
             log_dir_sub_buckets: LogDirSubBucketTable {
-                table: meta_store.clone().table(LogDirSubBucketSpec::TABLE),
+                table: meta_store.table(LogDirSubBucketSpec::TABLE),
                 cache: HashMapTableBytesCache::new(config.log_dir_sub_buckets.max_bytes),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().scannable_table(LogDirByBlockSpec::TABLE),
+                table: meta_store.scannable_table(LogDirByBlockSpec::TABLE),
             },
             point_log_payloads: PointLogPayloadTable {
-                blob_table: blob_store.clone().table(BlockLogBlobSpec::TABLE),
+                blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: HashMapTableBytesCache::new(config.point_log_payloads.max_bytes),
                 block_log_headers: block_log_headers.clone(),
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().scannable_table(BitmapByBlockSpec::TABLE),
+                table: meta_store.scannable_table(BitmapByBlockSpec::TABLE),
             },
             bitmap_page_meta: BitmapPageMetaTable {
                 table: meta_store.table(BitmapPageMetaSpec::TABLE),
@@ -369,6 +369,17 @@ impl<M: MetaStore> BlockRecordTable<M> {
             .put(&key, record.value.clone(), record.value.len());
         Ok(Some(BlockRecord::decode(&record.value)?))
     }
+
+    pub async fn put(&self, block_num: u64, block_record: &BlockRecord) -> Result<()> {
+        let key = BlockRecordSpec::key(block_num);
+        let encoded = block_record.encode();
+        let _ = self
+            .table
+            .put(&key, encoded.clone(), crate::store::traits::PutCond::Any)
+            .await?;
+        self.cache.put(&key, encoded.clone(), encoded.len());
+        Ok(())
+    }
 }
 
 pub struct BlockLogHeaderTable<M> {
@@ -376,7 +387,7 @@ pub struct BlockLogHeaderTable<M> {
     cache: HashMapTableBytesCache,
 }
 
-impl<M> Clone for BlockLogHeaderTable<M> {
+impl<M: MetaStore> Clone for BlockLogHeaderTable<M> {
     fn clone(&self) -> Self {
         Self {
             table: self.table.clone(),
@@ -398,6 +409,21 @@ impl<M: MetaStore> BlockLogHeaderTable<M> {
             .put(&key, record.value.clone(), record.value.len());
         Ok(Some(BlockLogHeaderRef::new(record.value)?))
     }
+
+    pub async fn put(
+        &self,
+        block_num: u64,
+        header: &crate::logs::types::BlockLogHeader,
+    ) -> Result<()> {
+        let key = BlockLogHeaderSpec::key(block_num);
+        let encoded = header.encode();
+        let _ = self
+            .table
+            .put(&key, encoded.clone(), crate::store::traits::PutCond::Any)
+            .await?;
+        self.cache.put(&key, encoded.clone(), encoded.len());
+        Ok(())
+    }
 }
 
 pub struct DirBucketTable<M> {
@@ -418,6 +444,21 @@ impl<M: MetaStore> DirBucketTable<M> {
             .put(&key, record.value.clone(), record.value.len());
         Ok(Some(DirBucketRef::new(record.value)?))
     }
+
+    pub async fn put(
+        &self,
+        bucket_start: u64,
+        bucket: &crate::logs::types::DirBucket,
+    ) -> Result<()> {
+        let key = LogDirBucketSpec::key(bucket_start);
+        let encoded = bucket.encode();
+        let _ = self
+            .table
+            .put(&key, encoded.clone(), crate::store::traits::PutCond::Any)
+            .await?;
+        self.cache.put(&key, encoded.clone(), encoded.len());
+        Ok(())
+    }
 }
 
 pub struct LogDirSubBucketTable<M> {
@@ -437,6 +478,21 @@ impl<M: MetaStore> LogDirSubBucketTable<M> {
         self.cache
             .put(&key, record.value.clone(), record.value.len());
         Ok(Some(DirBucketRef::new(record.value)?))
+    }
+
+    pub async fn put(
+        &self,
+        sub_bucket_start: u64,
+        bucket: &crate::logs::types::DirBucket,
+    ) -> Result<()> {
+        let key = LogDirSubBucketSpec::key(sub_bucket_start);
+        let encoded = bucket.encode();
+        let _ = self
+            .table
+            .put(&key, encoded.clone(), crate::store::traits::PutCond::Any)
+            .await?;
+        self.cache.put(&key, encoded.clone(), encoded.len());
+        Ok(())
     }
 }
 
@@ -473,6 +529,26 @@ impl<M: MetaStore> DirectoryFragmentTable<M> {
         fragments.sort_by_key(|fragment| fragment.block_num);
         Ok(fragments)
     }
+
+    pub async fn put(
+        &self,
+        sub_bucket_start: u64,
+        block_num: u64,
+        fragment: &DirByBlock,
+    ) -> Result<()> {
+        let partition = LogDirByBlockSpec::partition(sub_bucket_start);
+        let clustering = LogDirByBlockSpec::clustering(block_num);
+        let _ = self
+            .table
+            .put(
+                &partition,
+                &clustering,
+                fragment.encode(),
+                crate::store::traits::PutCond::Any,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 pub struct BitmapByBlockTable<M> {
@@ -504,6 +580,27 @@ impl<M: MetaStore> BitmapByBlockTable<M> {
 
         Ok(fragments)
     }
+
+    pub async fn put(
+        &self,
+        stream: &str,
+        page_start: u32,
+        block_num: u64,
+        bytes: Bytes,
+    ) -> Result<()> {
+        let partition = BitmapByBlockSpec::partition(stream, page_start);
+        let clustering = BitmapByBlockSpec::clustering(block_num);
+        let _ = self
+            .table
+            .put(
+                &partition,
+                &clustering,
+                bytes,
+                crate::store::traits::PutCond::Any,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 pub struct BitmapPageMetaTable<M> {
@@ -524,6 +621,17 @@ impl<M: MetaStore> BitmapPageMetaTable<M> {
         self.cache
             .put(&key, record.value.clone(), record.value.len());
         Ok(Some(StreamBitmapMeta::decode(&record.value)?))
+    }
+
+    pub async fn put(&self, stream: &str, page_start: u32, meta: &StreamBitmapMeta) -> Result<()> {
+        let key = BitmapPageMetaSpec::key(stream, page_start);
+        let encoded = meta.encode();
+        let _ = self
+            .table
+            .put(&key, encoded.clone(), crate::store::traits::PutCond::Any)
+            .await?;
+        self.cache.put(&key, encoded.clone(), encoded.len());
+        Ok(())
     }
 }
 
@@ -548,6 +656,13 @@ impl<B: BlobStore> BitmapPageBlobTable<B> {
         };
         self.cache.put(key, bytes.clone(), bytes.len());
         Ok(Some(bytes))
+    }
+
+    pub async fn put(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
+        let key = BitmapPageBlobSpec::key(stream, page_start);
+        self.blob_table.put(&key, bytes.clone()).await?;
+        self.cache.put(&key, bytes.clone(), bytes.len());
+        Ok(())
     }
 }
 
@@ -636,6 +751,30 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
         }
 
         Ok(out)
+    }
+
+    pub async fn put_block(
+        &self,
+        block_num: u64,
+        block_blob: Bytes,
+        header: &crate::logs::types::BlockLogHeader,
+    ) -> Result<()> {
+        self.blob_table
+            .put(&BlockLogBlobSpec::key(block_num), block_blob.clone())
+            .await?;
+        self.block_log_headers.put(block_num, header).await?;
+
+        for local_ordinal in 0..header.offsets.len().saturating_sub(1) {
+            let payload = slice_relative(
+                &block_blob,
+                header.offsets[local_ordinal],
+                header.offsets[local_ordinal + 1],
+            )?;
+            let payload_key = point_log_payload_cache_key(block_num, local_ordinal as u64);
+            self.cache.put(&payload_key, payload.clone(), payload.len());
+        }
+
+        Ok(())
     }
 }
 

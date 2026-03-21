@@ -733,8 +733,8 @@ pub fn materializer<'a>(
     blob_store: &'a InMemoryBlobStore,
 ) -> LogMaterializer<'a, InMemoryMetaStore, InMemoryBlobStore> {
     let tables = Box::leak(Box::new(Tables::without_cache(
-        std::sync::Arc::new(meta_store.clone()),
-        std::sync::Arc::new(blob_store.clone()),
+        meta_store.clone(),
+        blob_store.clone(),
     )));
     LogMaterializer::new(tables)
 }

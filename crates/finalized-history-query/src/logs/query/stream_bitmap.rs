@@ -250,6 +250,7 @@ mod tests {
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
 
+    #[derive(Clone)]
     struct CountingMetaStore {
         inner: InMemoryMetaStore,
         target_family: TableId,
@@ -336,6 +337,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct CountingBlobStore {
         inner: InMemoryBlobStore,
         target_key: Vec<u8>,
@@ -419,7 +421,7 @@ mod tests {
             .await
             .expect("write stream page meta");
 
-            let tables = Tables::without_cache(Arc::new(meta), Arc::new(blob));
+            let tables = Tables::without_cache(meta, blob);
             let entries = load_stream_entries(&tables, stream, 0, 20)
                 .await
                 .expect("load stream entries");
@@ -488,8 +490,8 @@ mod tests {
                 get_blob_count: blob_gets.clone(),
             };
             let tables = Tables::new(
-                Arc::new(meta),
-                Arc::new(blob),
+                meta,
+                blob,
                 BytesCacheConfig {
                     bitmap_page_meta: TableCacheConfig {
                         max_bytes: 4 * 1024,
@@ -573,8 +575,8 @@ mod tests {
                 get_blob_count: blob_gets.clone(),
             };
             let tables = Tables::new(
-                Arc::new(meta),
-                Arc::new(blob),
+                meta,
+                blob,
                 BytesCacheConfig {
                     bitmap_page_meta: TableCacheConfig {
                         max_bytes: 4 * 1024,

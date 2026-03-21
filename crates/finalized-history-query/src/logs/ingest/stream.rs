@@ -3,17 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use roaring::RoaringBitmap;
 
 use crate::core::ids::LogId;
-use crate::domain::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::error::{Error, Result};
-use crate::logs::keys::read_u64_be;
+use crate::error::Result;
 use crate::logs::table_specs;
-use crate::logs::table_specs::{BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec};
 use crate::logs::types::Block;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
-
-use super::artifact::{put_artifact_blob, put_artifact_meta, put_scannable_artifact_meta};
+use crate::tables::Tables;
 
 pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<String, Vec<u32>> {
     let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
@@ -52,8 +48,7 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
 }
 
 pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    _blob_store: &B,
+    tables: &Tables<M, B>,
     block: &Block,
     first_log_id: u64,
 ) -> Result<Vec<(String, u32)>> {
@@ -78,16 +73,15 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
                 bitmap,
             };
 
-            let partition = BitmapByBlockSpec::partition(&stream, page_start);
-            let clustering = BitmapByBlockSpec::clustering(block.block_num);
-            put_scannable_artifact_meta(
-                meta_store,
-                BitmapByBlockSpec::TABLE,
-                &partition,
-                &clustering,
-                encode_bitmap_blob(&bitmap_blob)?,
-            )
-            .await?;
+            tables
+                .bitmap_by_block()
+                .put(
+                    &stream,
+                    page_start,
+                    block.block_num,
+                    encode_bitmap_blob(&bitmap_blob)?,
+                )
+                .await?;
             touched_pages.insert((stream.clone(), page_start));
         }
     }
@@ -96,8 +90,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 }
 
 pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
+    tables: &Tables<M, B>,
     sealed_pages: &[(String, u32)],
 ) -> Result<()> {
     if sealed_pages.is_empty() {
@@ -105,32 +98,24 @@ pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
     }
 
     for (stream_id, page_start) in sealed_pages {
-        compact_stream_page(meta_store, blob_store, stream_id, *page_start).await?;
+        compact_stream_page(tables, stream_id, *page_start).await?;
     }
 
     Ok(())
 }
 
 pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
+    tables: &Tables<M, B>,
     stream_id: &str,
     page_start: u32,
 ) -> Result<bool> {
-    let partition = BitmapByBlockSpec::partition(stream_id, page_start);
-    let page = meta_store
-        .scan_list(BitmapByBlockSpec::TABLE, &partition, b"", None, usize::MAX)
-        .await?;
     let mut merged = RoaringBitmap::new();
-    for clustering in page.keys {
-        let _block_num = read_u64_be(&clustering).ok_or(Error::Decode("invalid block key"))?;
-        let Some(record) = meta_store
-            .scan_get(BitmapByBlockSpec::TABLE, &partition, &clustering)
-            .await?
-        else {
-            continue;
-        };
-        merged |= &decode_bitmap_blob(&record.value)?.bitmap;
+    for bytes in tables
+        .bitmap_by_block()
+        .load_page_fragments(stream_id, page_start)
+        .await?
+    {
+        merged |= &decode_bitmap_blob(&bytes)?.bitmap;
     }
     if merged.is_empty() {
         return Ok(false);
@@ -153,19 +138,13 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
         bitmap: merged,
     };
 
-    put_artifact_blob(
-        blob_store,
-        BitmapPageBlobSpec::TABLE,
-        &BitmapPageBlobSpec::key(stream_id, page_start),
-        encode_bitmap_blob(&bitmap_blob)?,
-    )
-    .await?;
-    put_artifact_meta(
-        meta_store,
-        BitmapPageMetaSpec::TABLE,
-        &BitmapPageMetaSpec::key(stream_id, page_start),
-        meta.encode(),
-    )
-    .await?;
+    tables
+        .bitmap_page_blobs()
+        .put(stream_id, page_start, encode_bitmap_blob(&bitmap_blob)?)
+        .await?;
+    tables
+        .bitmap_page_meta()
+        .put(stream_id, page_start, &meta)
+        .await?;
     Ok(true)
 }

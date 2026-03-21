@@ -150,7 +150,7 @@ pub struct ExpireBeforePublishMetaStore {
 
 impl ExpireBeforePublishMetaStore {
     fn publication_store(&self) -> MetaPublicationStore<Self> {
-        MetaPublicationStore::new(Arc::new(self.clone()))
+        MetaPublicationStore::new(self.clone())
     }
 }
 

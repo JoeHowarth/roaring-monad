@@ -33,16 +33,11 @@ mod tests {
     use crate::store::traits::{MetaStore, PutCond};
     use crate::tables::Tables;
     use futures::executor::block_on;
-    use std::sync::Arc;
-
     #[test]
     fn load_log_block_window_projects_log_specific_fields() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            let tables = Tables::without_cache(
-                Arc::new(meta.clone()),
-                Arc::new(InMemoryBlobStore::default()),
-            );
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             meta.put(
                 BLOCK_RECORD_TABLE,
                 &BlockRecordSpec::key(14),

@@ -39,6 +39,7 @@ mod tests {
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, MetaStore};
     use crate::streams::bitmap_blob::decode_bitmap_blob;
+    use crate::tables::Tables;
     use futures::executor::block_on;
 
     use super::collect_stream_appends;
@@ -70,10 +71,11 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
             let config = Config::default();
             let logs = vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 1, 2)];
 
-            persist_log_artifacts(&config, &meta, &blob, 7, &logs, 11)
+            persist_log_artifacts(&config, &tables, 7, &logs, 11)
                 .await
                 .expect("persist artifacts");
 
@@ -106,13 +108,14 @@ mod tests {
     fn persist_log_dir_by_block_and_compaction_cover_spanning_block() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let first_log_id = crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
-            persist_log_dir_by_block(&meta, 700, first_log_id, count)
+            persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64)
+            compact_sealed_directory(&tables, first_log_id, count, first_log_id + count as u64)
                 .await
                 .expect("compact directory");
 
@@ -178,6 +181,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
             let block = sample_block(
                 7,
                 11,
@@ -188,10 +192,10 @@ mod tests {
                 ],
             );
             let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 2);
-            let touched_pages = persist_stream_fragments(&meta, &blob, &block, first_log_id)
+            let touched_pages = persist_stream_fragments(&tables, &block, first_log_id)
                 .await
                 .expect("persist stream fragments");
-            compact_sealed_stream_pages(&meta, &blob, &touched_pages)
+            compact_sealed_stream_pages(&tables, &touched_pages)
                 .await
                 .expect("compact stream pages");
 
@@ -253,9 +257,10 @@ mod tests {
     fn persist_log_block_record_writes_block_record_and_hash_index() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
 
-            persist_log_block_record(&meta, &block, 33)
+            persist_log_block_record(&tables, &meta, &block, 33)
                 .await
                 .expect("persist block metadata");
 
@@ -281,13 +286,14 @@ mod tests {
     fn directory_bucket_compaction_writes_canonical_1m_summary_when_boundary_seals() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
             let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
-            persist_log_dir_by_block(&meta, 700, first_log_id, count)
+            persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&meta, first_log_id, count, first_log_id + count as u64)
+            compact_sealed_directory(&tables, first_log_id, count, first_log_id + count as u64)
                 .await
                 .expect("compact directory");
 

@@ -49,7 +49,7 @@ impl<M: MetaStore, B: BlobStore> IngestFamily<M, B> for LogsFamily {
         config: &Config,
         tables: &Tables<M, B>,
         meta_store: &M,
-        blob_store: &B,
+        _blob_store: &B,
         indexed_finalized_head: u64,
         blocks: &[Self::Block],
     ) -> Result<Self::Outcome> {
@@ -59,25 +59,17 @@ impl<M: MetaStore, B: BlobStore> IngestFamily<M, B> for LogsFamily {
         let mut opened_during = Vec::<OpenBitmapPage>::new();
 
         for block in blocks {
-            persist_log_artifacts(
-                config,
-                meta_store,
-                blob_store,
-                block.block_num,
-                &block.logs,
-                next_log_id,
-            )
-            .await?;
-            persist_log_block_record(meta_store, block, next_log_id).await?;
+            persist_log_artifacts(config, tables, block.block_num, &block.logs, next_log_id)
+                .await?;
+            persist_log_block_record(tables, meta_store, block, next_log_id).await?;
             persist_log_dir_by_block(
-                meta_store,
+                tables,
                 block.block_num,
                 next_log_id,
                 block.logs.len() as u32,
             )
             .await?;
-            let touched_pages =
-                persist_stream_fragments(meta_store, blob_store, block, next_log_id).await?;
+            let touched_pages = persist_stream_fragments(tables, block, next_log_id).await?;
             opened_during.extend(touched_pages.into_iter().filter_map(
                 |(stream_id, page_start)| {
                     parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
@@ -97,7 +89,7 @@ impl<M: MetaStore, B: BlobStore> IngestFamily<M, B> for LogsFamily {
             mark_open_bitmap_page_if_absent(meta_store, page).await?;
         }
 
-        compact_newly_sealed_directory(meta_store, from_next_log_id, next_log_id).await?;
+        compact_newly_sealed_directory(tables, from_next_log_id, next_log_id).await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
             meta_store,
@@ -107,13 +99,7 @@ impl<M: MetaStore, B: BlobStore> IngestFamily<M, B> for LogsFamily {
         )
         .await?
         {
-            let _ = compact_stream_page(
-                meta_store,
-                blob_store,
-                &page.stream_id,
-                page.page_start_local,
-            )
-            .await?;
+            let _ = compact_stream_page(tables, &page.stream_id, page.page_start_local).await?;
             delete_open_bitmap_page(meta_store, &page).await?;
         }
 

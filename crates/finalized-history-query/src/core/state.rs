@@ -70,17 +70,13 @@ mod tests {
     use crate::store::traits::{MetaStore, PutCond};
     use crate::tables::Tables;
     use futures::executor::block_on;
-    use std::sync::Arc;
 
     #[test]
     fn load_block_identity_returns_shared_block_fields() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            let tables = Tables::without_cache(
-                Arc::new(meta.clone()),
-                Arc::new(InMemoryBlobStore::default()),
-            );
-            let publication_store = MetaPublicationStore::new(Arc::new(meta.clone()));
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
+            let publication_store = MetaPublicationStore::new(meta.clone());
             assert!(matches!(
                 publication_store
                     .create_if_absent(&PublicationState {

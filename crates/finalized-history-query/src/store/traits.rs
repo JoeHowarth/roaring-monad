@@ -77,12 +77,12 @@ pub struct Page {
 
 #[derive(Debug)]
 pub struct KvTable<M> {
-    store: Arc<M>,
+    store: M,
     table: TableId,
 }
 
 impl<M> KvTable<M> {
-    pub fn new(store: Arc<M>, table: TableId) -> Self {
+    pub fn new(store: M, table: TableId) -> Self {
         Self { store, table }
     }
 
@@ -91,10 +91,10 @@ impl<M> KvTable<M> {
     }
 }
 
-impl<M> Clone for KvTable<M> {
+impl<M: Clone> Clone for KvTable<M> {
     fn clone(&self) -> Self {
         Self {
-            store: Arc::clone(&self.store),
+            store: self.store.clone(),
             table: self.table,
         }
     }
@@ -146,12 +146,12 @@ impl<M: MetaStore> KvTableRef<'_, M> {
 
 #[derive(Debug)]
 pub struct ScannableKvTable<M> {
-    store: Arc<M>,
+    store: M,
     table: ScannableTableId,
 }
 
 impl<M> ScannableKvTable<M> {
-    pub fn new(store: Arc<M>, table: ScannableTableId) -> Self {
+    pub fn new(store: M, table: ScannableTableId) -> Self {
         Self { store, table }
     }
 
@@ -160,10 +160,10 @@ impl<M> ScannableKvTable<M> {
     }
 }
 
-impl<M> Clone for ScannableKvTable<M> {
+impl<M: Clone> Clone for ScannableKvTable<M> {
     fn clone(&self) -> Self {
         Self {
-            store: Arc::clone(&self.store),
+            store: self.store.clone(),
             table: self.table,
         }
     }
@@ -213,12 +213,12 @@ pub struct ScannableKvTableRef<'a, M> {
 
 #[derive(Debug)]
 pub struct BlobTable<B> {
-    store: Arc<B>,
+    store: B,
     table: BlobTableId,
 }
 
 impl<B> BlobTable<B> {
-    pub fn new(store: Arc<B>, table: BlobTableId) -> Self {
+    pub fn new(store: B, table: BlobTableId) -> Self {
         Self { store, table }
     }
 
@@ -227,10 +227,10 @@ impl<B> BlobTable<B> {
     }
 }
 
-impl<B> Clone for BlobTable<B> {
+impl<B: Clone> Clone for BlobTable<B> {
     fn clone(&self) -> Self {
         Self {
-            store: Arc::clone(&self.store),
+            store: self.store.clone(),
             table: self.table,
         }
     }
@@ -380,12 +380,12 @@ impl<M: MetaStore> ScannableKvTableRef<'_, M> {
 /// Rust cannot enforce "cheap clone" mechanically, so this is a semantic
 /// contract for implementors of the trait.
 #[allow(async_fn_in_trait)]
-pub trait MetaStore: Send + Sync {
-    fn table(self: Arc<Self>, table: TableId) -> KvTable<Self>
+pub trait MetaStore: Clone + Send + Sync {
+    fn table(&self, table: TableId) -> KvTable<Self>
     where
         Self: Sized,
     {
-        KvTable::new(self, table)
+        KvTable::new(self.clone(), table)
     }
 
     fn table_ref(&self, table: TableId) -> KvTableRef<'_, Self>
@@ -395,11 +395,11 @@ pub trait MetaStore: Send + Sync {
         KvTableRef::new(self, table)
     }
 
-    fn scannable_table(self: Arc<Self>, table: ScannableTableId) -> ScannableKvTable<Self>
+    fn scannable_table(&self, table: ScannableTableId) -> ScannableKvTable<Self>
     where
         Self: Sized,
     {
-        ScannableKvTable::new(self, table)
+        ScannableKvTable::new(self.clone(), table)
     }
 
     fn scannable_table_ref(&self, table: ScannableTableId) -> ScannableKvTableRef<'_, Self>
@@ -526,12 +526,12 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 /// Rust cannot enforce "cheap clone" mechanically, so this is a semantic
 /// contract for implementors of the trait.
 #[allow(async_fn_in_trait)]
-pub trait BlobStore: Send + Sync {
-    fn table(self: Arc<Self>, table: BlobTableId) -> BlobTable<Self>
+pub trait BlobStore: Clone + Send + Sync {
+    fn table(&self, table: BlobTableId) -> BlobTable<Self>
     where
         Self: Sized,
     {
-        BlobTable::new(self, table)
+        BlobTable::new(self.clone(), table)
     }
 
     fn table_ref(&self, table: BlobTableId) -> BlobTableRef<'_, Self>

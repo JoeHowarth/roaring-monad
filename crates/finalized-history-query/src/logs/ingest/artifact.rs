@@ -2,52 +2,17 @@ use bytes::Bytes;
 
 use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
-use crate::domain::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
+use crate::domain::table_specs::PointTableSpec;
 use crate::error::{Error, Result};
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
-use crate::logs::table_specs::{
-    BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirByBlockSpec,
-    LogDirSubBucketSpec,
-};
+use crate::logs::table_specs::{BlockHashIndexSpec, LogDirSubBucketSpec};
 use crate::logs::types::{Block, BlockLogHeader, BlockRecord, DirByBlock, Log};
-use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, ScannableTableId, TableId};
-
-pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
-    meta_store: &M,
-    family: TableId,
-    key: &[u8],
-    value: Bytes,
-) -> Result<()> {
-    let _ = meta_store.put(family, key, value, PutCond::Any).await?;
-    Ok(())
-}
-
-pub(in crate::logs) async fn put_scannable_artifact_meta<M: MetaStore>(
-    meta_store: &M,
-    family: ScannableTableId,
-    partition: &[u8],
-    clustering: &[u8],
-    value: Bytes,
-) -> Result<()> {
-    let _ = meta_store
-        .scan_put(family, partition, clustering, value, PutCond::Any)
-        .await?;
-    Ok(())
-}
-
-pub(in crate::logs) async fn put_artifact_blob<B: BlobStore>(
-    blob_store: &B,
-    table: BlobTableId,
-    key: &[u8],
-    value: Bytes,
-) -> Result<()> {
-    blob_store.put_blob(table, key, value).await
-}
+use crate::store::traits::{BlobStore, MetaStore, PutCond};
+use crate::tables::Tables;
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
-    meta_store: &M,
-    blob_store: &B,
+    tables: &Tables<M, B>,
     block_num: u64,
     logs: &[Log],
     _first_log_id: u64,
@@ -57,24 +22,14 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     }
 
     let (block_blob, header) = encode_block_log_blob(logs)?;
-    put_artifact_blob(
-        blob_store,
-        BlockLogBlobSpec::TABLE,
-        &BlockLogBlobSpec::key(block_num),
-        block_blob,
-    )
-    .await?;
-    put_artifact_meta(
-        meta_store,
-        BlockLogHeaderSpec::TABLE,
-        &BlockLogHeaderSpec::key(block_num),
-        header.encode(),
-    )
-    .await?;
-    Ok(())
+    tables
+        .point_log_payloads()
+        .put_block(block_num, block_blob, &header)
+        .await
 }
 
-pub async fn persist_log_block_record<M: MetaStore>(
+pub async fn persist_log_block_record<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     meta_store: &M,
     block: &Block,
     first_log_id: u64,
@@ -86,27 +41,25 @@ pub async fn persist_log_block_record<M: MetaStore>(
         count: block.logs.len() as u32,
     };
 
-    put_artifact_meta(
-        meta_store,
-        BlockRecordSpec::TABLE,
-        &BlockRecordSpec::key(block.block_num),
-        block_record.encode(),
-    )
-    .await?;
+    tables
+        .block_records()
+        .put(block.block_num, &block_record)
+        .await?;
 
-    put_artifact_meta(
-        meta_store,
-        BlockHashIndexSpec::TABLE,
-        &BlockHashIndexSpec::key(&block.block_hash),
-        encode_u64(block.block_num),
-    )
-    .await?;
+    let _ = meta_store
+        .put(
+            BlockHashIndexSpec::TABLE,
+            &BlockHashIndexSpec::key(&block.block_hash),
+            encode_u64(block.block_num),
+            PutCond::Any,
+        )
+        .await?;
 
     Ok(())
 }
 
-pub async fn persist_log_dir_by_block<M: MetaStore>(
-    meta_store: &M,
+pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     block_num: u64,
     first_log_id: u64,
     count: u32,
@@ -123,19 +76,12 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     } else {
         LogDirSubBucketSpec::sub_bucket_start(fragment.end_log_id_exclusive.saturating_sub(1))
     };
-    let encoded_fragment = fragment.encode();
 
     loop {
-        let partition = LogDirByBlockSpec::partition(sub_bucket_start);
-        let clustering = LogDirByBlockSpec::clustering(block_num);
-        put_scannable_artifact_meta(
-            meta_store,
-            LogDirByBlockSpec::TABLE,
-            &partition,
-            &clustering,
-            encoded_fragment.clone(),
-        )
-        .await?;
+        tables
+            .directory_fragments()
+            .put(sub_bucket_start, block_num, &fragment)
+            .await?;
         if sub_bucket_start == last_sub_bucket_start {
             break;
         }

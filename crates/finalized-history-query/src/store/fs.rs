@@ -632,7 +632,7 @@ mod tests {
     fn create_if_absent_allows_only_one_creator() {
         let root = unique_temp_root("fs-create");
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
-        let publication_store = Arc::new(MetaPublicationStore::new(Arc::clone(&store)));
+        let publication_store = Arc::new(MetaPublicationStore::new((*store).clone()));
         let state = PublicationState {
             owner_id: 1,
             session_id: [1u8; 16],
@@ -666,7 +666,7 @@ mod tests {
     fn compare_and_set_is_serialized() {
         let root = unique_temp_root("fs-cas");
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
-        let publication_store = Arc::new(MetaPublicationStore::new(Arc::clone(&store)));
+        let publication_store = Arc::new(MetaPublicationStore::new((*store).clone()));
         let initial = PublicationState {
             owner_id: 1,
             session_id: [1u8; 16],

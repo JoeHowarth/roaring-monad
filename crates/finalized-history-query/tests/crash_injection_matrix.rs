@@ -572,8 +572,8 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .expect("retry should overwrite unpublished artifacts");
 
         let tables = finalized_history_query::tables::Tables::without_cache(
-            std::sync::Arc::clone(&takeover_writer.ingest.meta_store),
-            std::sync::Arc::clone(&takeover_writer.ingest.blob_store),
+            takeover_writer.meta_store().clone(),
+            takeover_writer.blob_store().clone(),
         );
         let plan = startup_plan(&tables, &MetaPublicationStore::new(Arc::clone(&meta)), 0)
             .await

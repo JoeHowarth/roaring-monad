@@ -207,10 +207,7 @@ pub async fn load_clause_sets_for_benchmark<M: MetaStore + Clone, B: BlobStore +
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
 ) -> Result<Vec<ShardBitmapSet>> {
-    let tables = Tables::without_cache(
-        std::sync::Arc::new((*meta_store).clone()),
-        std::sync::Arc::new((*blob_store).clone()),
-    );
+    let tables = Tables::without_cache(meta_store.clone(), blob_store.clone());
     load_clause_sets(
         &tables,
         &build_clause_specs(filter),

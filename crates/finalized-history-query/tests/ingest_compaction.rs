@@ -112,8 +112,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         );
         let page_start = table_specs::stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         assert!(
-            svc.ingest
-                .meta_store
+            svc.meta_store()
                 .get(
                     BITMAP_PAGE_META_TABLE,
                     &BitmapPageMetaSpec::key(&sid, page_start),
@@ -123,8 +122,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
                 .is_some()
         );
         assert!(
-            svc.ingest
-                .blob_store
+            svc.blob_store()
                 .get_blob(
                     BitmapPageBlobSpec::TABLE,
                     &BitmapPageBlobSpec::key(&sid, page_start)
@@ -180,8 +178,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         .expect("ingest");
 
         assert!(
-            svc.ingest
-                .meta_store
+            svc.meta_store()
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
                     &LogDirByBlockSpec::partition(0),

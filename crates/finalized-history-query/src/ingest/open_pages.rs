@@ -9,6 +9,7 @@ use crate::logs::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
 use crate::logs::table_specs::{self, OpenBitmapPageSpec};
 use crate::store::traits::BlobStore;
 use crate::store::traits::{DelCond, MetaStore, PutCond};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {
@@ -220,6 +221,7 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     next_log_id: u64,
 ) -> Result<()> {
+    let tables = Tables::without_cache(meta_store.clone(), blob_store.clone());
     let frontier_shard = table_specs::log_shard(LogId::new(next_log_id));
     for shard in shard_range_inclusive(
         LogShard::new(0).expect("0 is a valid shard"),
@@ -230,13 +232,7 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
             .into_iter()
             .filter(|page| page.is_sealed_at(next_log_id))
         {
-            let _ = compact_stream_page(
-                meta_store,
-                blob_store,
-                &page.stream_id,
-                page.page_start_local,
-            )
-            .await?;
+            let _ = compact_stream_page(&tables, &page.stream_id, page.page_start_local).await?;
             delete_open_bitmap_page(meta_store, &page).await?;
         }
     }

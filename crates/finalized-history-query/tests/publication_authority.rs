@@ -17,6 +17,7 @@ use finalized_history_query::logs::table_specs::{
     self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, BlockRecordSpec, LogDirByBlockSpec,
 };
 use finalized_history_query::logs::types::BlockRecord;
+use finalized_history_query::runtime::Runtime;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
@@ -48,8 +49,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
 
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
         let publication_state = svc
-            .ingest
-            .meta_store
+            .meta_store()
             .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("publication state get")
@@ -65,8 +65,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             expected_lease_valid_through_block
         );
         assert!(
-            svc.ingest
-                .meta_store
+            svc.meta_store()
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
                     &LogDirByBlockSpec::partition(0),
@@ -84,8 +83,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         );
         let page_start = table_specs::stream_page_start_local(0);
         assert!(
-            svc.ingest
-                .meta_store
+            svc.meta_store()
                 .scan_get(
                     BITMAP_BY_BLOCK_TABLE,
                     &BitmapByBlockSpec::partition(&sid, page_start),
@@ -255,9 +253,10 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
             advanced: Arc::new(AtomicBool::new(false)),
         };
         let blob = InMemoryBlobStore::default();
+        let runtime = Runtime::new(meta.clone(), blob.clone(), config.bytes_cache);
         let authority =
             LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
-        let engine = IngestEngine::new(config, authority, meta, blob, LogsFamily);
+        let engine = IngestEngine::new(config, authority, LogsFamily);
 
         engine
             .authority
@@ -266,7 +265,10 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
             .expect("bootstrap");
 
         let err = engine
-            .ingest_finalized_block(&mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .ingest_finalized_block(
+                &runtime,
+                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+            )
             .await
             .expect_err("mid-batch lease expiry should fail with LeaseLost");
         assert!(matches!(err, Error::LeaseLost));
@@ -278,15 +280,14 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
+        let runtime = Runtime::new(
+            meta.clone(),
+            blob.clone(),
+            finalized_history_query::tables::BytesCacheConfig::default(),
+        );
         let authority =
             LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
-        let engine = IngestEngine::new(
-            lease_writer_config(),
-            authority,
-            meta.clone(),
-            blob,
-            LogsFamily,
-        );
+        let engine = IngestEngine::new(lease_writer_config(), authority, LogsFamily);
 
         engine
             .authority
@@ -301,14 +302,17 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
             .expect("writer 2 takes over publication");
 
         let err = engine
-            .ingest_finalized_block(&mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .ingest_finalized_block(
+                &runtime,
+                &mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+            )
             .await
             .expect_err("stale writer ingest should fail");
         assert!(matches!(err, Error::LeaseLost));
 
         assert!(
-            engine
-                .meta_store
+            runtime
+                .meta_store()
                 .get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
                 .await
                 .expect("read block meta")
@@ -316,8 +320,8 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
             "stale writer should not write block metadata after takeover"
         );
         assert!(
-            engine
-                .blob_store
+            runtime
+                .blob_store()
                 .get_blob(BlockLogBlobSpec::TABLE, &BlockLogBlobSpec::key(1))
                 .await
                 .expect("read block blob")

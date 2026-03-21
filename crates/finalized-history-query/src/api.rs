@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
@@ -11,11 +9,12 @@ use crate::logs::family::LogsFamily;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
+use crate::runtime::Runtime;
 pub use crate::startup::StartupPlan;
 use crate::startup::startup_plan;
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::{BytesCacheMetrics, Tables};
+use crate::tables::BytesCacheMetrics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryLogsRequest {
@@ -33,11 +32,10 @@ pub struct ExecutionBudget {
 }
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A, Arc<M>, Arc<B>, LogsFamily>,
+    pub ingest: IngestEngine<A, LogsFamily>,
     publication_store: MetaPublicationStore<M>,
     query: LogsQueryEngine,
-    family: LogsFamily,
-    tables: Tables<M, B>,
+    runtime: Runtime<M, B>,
     allows_writes: bool,
 }
 
@@ -51,22 +49,14 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
         let family = LogsFamily;
-        let meta_store = Arc::new(meta_store);
-        let blob_store = Arc::new(blob_store);
-        let publication_store = MetaPublicationStore::new(Arc::clone(&meta_store));
-        let bytes_cache = config.bytes_cache;
-        let tables = Tables::new(
-            Arc::clone(&meta_store),
-            Arc::clone(&blob_store),
-            bytes_cache,
-        );
-        let ingest = IngestEngine::new(config, authority, meta_store, blob_store, family);
+        let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
+        let publication_store = MetaPublicationStore::new(runtime.meta_store().clone());
+        let ingest = IngestEngine::new(config, authority, family);
         Self {
             ingest,
             publication_store,
             query,
-            family,
-            tables,
+            runtime,
             allows_writes,
         }
     }
@@ -79,11 +69,19 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
-        self.tables.metrics_snapshot()
+        self.runtime.tables().metrics_snapshot()
     }
 
-    pub(crate) fn tables(&self) -> &Tables<M, B> {
-        &self.tables
+    pub fn meta_store(&self) -> &M {
+        self.runtime.meta_store()
+    }
+
+    pub fn blob_store(&self) -> &B {
+        self.runtime.blob_store()
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime<M, B> {
+        &self.runtime
     }
 
     pub async fn query_logs(
@@ -92,7 +90,12 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         budget: ExecutionBudget,
     ) -> Result<crate::core::page::QueryPage<Log>> {
         self.query
-            .query_logs(self.tables(), &self.publication_store, request, budget)
+            .query_logs(
+                self.runtime.tables(),
+                &self.publication_store,
+                request,
+                budget,
+            )
             .await
     }
 
@@ -124,7 +127,13 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             return Err(reader_only_mode_error());
         }
 
-        self.ingest.ingest_finalized_blocks(&blocks).await
+        self.ingest
+            .ingest_finalized_blocks(self.runtime(), &blocks)
+            .await
+    }
+
+    fn tables(&self) -> &crate::tables::Tables<M, B> {
+        self.runtime.tables()
     }
 
     async fn startup_locked(&self) -> Result<StartupPlan> {
@@ -140,8 +149,9 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
         let log_state = self
+            .ingest
             .family
-            .load_startup_state(self.tables(), indexed_finalized_head)
+            .load_startup_state(self.runtime.tables(), indexed_finalized_head)
             .await?;
         Ok(StartupPlan {
             head_state: crate::store::publication::FinalizedHeadState {
@@ -164,7 +174,7 @@ where
 {
     pub fn new_reader_writer(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
         let authority = LeaseAuthority::new(
-            MetaPublicationStore::new(Arc::new(meta_store.clone())),
+            MetaPublicationStore::new(meta_store.clone()),
             owner_id,
             config.publication_lease_blocks,
             config.publication_lease_renew_threshold_blocks,

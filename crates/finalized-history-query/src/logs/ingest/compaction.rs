@@ -2,18 +2,14 @@ use std::collections::BTreeMap;
 
 use crate::core::ids::LogId;
 use crate::error::{Error, Result};
-use crate::logs::keys::{
-    LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE,
-};
-use crate::logs::table_specs::{LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec};
-use crate::logs::types::{DirBucket, DirByBlock};
-use crate::store::traits::MetaStore;
+use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
+use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
+use crate::logs::types::DirBucket;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
-use super::artifact::put_artifact_meta;
-
-pub async fn compact_sealed_directory<M: MetaStore>(
-    meta_store: &M,
+pub async fn compact_sealed_directory<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     first_log_id: u64,
     count: u32,
     next_log_id: u64,
@@ -23,11 +19,11 @@ pub async fn compact_sealed_directory<M: MetaStore>(
         return Ok(());
     }
 
-    compact_newly_sealed_directory(meta_store, from_next_log_id, next_log_id).await
+    compact_newly_sealed_directory(tables, from_next_log_id, next_log_id).await
 }
 
-pub async fn compact_newly_sealed_directory<M: MetaStore>(
-    meta_store: &M,
+pub async fn compact_newly_sealed_directory<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     from_next_log_id: u64,
     next_log_id: u64,
 ) -> Result<()> {
@@ -37,11 +33,11 @@ pub async fn compact_newly_sealed_directory<M: MetaStore>(
 
     for sub_bucket_start in newly_sealed_directory_sub_bucket_starts(from_next_log_id, next_log_id)
     {
-        compact_directory_sub_bucket(meta_store, sub_bucket_start).await?;
+        compact_directory_sub_bucket(tables, sub_bucket_start).await?;
     }
 
     for bucket_start in newly_sealed_directory_bucket_starts(from_next_log_id, next_log_id) {
-        compact_directory_bucket(meta_store, bucket_start).await?;
+        compact_directory_bucket(tables, bucket_start).await?;
     }
 
     Ok(())
@@ -96,28 +92,17 @@ fn sealed_directory_ranges(
     out
 }
 
-async fn compact_directory_sub_bucket<M: MetaStore>(
-    meta_store: &M,
+async fn compact_directory_sub_bucket<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     sub_bucket_start: u64,
 ) -> Result<()> {
-    let partition = LogDirByBlockSpec::partition(sub_bucket_start);
-    let page = meta_store
-        .scan_list(LOG_DIR_BY_BLOCK_TABLE, &partition, b"", None, usize::MAX)
+    let fragments = tables
+        .directory_fragments()
+        .load_sub_bucket_fragments(sub_bucket_start)
         .await?;
-    let mut fragments = Vec::with_capacity(page.keys.len());
-    for clustering in page.keys {
-        let Some(record) = meta_store
-            .scan_get(LOG_DIR_BY_BLOCK_TABLE, &partition, &clustering)
-            .await?
-        else {
-            continue;
-        };
-        fragments.push(DirByBlock::decode(&record.value)?);
-    }
     if fragments.is_empty() {
         return Ok(());
     }
-    fragments.sort_by_key(|fragment| fragment.block_num);
 
     let mut first_log_ids = Vec::with_capacity(fragments.len() + 1);
     for fragment in &fragments {
@@ -133,47 +118,36 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
         start_block: fragments[0].block_num,
         first_log_ids,
     };
-    put_artifact_meta(
-        meta_store,
-        LOG_DIR_SUB_BUCKET_TABLE,
-        &LogDirSubBucketSpec::key(sub_bucket_start),
-        bucket.encode(),
-    )
-    .await?;
+    tables
+        .log_dir_sub_buckets()
+        .put(sub_bucket_start, &bucket)
+        .await?;
     Ok(())
 }
 
-async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u64) -> Result<()> {
+async fn compact_directory_bucket<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    bucket_start: u64,
+) -> Result<()> {
     let bucket_end = bucket_start.saturating_add(crate::logs::keys::LOG_DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
     let mut boundaries = BTreeMap::<u64, u64>::new();
     let mut sentinel = None::<u64>;
 
     while sub_bucket_start < bucket_end {
-        let Some(record) = meta_store
-            .get(
-                LOG_DIR_SUB_BUCKET_TABLE,
-                &LogDirSubBucketSpec::key(sub_bucket_start),
-            )
-            .await?
-        else {
+        let Some(sub_bucket) = tables.log_dir_sub_buckets().get(sub_bucket_start).await? else {
             sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
             continue;
         };
-        let sub_bucket = DirBucket::decode(&record.value)?;
-        for (index, first_log_id) in sub_bucket
-            .first_log_ids
-            .iter()
-            .enumerate()
-            .take(sub_bucket.first_log_ids.len().saturating_sub(1))
-        {
-            let block_num = sub_bucket.start_block + index as u64;
+        for index in 0..sub_bucket.count().saturating_sub(1) {
+            let block_num = sub_bucket.start_block() + index as u64;
+            let first_log_id = sub_bucket.first_log_id(index);
             match boundaries.entry(block_num) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(*first_log_id);
+                    entry.insert(first_log_id);
                 }
                 std::collections::btree_map::Entry::Occupied(entry) => {
-                    if *entry.get() != *first_log_id {
+                    if *entry.get() != first_log_id {
                         return Err(Error::Decode(
                             "inconsistent directory bucket boundary across sub-buckets",
                         ));
@@ -181,12 +155,11 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
                 }
             }
         }
-        if let Some(last) = sub_bucket.first_log_ids.last().copied() {
-            sentinel = Some(match sentinel {
-                Some(current) => current.max(last),
-                None => last,
-            });
-        }
+        let last = sub_bucket.first_log_id(sub_bucket.count().saturating_sub(1));
+        sentinel = Some(match sentinel {
+            Some(current) => current.max(last),
+            None => last,
+        });
         sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
@@ -204,16 +177,15 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
     let mut first_log_ids = boundaries.into_values().collect::<Vec<_>>();
     first_log_ids.push(sentinel);
 
-    put_artifact_meta(
-        meta_store,
-        LOG_DIR_BUCKET_TABLE,
-        &LogDirBucketSpec::key(bucket_start),
-        DirBucket {
-            start_block,
-            first_log_ids,
-        }
-        .encode(),
-    )
-    .await?;
+    tables
+        .dir_buckets()
+        .put(
+            bucket_start,
+            &DirBucket {
+                start_block,
+                first_log_ids,
+            },
+        )
+        .await?;
     Ok(())
 }

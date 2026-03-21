@@ -22,7 +22,7 @@ pub struct MetaPublicationStore<M> {
 }
 
 impl<M: MetaStore> MetaPublicationStore<M> {
-    pub fn new(meta_store: Arc<M>) -> Self {
+    pub fn new(meta_store: M) -> Self {
         Self {
             table: meta_store.table(PUBLICATION_STATE_TABLE),
         }

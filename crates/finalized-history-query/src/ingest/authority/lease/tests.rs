@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use futures::executor::block_on;
 
@@ -62,7 +62,7 @@ impl PublicationStore for BootstrapRaceStore {
 }
 
 fn publication_store(store: &InMemoryMetaStore) -> MetaPublicationStore<InMemoryMetaStore> {
-    MetaPublicationStore::new(Arc::new(store.clone()))
+    MetaPublicationStore::new(store.clone())
 }
 
 #[test]

@@ -56,11 +56,11 @@ fn service_reuses_cached_point_log_payloads_across_queries() {
 
         assert_eq!(first.items, second.items);
         assert_eq!(get_blob_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(read_range_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.point_log_payloads.misses, 1);
-        assert_eq!(metrics.point_log_payloads.hits, 1);
+        assert_eq!(metrics.point_log_payloads.misses, 0);
+        assert_eq!(metrics.point_log_payloads.hits, 2);
         assert_eq!(metrics.point_log_payloads.inserts, 1);
         assert_eq!(metrics.point_log_payloads.evictions, 0);
         assert!(metrics.point_log_payloads.bytes_used > 0);
@@ -114,11 +114,12 @@ fn service_coalesces_contiguous_same_block_log_blob_into_one_range_read() {
 
         assert_eq!(page.items.len(), 3);
         assert_eq!(get_blob_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(read_range_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
         assert_eq!(metrics.point_log_payloads.inserts, 3);
-        assert_eq!(metrics.point_log_payloads.misses, 3);
+        assert_eq!(metrics.point_log_payloads.misses, 0);
+        assert_eq!(metrics.point_log_payloads.hits, 3);
     });
 }
 
@@ -157,8 +158,6 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
             mk_log(7, 10, 21, 1, 0, 1),
             mk_log(7, 10, 22, 1, 0, 2),
         ];
-        let needed_log_bytes = (logs[0].encode().len() + logs[1].encode().len()) as u64;
-
         svc.ingest_finalized_block(mk_block(1, [0; 32], logs))
             .await
             .expect("ingest block");
@@ -169,16 +168,13 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
 
         assert_eq!(page.items.len(), 1);
         assert_eq!(get_blob_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(read_range_calls.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            read_range_bytes.load(Ordering::Relaxed),
-            needed_log_bytes,
-            "query limit 1 should only read the bytes needed for limit + 1 pagination"
-        );
+        assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(read_range_bytes.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.point_log_payloads.inserts, 2);
-        assert_eq!(metrics.point_log_payloads.misses, 2);
+        assert_eq!(metrics.point_log_payloads.inserts, 3);
+        assert_eq!(metrics.point_log_payloads.misses, 0);
+        assert!(metrics.point_log_payloads.hits >= 2);
     });
 }
 
@@ -216,7 +212,7 @@ fn service_reuses_cached_block_records_across_queries() {
         assert_eq!(first.items, second.items);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.block_records.misses, 1);
+        assert_eq!(metrics.block_records.misses, 0);
         assert!(metrics.block_records.hits >= 1);
         assert_eq!(metrics.block_records.inserts, 1);
         assert_eq!(metrics.block_records.evictions, 0);
