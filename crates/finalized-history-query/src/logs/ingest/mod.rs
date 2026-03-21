@@ -23,13 +23,13 @@ mod tests {
         BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE,
         BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE,
         LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
-        STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_clustering_key, bitmap_by_block_partition_key,
-        bitmap_page_blob_key, bitmap_page_meta_suffix, block_hash_index_suffix, block_log_blob_key,
-        block_log_header_suffix, block_record_suffix, log_dir_bucket_suffix,
-        log_dir_by_block_clustering_key, log_dir_by_block_partition_key, log_dir_sub_bucket_suffix,
-        log_local, stream_page_start_local,
+        STREAM_PAGE_LOCAL_ID_SPAN, block_hash_index_suffix,
     };
-    use crate::domain::table_specs::{BitmapPageBlobSpec, BlobTableSpec, BlockLogBlobSpec};
+    use crate::domain::table_specs::{
+        self, BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
+        BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
+        LogDirSubBucketSpec,
+    };
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
         persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
@@ -78,12 +78,12 @@ mod tests {
                 .expect("persist artifacts");
 
             let block_blob = blob
-                .get_blob(BlockLogBlobSpec::TABLE, &block_log_blob_key(7))
+                .get_blob(BlockLogBlobSpec::TABLE, &BlockLogBlobSpec::key(7))
                 .await
                 .expect("read block blob")
                 .expect("block blob present");
             let header = meta
-                .get(BLOCK_LOG_HEADER_TABLE, &block_log_header_suffix(7))
+                .get(BLOCK_LOG_HEADER_TABLE, &BlockLogHeaderSpec::key(7))
                 .await
                 .expect("read block header")
                 .expect("block header present");
@@ -119,8 +119,8 @@ mod tests {
             let fragment0 = meta
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
-                    &log_dir_by_block_partition_key(0),
-                    &log_dir_by_block_clustering_key(700),
+                    &LogDirByBlockSpec::partition(0),
+                    &LogDirByBlockSpec::clustering(700),
                 )
                 .await
                 .expect("read fragment0")
@@ -128,16 +128,16 @@ mod tests {
             let fragment1 = meta
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
-                    &log_dir_by_block_partition_key(
+                    &LogDirByBlockSpec::partition(
                         crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
                     ),
-                    &log_dir_by_block_clustering_key(700),
+                    &LogDirByBlockSpec::clustering(700),
                 )
                 .await
                 .expect("read fragment1")
                 .expect("fragment1");
             let sub_bucket = meta
-                .get(LOG_DIR_SUB_BUCKET_TABLE, &log_dir_sub_bucket_suffix(0))
+                .get(LOG_DIR_SUB_BUCKET_TABLE, &LogDirSubBucketSpec::key(0))
                 .await
                 .expect("read sub bucket")
                 .expect("sub bucket");
@@ -201,12 +201,14 @@ mod tests {
                 .into_keys()
                 .next()
                 .expect("stream");
-            let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
+            let first_page = table_specs::stream_page_start_local(
+                table_specs::log_local(LogId::new(first_log_id)).get(),
+            );
             let fragment = meta
                 .scan_get(
                     BITMAP_BY_BLOCK_TABLE,
-                    &bitmap_by_block_partition_key(&sid, first_page),
-                    &bitmap_by_block_clustering_key(block.block_num),
+                    &BitmapByBlockSpec::partition(&sid, first_page),
+                    &BitmapByBlockSpec::clustering(block.block_num),
                 )
                 .await
                 .expect("read stream fragment")
@@ -214,7 +216,7 @@ mod tests {
             let page_meta = meta
                 .get(
                     BITMAP_PAGE_META_TABLE,
-                    &bitmap_page_meta_suffix(&sid, first_page),
+                    &BitmapPageMetaSpec::key(&sid, first_page),
                 )
                 .await
                 .expect("read stream page meta")
@@ -222,7 +224,7 @@ mod tests {
             let page_blob = blob
                 .get_blob(
                     BitmapPageBlobSpec::TABLE,
-                    &bitmap_page_blob_key(&sid, first_page),
+                    &BitmapPageBlobSpec::key(&sid, first_page),
                 )
                 .await
                 .expect("read stream page blob")
@@ -260,7 +262,7 @@ mod tests {
                 .expect("persist block metadata");
 
             assert!(
-                meta.get(BLOCK_RECORD_TABLE, &block_record_suffix(9))
+                meta.get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(9))
                     .await
                     .expect("block meta")
                     .is_some()
@@ -292,7 +294,7 @@ mod tests {
                 .expect("compact directory");
 
             let bucket = meta
-                .get(LOG_DIR_BUCKET_TABLE, &log_dir_bucket_suffix(0))
+                .get(LOG_DIR_BUCKET_TABLE, &LogDirBucketSpec::key(0))
                 .await
                 .expect("directory bucket")
                 .expect("directory bucket present");

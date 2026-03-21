@@ -2,7 +2,8 @@ use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
-use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, stream_page_start_local};
+use crate::domain::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::domain::table_specs;
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -50,19 +51,17 @@ pub(in crate::logs) async fn fetch_union_log_level_with_cache<M: MetaStore, B: B
     use std::collections::BTreeMap;
 
     use crate::core::ids::LogShard;
-    use crate::domain::keys::{local_range_for_shard, log_shard, stream_id};
-
     let mut out = BTreeMap::new();
-    let from_shard = log_shard(from_log_id);
-    let to_shard = log_shard(to_log_id_inclusive);
+    let from_shard = table_specs::log_shard(from_log_id);
+    let to_shard = table_specs::log_shard(to_log_id_inclusive);
     let mut in_flight = FuturesUnordered::new();
 
     for value in values {
         for shard_raw in from_shard.get()..=to_shard.get() {
             let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
-            let stream = stream_id(kind, value, shard);
+            let stream = table_specs::stream_id(kind, value, shard);
             let (local_from, local_to) =
-                local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
+                table_specs::local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
             in_flight.push(async move {
                 let entries =
                     load_stream_entries(tables, &stream, local_from.get(), local_to.get()).await?;
@@ -102,8 +101,8 @@ pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
     local_to: u32,
 ) -> Result<RoaringBitmap> {
     let mut out = RoaringBitmap::new();
-    let mut page_start = stream_page_start_local(local_from);
-    let last_page_start = stream_page_start_local(local_to);
+    let mut page_start = table_specs::stream_page_start_local(local_from);
+    let last_page_start = table_specs::stream_page_start_local(local_to);
 
     loop {
         if let Some(meta) = load_bitmap_page_meta(tables, stream, page_start).await? {

@@ -8,8 +8,9 @@ use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    BLOCK_RECORD_TABLE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE, block_record_suffix,
+    BLOCK_RECORD_TABLE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
 };
+use finalized_history_query::domain::table_specs::BlockRecordSpec;
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -132,7 +133,7 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         ));
         meta.put(
             BLOCK_RECORD_TABLE,
-            &block_record_suffix(3),
+            &BlockRecordSpec::key(3),
             BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
@@ -207,7 +208,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         inner
             .put(
                 BLOCK_RECORD_TABLE,
-                &block_record_suffix(1),
+                &BlockRecordSpec::key(1),
                 BlockRecord {
                     block_hash: [1; 32],
                     parent_hash: [0; 32],
@@ -232,7 +233,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(BLOCK_RECORD_TABLE, &block_record_suffix(1))
+                .get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
                 .await
                 .expect("read block meta after startup")
                 .is_some()

@@ -1,6 +1,7 @@
 use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
-use crate::domain::keys::{log_dir_bucket_start, log_dir_sub_bucket_start};
+use crate::domain::table_specs::LogDirBucketSpec;
+use crate::domain::table_specs::LogDirSubBucketSpec;
 use crate::domain::types::DirByBlock;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -12,14 +13,14 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
         &mut self,
         id: LogId,
     ) -> Result<Option<ResolvedLogLocation>> {
-        let bucket_start = log_dir_bucket_start(id);
+        let bucket_start = LogDirBucketSpec::bucket_start(id.get());
         if let Some(bucket) = self.load_directory_bucket(bucket_start).await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {
             return resolved_location_from_bucket_ref(&bucket, entry_index, id);
         }
 
-        let sub_bucket_start = log_dir_sub_bucket_start(id);
+        let sub_bucket_start = LogDirSubBucketSpec::sub_bucket_start(id.get());
         if let Some(bucket) = self.load_directory_sub_bucket(sub_bucket_start).await?
             && let Some(entry_index) = containing_bucket_entry_ref(&bucket, id)
         {

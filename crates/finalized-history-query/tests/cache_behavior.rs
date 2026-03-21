@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::block_log_blob_key;
+use finalized_history_query::domain::table_specs::BlockLogBlobSpec;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig};
@@ -18,7 +18,7 @@ use helpers::*;
 fn service_reuses_cached_point_log_payloads_across_queries() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
-        let target_key = block_log_blob_key(1);
+        let target_key = BlockLogBlobSpec::key(1);
         let get_blob_calls = Arc::new(AtomicU64::new(0));
         let read_range_calls = Arc::new(AtomicU64::new(0));
         let blob = CountingBlobStore {
@@ -71,7 +71,7 @@ fn service_reuses_cached_point_log_payloads_across_queries() {
 fn service_coalesces_contiguous_same_block_log_blob_into_one_range_read() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
-        let target_key = block_log_blob_key(1);
+        let target_key = BlockLogBlobSpec::key(1);
         let get_blob_calls = Arc::new(AtomicU64::new(0));
         let read_range_calls = Arc::new(AtomicU64::new(0));
         let blob = CountingBlobStore {
@@ -126,7 +126,7 @@ fn service_coalesces_contiguous_same_block_log_blob_into_one_range_read() {
 fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
-        let target_key = block_log_blob_key(1);
+        let target_key = BlockLogBlobSpec::key(1);
         let get_blob_calls = Arc::new(AtomicU64::new(0));
         let read_range_calls = Arc::new(AtomicU64::new(0));
         let read_range_bytes = Arc::new(AtomicU64::new(0));

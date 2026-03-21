@@ -7,7 +7,7 @@ use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{RangeResolver, ResolvedBlockRange};
-use crate::domain::keys::local_range_for_shard;
+use crate::domain::table_specs;
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::is_too_broad;
@@ -192,7 +192,7 @@ impl LogsQueryEngine {
         for shard_raw in from_log_id.shard().get()..=to_log_id_inclusive.shard().get() {
             let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
             let (local_from, local_to) =
-                local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
+                table_specs::local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
             let shard_clauses =
                 prepare_shard_clauses(tables, &clause_specs, shard, local_from, local_to).await?;
 

@@ -6,7 +6,7 @@ This document describes the immutable artifact-table and bytes-cache design.
 
 Query code reads immutable artifacts through typed table readers. Each table reader owns:
 
-- backend access for that artifact family
+- backend access for that artifact table
 - its own bytes cache instance
 - key construction
 - decode/load behavior
@@ -33,13 +33,13 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 
 | Table                    | What it caches                                                        |
 | ------------------------ | --------------------------------------------------------------------- |
-| `BlockRecords`           | `block_record/<block_num>` — immutable block-to-log and hash metadata |
-| `BlockLogHeaders`        | `block_log_header/<block_num>` — byte offset tables                  |
-| `DirBuckets`    | `log_dir_bucket/<bucket_start>` — 1M compacted directory buckets             |
-| `LogDirSubBuckets` | `log_dir_sub_bucket/<sub_bucket_start>` — 10K compacted sub-buckets          |
-| `PointLogPayloads`       | Per-log byte slices derived from `block_log_blob/<block_num>` range reads |
-| `BitmapPageMeta`         | Sealed `bitmap_page_meta/<stream_id>/<page_start>`                    |
-| `BitmapPageBlobs`        | Sealed `bitmap_page_blob/<stream_id>/<page_start>`                    |
+| `BlockRecords`           | `block_record` table, key `<block_num>` — immutable block-to-log and hash metadata |
+| `BlockLogHeaders`        | `block_log_header` table, key `<block_num>` — byte offset tables |
+| `DirBuckets`             | `log_dir_bucket` table, key `<bucket_start>` — 1M compacted directory buckets |
+| `LogDirSubBuckets`       | `log_dir_sub_bucket` table, key `<sub_bucket_start>` — 10K compacted sub-buckets |
+| `PointLogPayloads`       | Per-log byte slices derived from `block_log_blob` blob-table range reads keyed by `<block_num>` |
+| `BitmapPageMeta`         | `bitmap_page_meta` table, key `<stream_id>/<page_start>` |
+| `BitmapPageBlobs`        | `bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
 
 
 A `max_bytes = 0` budget disables that table's cache entirely. The typed table reader still works, but it reads directly from the backing store with no cache lookup/insert overhead. See [storage-model.md](storage-model.md) for the artifact key layout.
@@ -60,9 +60,9 @@ The public query boundary remains `QueryPage<Log>` (owned). The `LogRef -> Log` 
 
 Mutable, correctness-critical, tiny. Not part of the immutable artifact cache. Loaded directly on each query to determine the visible finalized head.
 
-### `open_bitmap_page/*`
+### `open_bitmap_page`
 
-Write/recovery inventory only. The query path does not read these markers.
+Write/recovery inventory only. The query path does not read these rows.
 
 ## Eviction
 

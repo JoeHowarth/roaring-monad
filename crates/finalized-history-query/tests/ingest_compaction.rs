@@ -6,11 +6,11 @@ use std::sync::Arc;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::domain::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_page_blob_key,
-    bitmap_page_meta_suffix, block_record_suffix, log_dir_by_block_clustering_key,
-    log_dir_by_block_partition_key, stream_id, stream_page_start_local,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
 };
-use finalized_history_query::domain::table_specs::{BitmapPageBlobSpec, BlobTableSpec};
+use finalized_history_query::domain::table_specs::{
+    self, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockRecordSpec, LogDirByBlockSpec,
+};
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -37,7 +37,7 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         ));
         meta.put(
             BLOCK_RECORD_TABLE,
-            &block_record_suffix(1),
+            &BlockRecordSpec::key(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -84,7 +84,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         ));
         meta.put(
             BLOCK_RECORD_TABLE,
-            &block_record_suffix(1),
+            &BlockRecordSpec::key(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -105,18 +105,18 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         );
         svc.ingest_finalized_block(block).await.expect("ingest");
 
-        let sid = stream_id(
+        let sid = table_specs::stream_id(
             "addr",
             &[5; 20],
             finalized_history_query::core::ids::LogShard::new(0).unwrap(),
         );
-        let page_start = stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1);
+        let page_start = table_specs::stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         assert!(
             svc.ingest
                 .meta_store
                 .get(
                     BITMAP_PAGE_META_TABLE,
-                    &bitmap_page_meta_suffix(&sid, page_start),
+                    &BitmapPageMetaSpec::key(&sid, page_start),
                 )
                 .await
                 .expect("stream page meta")
@@ -127,7 +127,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
                 .blob_store
                 .get_blob(
                     BitmapPageBlobSpec::TABLE,
-                    &bitmap_page_blob_key(&sid, page_start)
+                    &BitmapPageBlobSpec::key(&sid, page_start)
                 )
                 .await
                 .expect("stream page blob")
@@ -153,7 +153,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         ));
         meta.put(
             BLOCK_RECORD_TABLE,
-            &block_record_suffix(1),
+            &BlockRecordSpec::key(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -184,8 +184,8 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
                 .meta_store
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
-                    &log_dir_by_block_partition_key(0),
-                    &log_dir_by_block_clustering_key(2),
+                    &LogDirByBlockSpec::partition(0),
+                    &LogDirByBlockSpec::clustering(2),
                 )
                 .await
                 .expect("directory fragment")

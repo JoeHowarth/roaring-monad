@@ -604,9 +604,8 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::keys::{
-        LOG_DIR_BY_BLOCK_TABLE, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
-    };
+    use crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE;
+    use crate::domain::table_specs::LogDirByBlockSpec;
     use crate::domain::types::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond};
@@ -715,7 +714,7 @@ mod tests {
         let root = unique_temp_root("fs-list-prefix");
         let meta_store = FsMetaStore::new(&root, 0).expect("fs meta store");
         let blob_store = FsBlobStore::new(&root).expect("fs blob store");
-        let partition = log_dir_by_block_partition_key(0);
+        let partition = LogDirByBlockSpec::partition(0);
 
         block_on(async {
             for index in 0..1_025u64 {
@@ -723,7 +722,7 @@ mod tests {
                     .scan_put(
                         LOG_DIR_BY_BLOCK_TABLE,
                         &partition,
-                        &log_dir_by_block_clustering_key(index),
+                        &LogDirByBlockSpec::clustering(index),
                         Bytes::from_static(b"v"),
                         PutCond::Any,
                     )

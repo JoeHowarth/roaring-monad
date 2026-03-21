@@ -48,11 +48,11 @@ mod tests {
 
     use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
-    use crate::domain::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, block_log_blob_key,
-        log_dir_bucket_start, log_dir_sub_bucket_start,
+    use crate::domain::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
+    use crate::domain::table_specs::{
+        BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec,
+        LogDirSubBucketSpec,
     };
-    use crate::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
     use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -120,7 +120,7 @@ mod tests {
             let blob = InMemoryBlobStore::default();
             meta.put(
                 crate::domain::keys::LOG_DIR_BUCKET_TABLE,
-                &crate::domain::keys::log_dir_bucket_suffix(0),
+                &LogDirBucketSpec::key(0),
                 DirBucket {
                     start_block: 700,
                     first_log_ids: vec![11, 13],
@@ -157,10 +157,8 @@ mod tests {
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.scan_put(
                 crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
-                &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
-                    log_id,
-                )),
-                &crate::domain::keys::log_dir_by_block_clustering_key(700),
+                &LogDirByBlockSpec::partition(LogDirSubBucketSpec::sub_bucket_start(log_id.get())),
+                &LogDirByBlockSpec::clustering(700),
                 DirByBlock {
                     block_num: 700,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -199,7 +197,7 @@ mod tests {
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
                 crate::domain::keys::LOG_DIR_BUCKET_TABLE,
-                &crate::domain::keys::log_dir_bucket_suffix(log_dir_bucket_start(log_id)),
+                &LogDirBucketSpec::key(LogDirBucketSpec::bucket_start(log_id.get())),
                 DirBucket {
                     start_block: 700,
                     first_log_ids: vec![
@@ -257,10 +255,8 @@ mod tests {
 
             meta.scan_put(
                 crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
-                &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
-                    log_id,
-                )),
-                &crate::domain::keys::log_dir_by_block_clustering_key(block_num),
+                &LogDirByBlockSpec::partition(LogDirSubBucketSpec::sub_bucket_start(log_id.get())),
+                &LogDirByBlockSpec::clustering(block_num),
                 DirByBlock {
                     block_num,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -273,7 +269,7 @@ mod tests {
             .expect("write directory fragment");
             meta.put(
                 crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
-                &crate::domain::keys::block_log_header_suffix(block_num),
+                &BlockLogHeaderSpec::key(block_num),
                 BlockLogHeader {
                     offsets: vec![0, encoded.len() as u32],
                 }
@@ -284,7 +280,7 @@ mod tests {
             .expect("write block log header");
             blob.put_blob(
                 BlockLogBlobSpec::TABLE,
-                &block_log_blob_key(block_num),
+                &BlockLogBlobSpec::key(block_num),
                 encoded.clone(),
             )
             .await
@@ -373,7 +369,7 @@ mod tests {
 
             meta.put(
                 crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
-                &crate::domain::keys::block_log_header_suffix(block_num),
+                &BlockLogHeaderSpec::key(block_num),
                 BlockLogHeader { offsets }.encode(),
                 PutCond::Any,
             )
@@ -381,7 +377,7 @@ mod tests {
             .expect("write block log header");
             blob.put_blob(
                 BlockLogBlobSpec::TABLE,
-                &block_log_blob_key(block_num),
+                &BlockLogBlobSpec::key(block_num),
                 Bytes::from(blob_bytes),
             )
             .await

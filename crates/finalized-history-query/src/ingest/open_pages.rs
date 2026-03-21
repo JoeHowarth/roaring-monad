@@ -3,9 +3,7 @@ use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
 use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
-use crate::domain::table_specs::{
-    OpenBitmapPageSpec, ScannableTableSpec, log_local, log_shard, stream_page_start_local,
-};
+use crate::domain::table_specs::{self, OpenBitmapPageSpec, ScannableTableSpec};
 use crate::error::{Error, Result};
 use crate::logs::ingest::compact_stream_page;
 use crate::store::traits::BlobStore;
@@ -27,11 +25,11 @@ struct FrontierPosition {
 impl FrontierPosition {
     fn from_next_log_id(next_log_id: u64) -> Self {
         let frontier_id = LogId::new(next_log_id);
-        let shard = log_shard(frontier_id);
-        let local = log_local(frontier_id).get();
+        let shard = table_specs::log_shard(frontier_id);
+        let local = table_specs::log_local(frontier_id).get();
         Self {
             shard,
-            page_start_local: stream_page_start_local(local),
+            page_start_local: table_specs::stream_page_start_local(local),
         }
     }
 }
@@ -39,9 +37,9 @@ impl FrontierPosition {
 impl OpenBitmapPage {
     pub fn is_sealed_at(&self, next_log_id: u64) -> bool {
         let frontier_id = LogId::new(next_log_id);
-        let frontier_shard = log_shard(frontier_id);
-        let frontier_local = log_local(frontier_id).get();
-        let frontier_open_page = stream_page_start_local(frontier_local);
+        let frontier_shard = table_specs::log_shard(frontier_id);
+        let frontier_local = table_specs::log_local(frontier_id).get();
+        let frontier_open_page = table_specs::stream_page_start_local(frontier_local);
 
         if self.shard < frontier_shard {
             return true;
@@ -221,7 +219,7 @@ pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
     blob_store: &B,
     next_log_id: u64,
 ) -> Result<()> {
-    let frontier_shard = log_shard(LogId::new(next_log_id));
+    let frontier_shard = table_specs::log_shard(LogId::new(next_log_id));
     for shard in shard_range_inclusive(
         LogShard::new(0).expect("0 is a valid shard"),
         frontier_shard,

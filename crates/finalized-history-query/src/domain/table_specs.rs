@@ -1,4 +1,4 @@
-use crate::core::ids::{LogShard, compose_log_id};
+use crate::core::ids::{LogId, LogShard, compose_log_id};
 use crate::domain::keys::{
     LOCAL_ID_BITS, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID,
     STREAM_PAGE_LOCAL_ID_SPAN, hex_digit, u64_be,
@@ -62,7 +62,8 @@ impl PointTableSpec for LogDirBucketSpec {
     const TABLE: TableId = TableId::new("log_dir_bucket");
 }
 impl LogDirBucketSpec {
-    pub fn bucket_start(global_log_id: u64) -> u64 {
+    pub fn bucket_start(global_log_id: impl Into<LogId>) -> u64 {
+        let global_log_id = global_log_id.into().get();
         (global_log_id / LOG_DIRECTORY_BUCKET_SIZE) * LOG_DIRECTORY_BUCKET_SIZE
     }
 
@@ -76,7 +77,8 @@ impl PointTableSpec for LogDirSubBucketSpec {
     const TABLE: TableId = TableId::new("log_dir_sub_bucket");
 }
 impl LogDirSubBucketSpec {
-    pub fn sub_bucket_start(global_log_id: u64) -> u64 {
+    pub fn sub_bucket_start(global_log_id: impl Into<LogId>) -> u64 {
+        let global_log_id = global_log_id.into().get();
         (global_log_id / LOG_DIRECTORY_SUB_BUCKET_SIZE) * LOG_DIRECTORY_SUB_BUCKET_SIZE
     }
 

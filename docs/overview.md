@@ -163,29 +163,29 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 
 Shared metadata:
 
-- `publication_state -> PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
-- `block_record/<block_num> -> BlockRecord { block_hash, parent_hash, first_log_id, count }`
-- `block_hash_index/<block_hash> -> block_num`
-- `block_log_header/<block_num> -> BlockLogHeader { offsets }`
+- `publication_state` table, key `state` -> `PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
+- `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, first_log_id, count }`
+- `block_hash_index` table, key `<block_hash>` -> `block_num`
+- `block_log_header` table, key `<block_num>` -> `BlockLogHeader { offsets }`
 
 Directory metadata:
 
-- `log_dir_by_block/<sub_bucket_start>/<block_num> -> DirByBlock { block_num, first_log_id, end_log_id_exclusive }`
-- `log_dir_sub_bucket/<sub_bucket_start> -> DirBucket { start_block, first_log_ids }`
-- optional `log_dir_bucket/<bucket_start> -> DirBucket { start_block, first_log_ids }`
+- `log_dir_by_block` table, partition `<sub_bucket_start>`, clustering `<block_num>` -> `DirByBlock { block_num, first_log_id, end_log_id_exclusive }`
+- `log_dir_sub_bucket` table, key `<sub_bucket_start>` -> `DirBucket { start_block, first_log_ids }`
+- optional `log_dir_bucket` table, key `<bucket_start>` -> `DirBucket { start_block, first_log_ids }`
 
 Stream index metadata/blob pairs:
 
-- `open_bitmap_page/<shard>/<page_start_local>/<stream_id> -> marker`
-- `bitmap_by_block/<stream_id>/<page_start_local>/<block_num> -> roaring bitmap blob`
-- `bitmap_page_meta/<stream_id>/<page_start_local> -> StreamBitmapMeta { block_num, count, min_local, max_local }`
-- `bitmap_page_blob/<stream_id>/<page_start_local> -> roaring bitmap blob`
+- `open_bitmap_page` table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
+- `bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` -> roaring bitmap blob
+- `bitmap_page_meta` table, key `<stream_id>/<page_start_local>` -> `StreamBitmapMeta { block_num, count, min_local, max_local }`
+- `bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` -> roaring bitmap blob
 
 Payload blobs:
 
-- `block_log_blob/<block_num> -> concatenated encoded logs`
+- `block_log_blob` blob table, key `<block_num>` -> concatenated encoded logs
 
-Numeric key components use big-endian encoded u64. The exception is `block_hash_index/<block_hash>` which uses the raw 32-byte hash. Blob-store keys follow the same conventions.
+Numeric key components use big-endian encoded u64. `block_hash_index` uses the raw 32-byte hash as its suffix key. Blob-table suffix keys follow the same conventions.
 
 ## Top-Level Service Boundary
 

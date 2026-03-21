@@ -36,12 +36,12 @@ The `IngestEngine` orchestrates this flow. It validates finalized sequencing and
 
 For each block in the batch:
 
-1. **Log blob** — `block_log_blob/<block_num>`: concatenated encoded log bytes
-2. **Block log header** — `block_log_header/<block_num>`: byte offset table for local ordinals
-3. **Block meta** — `block_record/<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
-4. **Block hash index** — `block_hash_index/<block_hash>`: reverse lookup
-5. **Directory fragments** — one `log_dir_by_block/<sub_bucket_start>/<block_num>` per covered sub-bucket
-6. **Stream fragments** — `bitmap_by_block/...` per stream per page touched
+1. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
+2. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
+3. **Block meta** — `block_record` table, key `<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
+4. **Block hash index** — `block_hash_index` table, key `<block_hash>`: reverse lookup
+5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
+6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
 
 All artifacts must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary.
 
@@ -49,8 +49,8 @@ All artifacts must be durable before the head advance — see the publication or
 
 After all blocks in the batch are persisted, sealed directory boundaries are compacted:
 
-- **Sub-bucket compaction**: when `next_log_id` crosses a sub-bucket boundary (10,000 `log_id` range), the sealed sub-bucket's fragments are compacted into `log_dir_sub_bucket/<sub_bucket_start>`
-- **Bucket compaction**: when `next_log_id` crosses a 1M-bucket boundary, the sealed sub-buckets are optionally compacted into `log_dir_bucket/<bucket_start>`
+- **Sub-bucket compaction**: when `next_log_id` crosses a sub-bucket boundary (10,000 `log_id` range), the sealed sub-bucket's fragments are compacted into `log_dir_sub_bucket`, key `<sub_bucket_start>`
+- **Bucket compaction**: when `next_log_id` crosses a 1M-bucket boundary, the sealed sub-buckets are optionally compacted into `log_dir_bucket`, key `<bucket_start>`
 
 See [storage-model.md](storage-model.md) for directory layout details.
 
@@ -65,7 +65,7 @@ When `next_log_id` crosses a stream page boundary (see [storage-model.md](storag
 
 ## Open-Page Markers
 
-`open_bitmap_page/<shard>/<page_start_local>/<stream_id>` markers serve two purposes:
+`open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` serve two purposes:
 
 ### During ingest
 

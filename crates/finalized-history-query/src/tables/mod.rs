@@ -6,11 +6,10 @@ use quick_cache::sync::Cache;
 use quick_cache::{DefaultHashBuilder, Lifecycle, OptionsBuilder, Weighter};
 
 use crate::codec::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
-use crate::domain::keys::point_log_payload_cache_key;
 use crate::domain::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
     BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
-    PointTableSpec, ScannableTableSpec,
+    PointTableSpec, ScannableTableSpec, point_log_payload_cache_key,
 };
 use crate::domain::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
 use crate::error::{Error, Result};

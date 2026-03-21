@@ -11,8 +11,9 @@ use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
-    bitmap_page_meta_suffix, block_record_suffix, log_dir_sub_bucket_suffix, stream_id,
-    stream_page_start_local,
+};
+use finalized_history_query::domain::table_specs::{
+    self, BitmapPageMetaSpec, BlockRecordSpec, LogDirSubBucketSpec,
 };
 use finalized_history_query::domain::types::{Block, BlockRecord, Log, PublicationState};
 use finalized_history_query::error::{Error, Result};
@@ -469,7 +470,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         ));
         meta.put(
             BLOCK_RECORD_TABLE,
-            &block_record_suffix(1),
+            &BlockRecordSpec::key(1),
             BlockRecord {
                 block_hash: [1; 32],
                 parent_hash: [0; 32],
@@ -506,22 +507,23 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         assert!(
             meta.get(
                 LOG_DIR_SUB_BUCKET_TABLE,
-                &log_dir_sub_bucket_suffix(2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE),
+                &LogDirSubBucketSpec::key(2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE),
             )
             .await
             .expect("dir sub bucket")
             .is_some()
         );
-        let sid = stream_id(
+        let sid = table_specs::stream_id(
             "addr",
             &[7; 20],
             finalized_history_query::core::ids::LogShard::new(0).unwrap(),
         );
-        let page_start = stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
+        let page_start =
+            table_specs::stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
         assert!(
             meta.get(
                 BITMAP_PAGE_META_TABLE,
-                &bitmap_page_meta_suffix(&sid, page_start)
+                &BitmapPageMetaSpec::key(&sid, page_start)
             )
             .await
             .expect("stream page meta")

@@ -1,4 +1,3 @@
-use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::store::traits::{ScannableTableId, TableId};
 
 pub const PUBLICATION_STATE_TABLE: TableId = TableId::new("publication_state");
@@ -18,8 +17,6 @@ pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 pub const LOCAL_ID_BITS: u32 = 24;
 pub const LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
 pub const MAX_LOCAL_ID: u32 = LOCAL_ID_MASK as u32;
-const SHARD_HEX_WIDTH: usize = ((64 - LOCAL_ID_BITS) as usize).div_ceil(4);
-
 pub fn u64_be(v: u64) -> [u8; 8] {
     v.to_be_bytes()
 }
@@ -33,188 +30,8 @@ pub fn read_u64_be(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(out))
 }
 
-pub fn log_dir_bucket_start(global_log_id: LogId) -> u64 {
-    (global_log_id.get() / LOG_DIRECTORY_BUCKET_SIZE) * LOG_DIRECTORY_BUCKET_SIZE
-}
-
-pub fn log_dir_sub_bucket_start(global_log_id: LogId) -> u64 {
-    (global_log_id.get() / LOG_DIRECTORY_SUB_BUCKET_SIZE) * LOG_DIRECTORY_SUB_BUCKET_SIZE
-}
-
-pub fn log_dir_bucket_suffix(bucket_start_log_id: u64) -> Vec<u8> {
-    u64_be(bucket_start_log_id).to_vec()
-}
-
-pub fn log_dir_sub_bucket_suffix(sub_bucket_start_log_id: u64) -> Vec<u8> {
-    u64_be(sub_bucket_start_log_id).to_vec()
-}
-
-pub fn log_dir_by_block_suffix(sub_bucket_start_log_id: u64, block_num: u64) -> Vec<u8> {
-    let mut k = log_dir_by_block_prefix_suffix(sub_bucket_start_log_id);
-    k.extend_from_slice(&u64_be(block_num));
-    k
-}
-
-pub fn log_dir_by_block_partition_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
-    u64_be(sub_bucket_start_log_id).to_vec()
-}
-
-pub fn log_dir_by_block_clustering_key(block_num: u64) -> Vec<u8> {
-    u64_be(block_num).to_vec()
-}
-
-pub fn log_dir_by_block_prefix_suffix(sub_bucket_start_log_id: u64) -> Vec<u8> {
-    let mut k = u64_be(sub_bucket_start_log_id).to_vec();
-    k.push(b'/');
-    k
-}
-
-pub fn block_log_header_suffix(block_num: u64) -> Vec<u8> {
-    u64_be(block_num).to_vec()
-}
-
-pub fn block_log_blob_key(block_num: u64) -> Vec<u8> {
-    u64_be(block_num).to_vec()
-}
-
-pub fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
-    let mut k = b"point_log_payload/".to_vec();
-    k.extend_from_slice(&u64_be(block_num));
-    k.extend_from_slice(&u64_be(local_ordinal));
-    k
-}
-
-pub fn block_record_suffix(block_num: u64) -> Vec<u8> {
-    u64_be(block_num).to_vec()
-}
-
 pub fn block_hash_index_suffix(hash: &[u8; 32]) -> Vec<u8> {
     hash.to_vec()
-}
-
-pub fn log_shard(global_log_id: impl Into<LogId>) -> LogShard {
-    global_log_id.into().shard()
-}
-
-pub fn log_local(global_log_id: impl Into<LogId>) -> LogLocalId {
-    global_log_id.into().local()
-}
-
-pub fn compose_global_log_id(shard: LogShard, local: LogLocalId) -> LogId {
-    compose_log_id(shard, local)
-}
-
-pub fn stream_page_start_local(local_id: u32) -> u32 {
-    (local_id / STREAM_PAGE_LOCAL_ID_SPAN) * STREAM_PAGE_LOCAL_ID_SPAN
-}
-
-pub fn local_range_for_shard(
-    from: LogId,
-    to_inclusive: LogId,
-    shard: LogShard,
-) -> (LogLocalId, LogLocalId) {
-    let from_shard = log_shard(from);
-    let to_shard = log_shard(to_inclusive);
-    let local_from = if shard == from_shard {
-        log_local(from)
-    } else {
-        LogLocalId::new(0).expect("0 is a valid local id")
-    };
-    let local_to = if shard == to_shard {
-        log_local(to_inclusive)
-    } else {
-        LogLocalId::new(MAX_LOCAL_ID).expect("MAX_LOCAL_ID is valid")
-    };
-    (local_from, local_to)
-}
-
-pub fn bitmap_page_meta_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("{stream_id}/").into_bytes();
-    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
-    k
-}
-
-pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("{stream_id}/").into_bytes();
-    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
-    k
-}
-
-pub fn open_bitmap_page_suffix(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
-    let mut key = open_bitmap_page_partition_key(shard);
-    key.push(b'/');
-    key.extend_from_slice(&open_bitmap_page_clustering_key(
-        page_start_local,
-        stream_id,
-    ));
-    key
-}
-
-pub fn open_bitmap_page_partition_key(shard: LogShard) -> Vec<u8> {
-    u64_be(shard.get()).to_vec()
-}
-
-pub fn open_bitmap_page_clustering_key(page_start_local: u32, stream_id: &str) -> Vec<u8> {
-    let mut k = open_bitmap_page_page_prefix(page_start_local);
-    k.extend_from_slice(stream_id.as_bytes());
-    k
-}
-
-pub fn open_bitmap_page_shard_prefix(shard: LogShard) -> Vec<u8> {
-    open_bitmap_page_partition_key(shard)
-}
-
-pub fn open_bitmap_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
-    let mut k = open_bitmap_page_partition_key(shard);
-    k.push(b'/');
-    k.extend_from_slice(&open_bitmap_page_page_prefix(page_start_local));
-    k
-}
-
-pub fn open_bitmap_page_page_prefix(page_start_local: u32) -> Vec<u8> {
-    let mut k = u64_be(u64::from(page_start_local)).to_vec();
-    k.push(b'/');
-    k
-}
-
-pub fn bitmap_by_block_suffix(stream_id: &str, page_start_local: u32, block_num: u64) -> Vec<u8> {
-    let mut k = bitmap_by_block_prefix_suffix(stream_id, page_start_local);
-    k.extend_from_slice(&u64_be(block_num));
-    k
-}
-
-pub fn bitmap_by_block_partition_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("{stream_id}/").into_bytes();
-    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
-    k
-}
-
-pub fn bitmap_by_block_clustering_key(block_num: u64) -> Vec<u8> {
-    u64_be(block_num).to_vec()
-}
-
-pub fn bitmap_by_block_prefix_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-    let mut k = format!("{stream_id}/").into_bytes();
-    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
-    k.push(b'/');
-    k
-}
-
-pub fn stream_id(index_kind: &str, value: &[u8], shard: LogShard) -> String {
-    let mut s = String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + SHARD_HEX_WIDTH);
-    s.push_str(index_kind);
-    s.push('/');
-    for b in value {
-        s.push(hex_digit((b >> 4) & 0xf));
-        s.push(hex_digit(b & 0xf));
-    }
-    s.push('/');
-    s.push_str(&format!(
-        "{:0width$x}",
-        shard.get(),
-        width = SHARD_HEX_WIDTH
-    ));
-    s
 }
 
 pub(crate) fn hex_digit(v: u8) -> char {
@@ -228,6 +45,8 @@ pub(crate) fn hex_digit(v: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ids::{LogId, LogLocalId};
+    use crate::domain::table_specs;
 
     #[test]
     fn log_id_split_roundtrips_across_boundary() {
@@ -238,9 +57,9 @@ mod tests {
             LogId::new(u64::from(MAX_LOCAL_ID) + 1),
         ];
         for value in values {
-            let shard = log_shard(value);
-            let local = log_local(value);
-            assert_eq!(compose_global_log_id(shard, local), value);
+            let shard = table_specs::log_shard(value);
+            let local = table_specs::log_local(value);
+            assert_eq!(table_specs::compose_global_log_id(shard, local), value);
         }
     }
 
@@ -248,19 +67,19 @@ mod tests {
     fn shard_local_ranges_respect_24_bit_locals() {
         let from = LogId::new(u64::from(MAX_LOCAL_ID) - 2);
         let to = LogId::new(u64::from(MAX_LOCAL_ID) + 2);
-        let first_shard = log_shard(from);
-        let second_shard = log_shard(to);
+        let first_shard = table_specs::log_shard(from);
+        let second_shard = table_specs::log_shard(to);
 
         assert_eq!(first_shard.get() + 1, second_shard.get());
         assert_eq!(
-            local_range_for_shard(from, to, first_shard),
+            table_specs::local_range_for_shard(from, to, first_shard),
             (
                 LogLocalId::new(MAX_LOCAL_ID - 2).unwrap(),
                 LogLocalId::new(MAX_LOCAL_ID).unwrap(),
             )
         );
         assert_eq!(
-            local_range_for_shard(from, to, second_shard),
+            table_specs::local_range_for_shard(from, to, second_shard),
             (LogLocalId::new(0).unwrap(), LogLocalId::new(1).unwrap())
         );
     }
@@ -268,39 +87,58 @@ mod tests {
     #[test]
     fn log_id_split_roundtrip_preserves_shards_above_u32_max() {
         let value = LogId::new(((u64::from(u32::MAX) + 1) << LOCAL_ID_BITS) | 7);
-        let split_shard = log_shard(value);
-        let local = log_local(value);
+        let split_shard = table_specs::log_shard(value);
+        let local = table_specs::log_local(value);
 
         assert_eq!(split_shard.get(), u64::from(u32::MAX) + 1);
-        assert_eq!(compose_global_log_id(split_shard, local), value);
+        assert_eq!(
+            table_specs::compose_global_log_id(split_shard, local),
+            value
+        );
     }
 
     #[test]
     fn log_dir_bucket_start_aligns_to_bucket_size() {
-        assert_eq!(log_dir_bucket_start(LogId::new(0)), 0);
-        assert_eq!(log_dir_bucket_start(LogId::new(123)), 0);
         assert_eq!(
-            log_dir_bucket_start(LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17)),
+            table_specs::LogDirBucketSpec::bucket_start(LogId::new(0).get()),
+            0
+        );
+        assert_eq!(
+            table_specs::LogDirBucketSpec::bucket_start(LogId::new(123).get()),
+            0
+        );
+        assert_eq!(
+            table_specs::LogDirBucketSpec::bucket_start(
+                LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17).get()
+            ),
             LOG_DIRECTORY_BUCKET_SIZE
         );
     }
 
     #[test]
     fn log_dir_sub_bucket_start_aligns_to_sub_bucket_size() {
-        assert_eq!(log_dir_sub_bucket_start(LogId::new(0)), 0);
-        assert_eq!(log_dir_sub_bucket_start(LogId::new(123)), 0);
         assert_eq!(
-            log_dir_sub_bucket_start(LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17)),
+            table_specs::LogDirSubBucketSpec::sub_bucket_start(LogId::new(0).get()),
+            0
+        );
+        assert_eq!(
+            table_specs::LogDirSubBucketSpec::sub_bucket_start(LogId::new(123).get()),
+            0
+        );
+        assert_eq!(
+            table_specs::LogDirSubBucketSpec::sub_bucket_start(
+                LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17).get()
+            ),
             LOG_DIRECTORY_SUB_BUCKET_SIZE
         );
     }
 
     #[test]
     fn stream_page_start_local_aligns_to_page_span() {
-        assert_eq!(stream_page_start_local(0), 0);
-        assert_eq!(stream_page_start_local(17), 0);
+        assert_eq!(table_specs::stream_page_start_local(0), 0);
+        assert_eq!(table_specs::stream_page_start_local(17), 0);
         assert_eq!(
-            stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN + 7),
+            table_specs::stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN + 7),
             STREAM_PAGE_LOCAL_ID_SPAN
         );
     }

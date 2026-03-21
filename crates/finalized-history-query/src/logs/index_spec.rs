@@ -2,9 +2,8 @@ use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
     BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
-    bitmap_by_block_partition_key, bitmap_page_meta_suffix, local_range_for_shard, log_shard,
-    stream_id, stream_page_start_local,
 };
+use crate::domain::table_specs::{self, BitmapByBlockSpec, BitmapPageMetaSpec};
 use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
@@ -123,15 +122,15 @@ async fn estimate_for_values<M: MetaStore>(
     from_log_id: LogId,
     to_log_id_inclusive: LogId,
 ) -> Result<u64> {
-    let from_shard = log_shard(from_log_id);
-    let to_shard = log_shard(to_log_id_inclusive);
+    let from_shard = table_specs::log_shard(from_log_id);
+    let to_shard = table_specs::log_shard(to_log_id_inclusive);
     let mut sum = 0u64;
 
     for value in values {
         for shard_raw in from_shard.get()..=to_shard.get() {
             let shard =
                 crate::core::ids::LogShard::new(shard_raw).expect("shard derived from LogId range");
-            let stream = stream_id(kind, value, shard);
+            let stream = table_specs::stream_id(kind, value, shard);
             sum = sum.saturating_add(
                 estimate_stream_overlap(
                     meta_store,
@@ -155,16 +154,17 @@ async fn estimate_stream_overlap<M: MetaStore>(
     to_log_id_inclusive: LogId,
     shard: crate::core::ids::LogShard,
 ) -> Result<u64> {
-    let (local_from, local_to) = local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
+    let (local_from, local_to) =
+        table_specs::local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
     let mut count = 0u64;
-    let mut page_start = stream_page_start_local(local_from.get());
-    let last_page_start = stream_page_start_local(local_to.get());
+    let mut page_start = table_specs::stream_page_start_local(local_from.get());
+    let last_page_start = table_specs::stream_page_start_local(local_to.get());
 
     loop {
         if let Some(record) = meta_store
             .get(
                 BITMAP_PAGE_META_TABLE,
-                &bitmap_page_meta_suffix(stream_id, page_start),
+                &BitmapPageMetaSpec::key(stream_id, page_start),
             )
             .await?
         {
@@ -180,7 +180,7 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 count = count.saturating_add(u64::from(meta.count));
             }
         } else {
-            let partition = bitmap_by_block_partition_key(stream_id, page_start);
+            let partition = BitmapByBlockSpec::partition(stream_id, page_start);
             let page = meta_store
                 .scan_list(BITMAP_BY_BLOCK_TABLE, &partition, b"", None, usize::MAX)
                 .await?;

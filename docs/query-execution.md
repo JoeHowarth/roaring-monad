@@ -151,7 +151,7 @@ Stream scans prefer compacted `stream_page_*` blobs and fall back to `stream_fra
 After bitmap intersection identifies candidate `log_id`s, each is materialized:
 
 1. **Directory lookup** — resolve `log_id -> block_num` using the 3-tier directory (bucket → sub-bucket → fragment fallback). See [storage-model.md](storage-model.md) for the lookup flow and worked example.
-2. **Range blob read** — load the byte range from `block_log_blob/<block_num>` using the block header's offset table
+2. **Range blob read** — load the byte range from the `block_log_blob` blob table using key `<block_num>` and the block header's offset table
 3. **Coalesced runs** — contiguous same-block candidates are discovered and materialized in bounded prefixes, stopping once exact filtering and `limit + 1` pagination have enough items
 
 Materialized logs are checked against the filter for exact match (the bitmap index is an approximation within the page span).

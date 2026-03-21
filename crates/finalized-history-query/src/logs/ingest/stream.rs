@@ -3,10 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use roaring::RoaringBitmap;
 
 use crate::core::ids::LogId;
-use crate::domain::keys::{log_local, log_shard, read_u64_be};
+use crate::domain::keys::read_u64_be;
+use crate::domain::table_specs;
 use crate::domain::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, PointTableSpec,
-    ScannableTableSpec, stream_id, stream_page_start_local,
+    ScannableTableSpec,
 };
 use crate::domain::types::StreamBitmapMeta;
 use crate::error::{Error, Result};
@@ -21,15 +22,15 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
 
     for (index, log) in block.logs.iter().enumerate() {
         let global_log_id = LogId::new(first_log_id + index as u64);
-        let shard = log_shard(global_log_id);
-        let local = log_local(global_log_id).get();
+        let shard = table_specs::log_shard(global_log_id);
+        let local = table_specs::log_local(global_log_id).get();
 
-        out.entry(stream_id("addr", &log.address, shard))
+        out.entry(table_specs::stream_id("addr", &log.address, shard))
             .or_default()
             .insert(local);
 
         if let Some(topic0) = log.topics.first() {
-            out.entry(stream_id("topic0", topic0, shard))
+            out.entry(table_specs::stream_id("topic0", topic0, shard))
                 .or_default()
                 .insert(local);
         }
@@ -41,7 +42,7 @@ pub fn collect_stream_appends(block: &Block, first_log_id: u64) -> BTreeMap<Stri
                 3 => "topic3",
                 _ => continue,
             };
-            out.entry(stream_id(kind, topic, shard))
+            out.entry(table_specs::stream_id(kind, topic, shard))
                 .or_default()
                 .insert(local);
         }
@@ -63,7 +64,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     for (stream, values) in collect_stream_appends(block, first_log_id) {
         let mut pages = BTreeMap::<u32, RoaringBitmap>::new();
         for value in values {
-            let page_start = stream_page_start_local(value);
+            let page_start = table_specs::stream_page_start_local(value);
             pages.entry(page_start).or_default().insert(value);
         }
 

@@ -17,10 +17,11 @@ use finalized_history_query::core::ids::{
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::domain::keys::{
     BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, MAX_LOCAL_ID,
-    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE, block_log_blob_key, block_log_header_suffix,
-    block_record_suffix, log_dir_bucket_start, log_dir_bucket_suffix, stream_id,
+    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
 };
-use finalized_history_query::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
+use finalized_history_query::domain::table_specs::{
+    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
+};
 use finalized_history_query::domain::types::{
     Block, BlockRecord, DirBucket, Log, PublicationState,
 };
@@ -620,7 +621,7 @@ pub fn seed_materialized_blocks(
             put_meta_record(
                 meta_store,
                 BLOCK_RECORD_TABLE,
-                &block_record_suffix(block.block_num),
+                &BlockRecordSpec::key(block.block_num),
                 BlockRecord {
                     block_hash,
                     parent_hash,
@@ -635,14 +636,14 @@ pub fn seed_materialized_blocks(
                 put_meta_record(
                     meta_store,
                     BLOCK_LOG_HEADER_TABLE,
-                    &block_log_header_suffix(block.block_num),
+                    &BlockLogHeaderSpec::key(block.block_num),
                     finalized_history_query::domain::types::BlockLogHeader { offsets }.encode(),
                 )
                 .await;
                 blob_store
                     .put_blob(
                         BlockLogBlobSpec::TABLE,
-                        &block_log_blob_key(block.block_num),
+                        &BlockLogBlobSpec::key(block.block_num),
                         Bytes::from(payload),
                     )
                     .await
@@ -652,8 +653,8 @@ pub fn seed_materialized_blocks(
             let count = block.logs.len() as u64;
             let end_exclusive = block.first_log_id.saturating_add(count);
             let last_covered_id = end_exclusive.saturating_sub(1);
-            let mut bucket_start = log_dir_bucket_start(LogId::new(block.first_log_id));
-            let last_bucket_start = log_dir_bucket_start(LogId::new(last_covered_id));
+            let mut bucket_start = LogDirBucketSpec::bucket_start(LogId::new(block.first_log_id));
+            let last_bucket_start = LogDirBucketSpec::bucket_start(LogId::new(last_covered_id));
             loop {
                 bucket_entries.entry(bucket_start).or_default().push((
                     block.block_num,
@@ -687,7 +688,7 @@ pub fn seed_materialized_blocks(
             put_meta_record(
                 meta_store,
                 LOG_DIR_BUCKET_TABLE,
-                &log_dir_bucket_suffix(bucket_start),
+                &LogDirBucketSpec::key(bucket_start),
                 DirBucket {
                     start_block,
                     first_log_ids,
@@ -722,7 +723,7 @@ pub fn seed_publication_state(
 }
 
 pub fn stream_for_address(address: [u8; 20], shard: u64) -> String {
-    stream_id(
+    table_specs::stream_id(
         "addr",
         &address,
         LogShard::new(shard).expect("valid log shard"),

@@ -1,6 +1,7 @@
 use crate::core::execution::ShardBitmapSet;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
-use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, stream_id, stream_page_start_local};
+use crate::domain::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::domain::table_specs;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
@@ -114,7 +115,7 @@ async fn prepare_shard_clause<M: MetaStore, B: BlobStore>(
     let mut estimated_count = 0u64;
 
     for value in &clause_spec.values {
-        let stream = stream_id(clause_spec.stream_kind, value, shard);
+        let stream = table_specs::stream_id(clause_spec.stream_kind, value, shard);
         estimated_count = estimated_count.saturating_add(
             estimate_stream_overlap(tables, &stream, local_from.get(), local_to.get()).await?,
         );
@@ -135,8 +136,8 @@ async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
     local_to: u32,
 ) -> Result<u64> {
     let mut estimated = 0u64;
-    let mut page_start = stream_page_start_local(local_from);
-    let last_page_start = stream_page_start_local(local_to);
+    let mut page_start = table_specs::stream_page_start_local(local_from);
+    let last_page_start = table_specs::stream_page_start_local(local_to);
 
     loop {
         if let Some(meta) = load_bitmap_page_meta(tables, stream_id, page_start).await? {
