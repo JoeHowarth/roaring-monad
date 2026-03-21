@@ -4,13 +4,15 @@ use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
+use crate::family::StartupFamily;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
+use crate::logs::family::LogsFamily;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::{Block, HealthReport, IngestOutcome, Log};
 pub use crate::startup::StartupPlan;
-use crate::startup::{build_startup_plan, startup_plan};
+use crate::startup::startup_plan;
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{BytesCacheMetrics, Tables};
@@ -31,9 +33,10 @@ pub struct ExecutionBudget {
 }
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A, Arc<M>, Arc<B>>,
+    pub ingest: IngestEngine<A, Arc<M>, Arc<B>, LogsFamily>,
     publication_store: MetaPublicationStore<M>,
     query: LogsQueryEngine,
+    family: LogsFamily,
     tables: Tables<M, B>,
     allows_writes: bool,
 }
@@ -47,6 +50,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         allows_writes: bool,
     ) -> Self {
         let query = LogsQueryEngine::from_config(&config);
+        let family = LogsFamily;
         let meta_store = Arc::new(meta_store);
         let blob_store = Arc::new(blob_store);
         let publication_store = MetaPublicationStore::new(Arc::clone(&meta_store));
@@ -56,11 +60,12 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             Arc::clone(&blob_store),
             bytes_cache,
         );
-        let ingest = IngestEngine::new(config, authority, meta_store, blob_store);
+        let ingest = IngestEngine::new(config, authority, meta_store, blob_store, family);
         Self {
             ingest,
             publication_store,
             query,
+            family,
             tables,
             allows_writes,
         }
@@ -134,9 +139,17 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        let next_log_id =
-            crate::core::state::derive_next_log_id(self.tables(), indexed_finalized_head).await?;
-        Ok(build_startup_plan(indexed_finalized_head, next_log_id, 0))
+        let log_state = self
+            .family
+            .load_startup_state(self.tables(), indexed_finalized_head)
+            .await?;
+        Ok(StartupPlan {
+            head_state: crate::store::publication::FinalizedHeadState {
+                indexed_finalized_head,
+            },
+            log_state,
+            warm_streams: 0,
+        })
     }
 }
 

@@ -34,13 +34,14 @@ The crate is organized in three layers.
 ### Method boundary
 
 - `src/api.rs`
-- `src/api/service/*`
+- `src/family.rs`
 
 ### Shared finalized-history substrate
 
 - `src/core/*`
 - `src/ingest/authority.rs`
 - `src/ingest/authority/*`
+- `src/ingest/engine.rs`
 - `src/streams/*`
 - `src/tables/*`
 
@@ -70,6 +71,7 @@ This crate executes queries and ingest. It does not format JSON-RPC responses.
 
 The shared layer owns:
 
+- the explicit family boundary used by generic startup/ingest machinery
 - range resolution against finalized head
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
@@ -82,6 +84,7 @@ The shared layer owns:
 
 The logs layer owns:
 
+- logs-owned schema, codecs, keys, and table specs
 - filter semantics
 - block-window to log-window mapping
 - exact-match materialization
@@ -218,7 +221,7 @@ The crate intentionally does not implement:
 
 1. `src/lib.rs` — crate boundary, re-exports
 2. `src/api.rs` — transport-free request/result surface and service export
-3. `src/api/service/` — service behavior: query, ingest, health
+3. `src/family.rs` — explicit startup/ingest family boundary under the concrete API
 
 ### Pass 2: Shared substrate
 
@@ -229,41 +232,45 @@ The crate intentionally does not implement:
 8. `src/core/state.rs` — shared state projections
 9. `src/core/range.rs` — block-range validation and clipping
 10. `src/core/execution.rs` — matched-primary vocabulary
-11. `src/domain/keys.rs` — immutable-frontier key layout
-12. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
+11. `src/domain/keys.rs` — shared publication-state key layout
+12. `src/domain/types.rs` — shared publication/session state
+13. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
 
-14. `src/logs/filter.rs` — log matching semantics, indexed clauses
-15. `src/logs/types.rs` — logs-family aliases and projections
-16. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
-17. `src/logs/window.rs` — block range to primary-ID range bridge
-18. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
-19. `src/logs/query/` — main query engine
-20. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
+14. `src/logs/types.rs` — logs-owned schema and startup projections
+15. `src/logs/keys.rs` — logs-family key layout and ID constants
+16. `src/logs/table_specs.rs` — logs-family table specs and key helpers
+17. `src/logs/codec.rs` — log, directory bucket, block log header, and block record encodings
+18. `src/logs/log_ref.rs` — zero-copy log and bucket views
+19. `src/logs/family.rs` — logs implementation of the explicit family boundary
+20. `src/logs/filter.rs` — log matching semantics, indexed clauses
+21. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
+22. `src/logs/window.rs` — block range to primary-ID range bridge
+23. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
+24. `src/logs/query/` — main query engine
+25. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
 ### Pass 4: Storage and codecs
 
-21. `src/domain/types.rs` — core persisted/data model structs
-22. `src/codec/finalized_state.rs` — `PublicationState`, `BlockRecord` encoding
-23. `src/codec/log.rs` — log, directory bucket, block log header encodings
-24. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
+26. `src/codec/finalized_state.rs` — shared `PublicationState` and helper encoding
+27. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 
 ### Pass 5: Ingest orchestration
 
-25. `src/ingest/engine.rs` — ingest orchestrator
-26. `src/ingest/authority.rs` — `WriteAuthority` contract
-27. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-28. `src/startup.rs` — startup view and next-position derivation
+28. `src/ingest/engine.rs` — generic ingest orchestration over a family implementation
+29. `src/ingest/authority.rs` — `WriteAuthority` contract
+30. `src/ingest/authority/lease/` — lease-backed multi-writer authority
+31. `src/startup.rs` — concrete logs startup view built on the family boundary
 
 ### Pass 6: End-to-end behavior
 
-29. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-30. `tests/startup.rs` — startup, session reuse, roles
-31. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-32. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-33. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-34. `tests/crash_injection_matrix.rs` — crash-retry behavior
-35. `tests/differential_and_gc.rs` — differential correctness, recovery
+32. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
+33. `tests/startup.rs` — startup, session reuse, roles
+34. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+35. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+36. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+37. `tests/crash_injection_matrix.rs` — crash-retry behavior
+38. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

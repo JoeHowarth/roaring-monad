@@ -4,6 +4,7 @@ pub mod config;
 pub mod core;
 pub mod domain;
 pub mod error;
+pub mod family;
 pub mod ingest;
 pub mod logs;
 pub mod metrics;

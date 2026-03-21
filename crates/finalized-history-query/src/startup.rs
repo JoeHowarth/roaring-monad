@@ -1,6 +1,6 @@
-use crate::core::ids::LogId;
-use crate::core::state::derive_next_log_id;
 use crate::error::Result;
+use crate::family as family_boundary;
+use crate::logs::family::LogsFamily;
 use crate::logs::types::LogSequencingState;
 use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -18,27 +18,12 @@ pub async fn startup_plan<M: MetaStore, P: PublicationStore, B: BlobStore>(
     publication_store: &P,
     warm_streams: usize,
 ) -> Result<StartupPlan> {
-    let head_state = publication_store.load_finalized_head_state().await?;
-    let next_log_id = derive_next_log_id(tables, head_state.indexed_finalized_head).await?;
-    Ok(build_startup_plan(
-        head_state.indexed_finalized_head,
-        next_log_id,
-        warm_streams,
-    ))
-}
-
-pub(crate) fn build_startup_plan(
-    indexed_finalized_head: u64,
-    next_log_id: u64,
-    warm_streams: usize,
-) -> StartupPlan {
-    StartupPlan {
-        head_state: FinalizedHeadState {
-            indexed_finalized_head,
-        },
-        log_state: LogSequencingState {
-            next_log_id: LogId::new(next_log_id),
-        },
-        warm_streams,
-    }
+    let state =
+        family_boundary::startup_state(tables, publication_store, &LogsFamily, warm_streams)
+            .await?;
+    Ok(StartupPlan {
+        head_state: state.head_state,
+        log_state: state.family_state,
+        warm_streams: state.warm_streams,
+    })
 }

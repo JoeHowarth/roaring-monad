@@ -1,4 +1,5 @@
 pub mod codec;
+pub mod family;
 pub mod filter;
 pub mod index_spec;
 pub mod ingest;

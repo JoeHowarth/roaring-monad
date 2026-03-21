@@ -9,6 +9,7 @@ use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
+use finalized_history_query::logs::family::LogsFamily;
 use finalized_history_query::logs::keys::{
     BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
 };
@@ -256,7 +257,7 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
         let blob = InMemoryBlobStore::default();
         let authority =
             LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
-        let engine = IngestEngine::new(config, authority, meta, blob);
+        let engine = IngestEngine::new(config, authority, meta, blob, LogsFamily);
 
         engine
             .authority
@@ -279,7 +280,13 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         let blob = InMemoryBlobStore::default();
         let authority =
             LeaseAuthority::new(MetaPublicationStore::new(Arc::new(meta.clone())), 1, 50, 0);
-        let engine = IngestEngine::new(lease_writer_config(), authority, meta.clone(), blob);
+        let engine = IngestEngine::new(
+            lease_writer_config(),
+            authority,
+            meta.clone(),
+            blob,
+            LogsFamily,
+        );
 
         engine
             .authority

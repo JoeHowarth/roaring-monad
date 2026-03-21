@@ -74,7 +74,9 @@ When a stream fragment is written to a page for the first time in a batch, an op
 ## Important Boundaries
 
 - `api.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
-- `ingest/engine.rs`: validates finalized sequencing, orchestrates publication from current head to new tail
+- `family.rs`: generic startup/ingest boundary between the concrete API and family-owned logic
+- `ingest/engine.rs`: generic publication orchestration from current head to new tail for a selected family
+- `logs/family.rs`: logs-specific startup recovery and finalized ingest sequencing
 - `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 
