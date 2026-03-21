@@ -217,8 +217,7 @@ fn publish_returns_lease_lost_on_session_mismatch() {
         let authority =
             LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
         let session = authority.begin_write(Some(100)).await.expect("acquire");
-        let takeover =
-            LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 50, 0);
+        let takeover = LeaseAuthority::with_session(publication_store(&store), 8, [2u8; 16], 50, 0);
         let _ = takeover.begin_write(Some(151)).await.expect("takeover");
 
         let err = session
