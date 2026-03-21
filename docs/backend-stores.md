@@ -6,35 +6,35 @@ This document describes the store trait abstractions and their implementations.
 
 The `MetaStore` trait provides two metadata access shapes:
 
-- point tables keyed by `family + key`
-- scannable tables keyed by `family + partition + clustering`
+- point tables keyed by `table + key`
+- scannable tables keyed by `table + partition + clustering`
 
 The core trait supports both:
 
 ```rust
-pub struct FamilyId(&'static str);
-pub struct ScannableFamilyId(&'static str);
+pub struct TableId(&'static str);
+pub struct ScannableTableId(&'static str);
 
 pub trait MetaStore: Send + Sync {
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>>;
+    async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>>;
     async fn put(
         &self,
-        family: FamilyId,
+        table: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> Result<PutResult>;
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
+    async fn delete(&self, table: TableId, key: &[u8], cond: DelCond) -> Result<()>;
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>>;
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -42,14 +42,14 @@ pub trait MetaStore: Send + Sync {
     ) -> Result<PutResult>;
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
     ) -> Result<()>;
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -58,12 +58,12 @@ pub trait MetaStore: Send + Sync {
 }
 ```
 
-The generic storage boundary also exposes family-scoped handles:
+The generic storage boundary also exposes table-scoped handles:
 
 - `KvTable<M>` / `KvTableRef<'_, M>` for point tables
 - `ScannableKvTable<M>` / `ScannableKvTableRef<'_, M>` for scannable tables
 
-Higher-level code binds a family once, then works only with suffix keys or with
+Higher-level code binds a table once, then works only with suffix keys or with
 explicit `(partition, clustering)` components.
 
 - `Record { value: Bytes, version: u64 }` — every stored value carries a monotonic version
@@ -106,21 +106,21 @@ pub trait PublicationStore: Send + Sync {
 
 Backends no longer implement `PublicationStore` directly. The crate provides a
 `MetaPublicationStore<M>` wrapper that stores publication state in the
-`publication_state` metadata family on top of any `MetaStore`.
+`publication_state` metadata table on top of any `MetaStore`.
 
-Scannable tables are only used for metadata families that actually enumerate:
+Scannable tables are only used for metadata tables that actually enumerate:
 
 - `log_dir_by_block`
 - `bitmap_by_block`
 - `open_bitmap_page`
 
-All other metadata families stay on the simpler point-table shape.
+All other metadata tables stay on the simpler point-table shape.
 
 ## InMemoryMetaStore / InMemoryBlobStore
 
 Test doubles backed by in-memory collections.
 
-- `InMemoryMetaStore` — point records in `BTreeMap<(FamilyId, Vec<u8>), Record>` and scannable records in `BTreeMap<(FamilyId, Vec<u8>, Vec<u8>), Record>` behind `RwLock`
+- `InMemoryMetaStore` — point records in `BTreeMap<(TableId, Vec<u8>), Record>` and scannable records in `BTreeMap<(ScannableTableId, Vec<u8>, Vec<u8>), Record>` behind `RwLock`
 - `InMemoryBlobStore` — `HashMap<Vec<u8>, Bytes>` behind `RwLock`, implements `BlobStore`
 
 ## FsMetaStore / FsBlobStore
@@ -128,9 +128,9 @@ Test doubles backed by in-memory collections.
 File-system backed stores for local development and testing.
 
 - Keys are hex-encoded into file paths under a `meta/` or `blob/` root directory
-- Metadata family names map to directories under `meta/<family>/`
-- Metadata files are keyed by the hex-encoded suffix bytes within that family
-- Scannable metadata families live under `meta_scan/<family>/<hex_partition>/<hex_clustering>`
+- Metadata table names map to directories under `meta/<table>/`
+- Metadata files are keyed by the hex-encoded suffix bytes within that table
+- Scannable metadata tables live under `meta_scan/<table>/<hex_partition>/<hex_clustering>`
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
 
@@ -152,15 +152,15 @@ Three tables are created:
 
 Point-table keys are partitioned by:
 
-1. **Group** — the explicit metadata family (for example `block_record` or `log_dir_sub_bucket`)
+1. **Group** — the explicit logical metadata table (for example `block_record` or `log_dir_sub_bucket`)
 2. **Bucket** — FNV-1a hash of the suffix key modulo 256
 
 This distributes load across partitions for point lookups and conditional
 writes.
 
-Scannable-table rows are partitioned by `(family, partition)` and ordered by the
+Scannable-table rows are partitioned by `(table, partition)` and ordered by the
 clustering key. This lets the backend support exact lookup and ordered scans for
-the actual enumerable metadata families without the old family-wide bucket
+the actual enumerable metadata tables without the old table-wide bucket
 fanout.
 
 ### CAS operations

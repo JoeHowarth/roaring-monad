@@ -60,7 +60,7 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity};
-    use crate::domain::keys::{BLOCK_RECORD_FAMILY, block_record_suffix};
+    use crate::domain::keys::{BLOCK_RECORD_TABLE, block_record_suffix};
     use crate::domain::types::{BlockRecord, PublicationState};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -92,7 +92,7 @@ mod tests {
                 CasOutcome::Applied(_)
             ));
             meta.put(
-                BLOCK_RECORD_FAMILY,
+                BLOCK_RECORD_TABLE,
                 &block_record_suffix(7),
                 BlockRecord {
                     block_hash: [3; 32],

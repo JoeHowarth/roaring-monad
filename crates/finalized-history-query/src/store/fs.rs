@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::store::traits::{
-    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
 
 #[derive(Debug, Clone)]
@@ -27,69 +27,69 @@ impl FsMetaStore {
         Ok(Self { root })
     }
 
-    fn family_dir(&self, family: FamilyId) -> PathBuf {
+    fn table_dir(&self, table: TableId) -> PathBuf {
         let mut p = self.root.join("meta");
-        p.push(family.as_str());
+        p.push(table.as_str());
         p
     }
 
-    fn scan_family_dir(&self, family: ScannableFamilyId) -> PathBuf {
+    fn scan_table_dir(&self, table: ScannableTableId) -> PathBuf {
         let mut p = self.root.join("meta_scan");
-        p.push(family.as_str());
+        p.push(table.as_str());
         p
     }
 
-    fn key_path(&self, family: FamilyId, key: &[u8]) -> PathBuf {
-        let mut p = self.family_dir(family);
+    fn key_path(&self, table: TableId, key: &[u8]) -> PathBuf {
+        let mut p = self.table_dir(table);
         p.push(hex(key));
         p
     }
 
-    fn version_path(&self, family: FamilyId, key: &[u8]) -> PathBuf {
-        let mut p = self.family_dir(family);
+    fn version_path(&self, table: TableId, key: &[u8]) -> PathBuf {
+        let mut p = self.table_dir(table);
         p.push(format!("{}.ver", hex(key)));
         p
     }
 
-    fn scan_partition_dir(&self, family: ScannableFamilyId, partition: &[u8]) -> PathBuf {
-        let mut p = self.scan_family_dir(family);
+    fn scan_partition_dir(&self, table: ScannableTableId, partition: &[u8]) -> PathBuf {
+        let mut p = self.scan_table_dir(table);
         p.push(hex(partition));
         p
     }
 
     fn scan_key_path(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> PathBuf {
-        let mut p = self.scan_partition_dir(family, partition);
+        let mut p = self.scan_partition_dir(table, partition);
         p.push(hex(clustering));
         p
     }
 
     fn scan_version_path(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> PathBuf {
-        let mut p = self.scan_partition_dir(family, partition);
+        let mut p = self.scan_partition_dir(table, partition);
         p.push(format!("{}.ver", hex(clustering)));
         p
     }
 
-    fn key_lock(&self, family: FamilyId, key: &[u8]) -> Result<Arc<Mutex<()>>> {
-        self.path_lock(self.key_path(family, key))
+    fn key_lock(&self, table: TableId, key: &[u8]) -> Result<Arc<Mutex<()>>> {
+        self.path_lock(self.key_path(table, key))
     }
 
     fn scan_key_lock(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Arc<Mutex<()>>> {
-        self.path_lock(self.scan_key_path(family, partition, clustering))
+        self.path_lock(self.scan_key_path(table, partition, clustering))
     }
 
     fn path_lock(&self, path: PathBuf) -> Result<Arc<Mutex<()>>> {
@@ -106,12 +106,12 @@ impl FsMetaStore {
 }
 
 impl MetaStore for FsMetaStore {
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
-        let kp = self.key_path(family, key);
+    async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>> {
+        let kp = self.key_path(table, key);
         if !kp.exists() {
             return Ok(None);
         }
-        let vp = self.version_path(family, key);
+        let vp = self.version_path(table, key);
         let value = read_file_bytes(&kp)?;
         let version = if vp.exists() {
             let b = read_file_bytes(&vp)?;
@@ -133,7 +133,7 @@ impl MetaStore for FsMetaStore {
 
     async fn put(
         &self,
-        family: FamilyId,
+        table: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
@@ -141,7 +141,7 @@ impl MetaStore for FsMetaStore {
         let lock = if matches!(cond, PutCond::Any) {
             None
         } else {
-            Some(self.key_lock(family, key)?)
+            Some(self.key_lock(table, key)?)
         };
         let _guard = if let Some(lock) = lock.as_ref() {
             Some(
@@ -151,7 +151,7 @@ impl MetaStore for FsMetaStore {
         } else {
             None
         };
-        let current = self.get(family, key).await?;
+        let current = self.get(table, key).await?;
 
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
@@ -167,11 +167,11 @@ impl MetaStore for FsMetaStore {
             });
         }
 
-        let kp = self.key_path(family, key);
-        let vp = self.version_path(family, key);
+        let kp = self.key_path(table, key);
+        let vp = self.version_path(table, key);
         if let Some(parent) = kp.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| Error::Backend(format!("create fs meta family dir: {e}")))?;
+                .map_err(|e| Error::Backend(format!("create fs meta table dir: {e}")))?;
         }
         write_file_bytes(&kp, &value)?;
 
@@ -184,11 +184,11 @@ impl MetaStore for FsMetaStore {
         })
     }
 
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+    async fn delete(&self, table: TableId, key: &[u8], cond: DelCond) -> Result<()> {
         let lock = if matches!(cond, DelCond::Any) {
             None
         } else {
-            Some(self.key_lock(family, key)?)
+            Some(self.key_lock(table, key)?)
         };
         let _guard = if let Some(lock) = lock.as_ref() {
             Some(
@@ -198,7 +198,7 @@ impl MetaStore for FsMetaStore {
         } else {
             None
         };
-        let current = self.get(family, key).await?;
+        let current = self.get(table, key).await?;
         let allowed = match (cond, current.as_ref()) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
@@ -206,23 +206,23 @@ impl MetaStore for FsMetaStore {
             (DelCond::IfVersion(_), None) => false,
         };
         if allowed {
-            let _ = fs::remove_file(self.key_path(family, key));
-            let _ = fs::remove_file(self.version_path(family, key));
+            let _ = fs::remove_file(self.key_path(table, key));
+            let _ = fs::remove_file(self.version_path(table, key));
         }
         Ok(())
     }
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
-        let kp = self.scan_key_path(family, partition, clustering);
+        let kp = self.scan_key_path(table, partition, clustering);
         if !kp.exists() {
             return Ok(None);
         }
-        let vp = self.scan_version_path(family, partition, clustering);
+        let vp = self.scan_version_path(table, partition, clustering);
         let value = read_file_bytes(&kp)?;
         let version = if vp.exists() {
             let b = read_file_bytes(&vp)?;
@@ -244,7 +244,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -253,7 +253,7 @@ impl MetaStore for FsMetaStore {
         let lock = if matches!(cond, PutCond::Any) {
             None
         } else {
-            Some(self.scan_key_lock(family, partition, clustering)?)
+            Some(self.scan_key_lock(table, partition, clustering)?)
         };
         let _guard = if let Some(lock) = lock.as_ref() {
             Some(
@@ -263,7 +263,7 @@ impl MetaStore for FsMetaStore {
         } else {
             None
         };
-        let current = self.scan_get(family, partition, clustering).await?;
+        let current = self.scan_get(table, partition, clustering).await?;
 
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
@@ -279,8 +279,8 @@ impl MetaStore for FsMetaStore {
             });
         }
 
-        let kp = self.scan_key_path(family, partition, clustering);
-        let vp = self.scan_version_path(family, partition, clustering);
+        let kp = self.scan_key_path(table, partition, clustering);
+        let vp = self.scan_version_path(table, partition, clustering);
         if let Some(parent) = kp.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 Error::Backend(format!("create fs scannable meta partition dir: {e}"))
@@ -299,7 +299,7 @@ impl MetaStore for FsMetaStore {
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -307,7 +307,7 @@ impl MetaStore for FsMetaStore {
         let lock = if matches!(cond, DelCond::Any) {
             None
         } else {
-            Some(self.scan_key_lock(family, partition, clustering)?)
+            Some(self.scan_key_lock(table, partition, clustering)?)
         };
         let _guard = if let Some(lock) = lock.as_ref() {
             Some(
@@ -317,7 +317,7 @@ impl MetaStore for FsMetaStore {
         } else {
             None
         };
-        let current = self.scan_get(family, partition, clustering).await?;
+        let current = self.scan_get(table, partition, clustering).await?;
         let allowed = match (cond, current.as_ref()) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
@@ -325,22 +325,22 @@ impl MetaStore for FsMetaStore {
             (DelCond::IfVersion(_), None) => false,
         };
         if allowed {
-            let _ = fs::remove_file(self.scan_key_path(family, partition, clustering));
-            let _ = fs::remove_file(self.scan_version_path(family, partition, clustering));
+            let _ = fs::remove_file(self.scan_key_path(table, partition, clustering));
+            let _ = fs::remove_file(self.scan_version_path(table, partition, clustering));
         }
         Ok(())
     }
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let partition_dir = self.scan_partition_dir(family, partition);
+        let partition_dir = self.scan_partition_dir(table, partition);
         if !partition_dir.exists() {
             return Ok(Page {
                 keys: Vec::new(),
@@ -636,7 +636,7 @@ fn collect_keys_from_group_dir(
 mod tests {
     use super::*;
     use crate::domain::keys::{
-        LOG_DIR_BY_BLOCK_FAMILY, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
+        LOG_DIR_BY_BLOCK_TABLE, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
     };
     use crate::domain::types::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
@@ -750,7 +750,7 @@ mod tests {
             for index in 0..1_025u64 {
                 meta_store
                     .scan_put(
-                        LOG_DIR_BY_BLOCK_FAMILY,
+                        LOG_DIR_BY_BLOCK_TABLE,
                         &partition,
                         &log_dir_by_block_clustering_key(index),
                         Bytes::from_static(b"v"),
@@ -770,7 +770,7 @@ mod tests {
             loop {
                 let page = meta_store
                     .scan_list(
-                        LOG_DIR_BY_BLOCK_FAMILY,
+                        LOG_DIR_BY_BLOCK_TABLE,
                         &partition,
                         b"",
                         meta_cursor.take(),

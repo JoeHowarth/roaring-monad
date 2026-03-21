@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    BITMAP_BY_BLOCK_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, PUBLICATION_STATE_FAMILY,
-    PUBLICATION_STATE_SUFFIX, bitmap_by_block_clustering_key, bitmap_by_block_partition_key,
+    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE, PUBLICATION_STATE_SUFFIX,
+    PUBLICATION_STATE_TABLE, bitmap_by_block_clustering_key, bitmap_by_block_partition_key,
     block_log_blob_key, block_record_suffix, log_dir_by_block_clustering_key,
     log_dir_by_block_partition_key, stream_id, stream_page_start_local,
 };
@@ -48,7 +48,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         let publication_state = svc
             .ingest
             .meta_store
-            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
+            .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("publication state get")
             .expect("publication state");
@@ -66,7 +66,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             svc.ingest
                 .meta_store
                 .scan_get(
-                    LOG_DIR_BY_BLOCK_FAMILY,
+                    LOG_DIR_BY_BLOCK_TABLE,
                     &log_dir_by_block_partition_key(0),
                     &log_dir_by_block_clustering_key(1),
                 )
@@ -85,7 +85,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             svc.ingest
                 .meta_store
                 .scan_get(
-                    BITMAP_BY_BLOCK_FAMILY,
+                    BITMAP_BY_BLOCK_TABLE,
                     &bitmap_by_block_partition_key(&sid, page_start),
                     &bitmap_by_block_clustering_key(1),
                 )
@@ -188,7 +188,7 @@ fn readers_use_only_publication_state() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             &block_record_suffix(3),
             BlockRecord {
                 block_hash: [3; 32],
@@ -217,7 +217,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         meta.put(
-            PUBLICATION_STATE_FAMILY,
+            PUBLICATION_STATE_TABLE,
             PUBLICATION_STATE_SUFFIX,
             seeded_publication_state(1, [1u8; 16], 3).encode(),
             PutCond::Any,
@@ -226,7 +226,7 @@ fn publication_state_key_is_encoded_at_the_canonical_location() {
         .expect("write publication state");
 
         let record = meta
-            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
+            .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("get publication state")
             .expect("publication state");
@@ -301,7 +301,7 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
         assert!(
             engine
                 .meta_store
-                .get(BLOCK_RECORD_FAMILY, &block_record_suffix(1))
+                .get(BLOCK_RECORD_TABLE, &block_record_suffix(1))
                 .await
                 .expect("read block meta")
                 .is_none(),

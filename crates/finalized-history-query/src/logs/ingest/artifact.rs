@@ -4,7 +4,7 @@ use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    BLOCK_HASH_INDEX_FAMILY, BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY,
+    BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_suffix, block_log_blob_key,
     block_log_header_suffix, block_record_suffix, log_dir_by_block_clustering_key,
     log_dir_by_block_partition_key, log_dir_sub_bucket_start,
@@ -12,11 +12,11 @@ use crate::domain::keys::{
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
 use crate::logs::types::Block;
-use crate::store::traits::{BlobStore, FamilyId, MetaStore, PutCond, ScannableFamilyId};
+use crate::store::traits::{BlobStore, MetaStore, PutCond, ScannableTableId, TableId};
 
 pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     meta_store: &M,
-    family: FamilyId,
+    family: TableId,
     key: &[u8],
     value: Bytes,
 ) -> Result<()> {
@@ -26,7 +26,7 @@ pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
 
 pub(in crate::logs) async fn put_scannable_artifact_meta<M: MetaStore>(
     meta_store: &M,
-    family: ScannableFamilyId,
+    family: ScannableTableId,
     partition: &[u8],
     clustering: &[u8],
     value: Bytes,
@@ -61,7 +61,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     put_artifact_blob(blob_store, &block_log_blob_key(block_num), block_blob).await?;
     put_artifact_meta(
         meta_store,
-        BLOCK_LOG_HEADER_FAMILY,
+        BLOCK_LOG_HEADER_TABLE,
         &block_log_header_suffix(block_num),
         header.encode(),
     )
@@ -83,7 +83,7 @@ pub async fn persist_log_block_record<M: MetaStore>(
 
     put_artifact_meta(
         meta_store,
-        BLOCK_RECORD_FAMILY,
+        BLOCK_RECORD_TABLE,
         &block_record_suffix(block.block_num),
         block_record.encode(),
     )
@@ -91,7 +91,7 @@ pub async fn persist_log_block_record<M: MetaStore>(
 
     put_artifact_meta(
         meta_store,
-        BLOCK_HASH_INDEX_FAMILY,
+        BLOCK_HASH_INDEX_TABLE,
         &block_hash_index_suffix(&block.block_hash),
         encode_u64(block.block_num),
     )
@@ -125,7 +125,7 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
         let clustering = log_dir_by_block_clustering_key(block_num);
         put_scannable_artifact_meta(
             meta_store,
-            LOG_DIR_BY_BLOCK_FAMILY,
+            LOG_DIR_BY_BLOCK_TABLE,
             &partition,
             &clustering,
             encoded_fragment.clone(),

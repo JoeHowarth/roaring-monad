@@ -9,8 +9,8 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    BITMAP_PAGE_META_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX,
+    BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
     bitmap_page_meta_suffix, block_record_suffix, log_dir_sub_bucket_suffix, stream_id,
     stream_page_start_local,
 };
@@ -23,7 +23,7 @@ use finalized_history_query::store::publication::{
     CasOutcome, MetaPublicationStore, PublicationStore,
 };
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
 use futures::executor::block_on;
 
@@ -99,7 +99,7 @@ struct FaultyMetaStore {
 }
 
 impl FaultyMetaStore {
-    fn logical_key(family: FamilyId, key: &[u8]) -> Vec<u8> {
+    fn logical_key(family: TableId, key: &[u8]) -> Vec<u8> {
         let mut out = family.as_str().as_bytes().to_vec();
         if !key.is_empty() {
             out.push(b'/');
@@ -108,7 +108,7 @@ impl FaultyMetaStore {
         out
     }
 
-    fn scan_logical_key(family: ScannableFamilyId, partition: &[u8], clustering: &[u8]) -> Vec<u8> {
+    fn scan_logical_key(family: ScannableTableId, partition: &[u8], clustering: &[u8]) -> Vec<u8> {
         let mut out = family.as_str().as_bytes().to_vec();
         if !partition.is_empty() {
             out.push(b'/');
@@ -122,24 +122,24 @@ impl FaultyMetaStore {
     }
 
     fn publication_state_logical_key() -> Vec<u8> {
-        Self::logical_key(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
+        Self::logical_key(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
     }
 }
 
 impl MetaStore for FaultyMetaStore {
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
+    async fn get(&self, family: TableId, key: &[u8]) -> Result<Option<Record>> {
         self.inner.get(family, key).await
     }
 
     async fn put(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> Result<PutResult> {
         let logical_key = Self::logical_key(family, key);
-        if family == PUBLICATION_STATE_FAMILY {
+        if family == PUBLICATION_STATE_TABLE {
             self.injector
                 .maybe_fail(FaultOp::PublicationCas, &logical_key)?;
         } else {
@@ -148,13 +148,13 @@ impl MetaStore for FaultyMetaStore {
         self.inner.put(family, key, value, cond).await
     }
 
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+    async fn delete(&self, family: TableId, key: &[u8], cond: DelCond) -> Result<()> {
         self.inner.delete(family, key, cond).await
     }
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -163,7 +163,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -178,7 +178,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -190,7 +190,7 @@ impl MetaStore for FaultyMetaStore {
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -454,7 +454,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             CasOutcome::Applied(_)
         ));
         meta.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             &block_record_suffix(1),
             BlockRecord {
                 block_hash: [1; 32],
@@ -491,7 +491,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
 
         assert!(
             meta.get(
-                LOG_DIR_SUB_BUCKET_FAMILY,
+                LOG_DIR_SUB_BUCKET_TABLE,
                 &log_dir_sub_bucket_suffix(2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE),
             )
             .await
@@ -506,7 +506,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         let page_start = stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
         assert!(
             meta.get(
-                BITMAP_PAGE_META_FAMILY,
+                BITMAP_PAGE_META_TABLE,
                 &bitmap_page_meta_suffix(&sid, page_start)
             )
             .await

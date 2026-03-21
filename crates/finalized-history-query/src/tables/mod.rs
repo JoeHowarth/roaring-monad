@@ -7,8 +7,8 @@ use quick_cache::{DefaultHashBuilder, Lifecycle, OptionsBuilder, Weighter};
 
 use crate::codec::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::domain::keys::{
-    BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY,
-    LOG_DIR_BUCKET_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE,
+    LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
     block_log_blob_key, block_log_header_suffix, block_record_suffix, log_dir_bucket_suffix,
     log_dir_by_block_partition_key, log_dir_sub_bucket_suffix, point_log_payload_cache_key,
@@ -214,26 +214,26 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
     pub fn without_cache(meta_store: Arc<M>, blob_store: Arc<B>) -> Self {
         let block_records = BlockRecordTable {
-            table: meta_store.clone().table(BLOCK_RECORD_FAMILY),
+            table: meta_store.clone().table(BLOCK_RECORD_TABLE),
             cache: HashMapTableBytesCache::default(),
         };
         let block_log_headers = BlockLogHeaderTable {
-            table: meta_store.clone().table(BLOCK_LOG_HEADER_FAMILY),
+            table: meta_store.clone().table(BLOCK_LOG_HEADER_TABLE),
             cache: HashMapTableBytesCache::default(),
         };
         Self {
             block_records,
             block_log_headers: block_log_headers.clone(),
             dir_buckets: DirBucketTable {
-                table: meta_store.clone().table(LOG_DIR_BUCKET_FAMILY),
+                table: meta_store.clone().table(LOG_DIR_BUCKET_TABLE),
                 cache: HashMapTableBytesCache::default(),
             },
             log_dir_sub_buckets: LogDirSubBucketTable {
-                table: meta_store.clone().table(LOG_DIR_SUB_BUCKET_FAMILY),
+                table: meta_store.clone().table(LOG_DIR_SUB_BUCKET_TABLE),
                 cache: HashMapTableBytesCache::default(),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_TABLE),
             },
             point_log_payloads: PointLogPayloadTable {
                 blob_store: Arc::clone(&blob_store),
@@ -241,10 +241,10 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 block_log_headers,
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_TABLE),
             },
             bitmap_page_meta: BitmapPageMetaTable {
-                table: meta_store.table(BITMAP_PAGE_META_FAMILY),
+                table: meta_store.table(BITMAP_PAGE_META_TABLE),
                 cache: HashMapTableBytesCache::default(),
             },
             bitmap_page_blobs: BitmapPageBlobTable {
@@ -256,25 +256,25 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
 
     pub fn new(meta_store: Arc<M>, blob_store: Arc<B>, config: BytesCacheConfig) -> Self {
         let block_records = BlockRecordTable {
-            table: meta_store.clone().table(BLOCK_RECORD_FAMILY),
+            table: meta_store.clone().table(BLOCK_RECORD_TABLE),
             cache: HashMapTableBytesCache::new(config.block_records.max_bytes),
         };
         let block_log_headers = BlockLogHeaderTable {
-            table: meta_store.clone().table(BLOCK_LOG_HEADER_FAMILY),
+            table: meta_store.clone().table(BLOCK_LOG_HEADER_TABLE),
             cache: HashMapTableBytesCache::new(config.block_log_header.max_bytes),
         };
         Self {
             block_records,
             dir_buckets: DirBucketTable {
-                table: meta_store.clone().table(LOG_DIR_BUCKET_FAMILY),
+                table: meta_store.clone().table(LOG_DIR_BUCKET_TABLE),
                 cache: HashMapTableBytesCache::new(config.log_dir_buckets.max_bytes),
             },
             log_dir_sub_buckets: LogDirSubBucketTable {
-                table: meta_store.clone().table(LOG_DIR_SUB_BUCKET_FAMILY),
+                table: meta_store.clone().table(LOG_DIR_SUB_BUCKET_TABLE),
                 cache: HashMapTableBytesCache::new(config.log_dir_sub_buckets.max_bytes),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_TABLE),
             },
             point_log_payloads: PointLogPayloadTable {
                 blob_store: Arc::clone(&blob_store),
@@ -282,10 +282,10 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 block_log_headers: block_log_headers.clone(),
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_TABLE),
             },
             bitmap_page_meta: BitmapPageMetaTable {
-                table: meta_store.table(BITMAP_PAGE_META_FAMILY),
+                table: meta_store.table(BITMAP_PAGE_META_TABLE),
                 cache: HashMapTableBytesCache::new(config.bitmap_page_meta.max_bytes),
             },
             bitmap_page_blobs: BitmapPageBlobTable {

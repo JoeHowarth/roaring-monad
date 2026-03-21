@@ -8,7 +8,7 @@ use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
-    BLOCK_RECORD_FAMILY, PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX, block_record_suffix,
+    BLOCK_RECORD_TABLE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE, block_record_suffix,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
@@ -131,7 +131,7 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
         meta.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             &block_record_suffix(3),
             BlockRecord {
                 block_hash: [3; 32],
@@ -187,7 +187,7 @@ fn startup_plan_should_not_take_publication_ownership() {
             .expect("startup plan should succeed");
 
         let publication_state = meta
-            .get(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
+            .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("read publication state")
             .expect("publication state present");
@@ -206,7 +206,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         let inner = InMemoryMetaStore::default();
         inner
             .put(
-                BLOCK_RECORD_FAMILY,
+                BLOCK_RECORD_TABLE,
                 &block_record_suffix(1),
                 BlockRecord {
                     block_hash: [1; 32],
@@ -232,7 +232,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(BLOCK_RECORD_FAMILY, &block_record_suffix(1))
+                .get(BLOCK_RECORD_TABLE, &block_record_suffix(1))
                 .await
                 .expect("read block meta after startup")
                 .is_some()

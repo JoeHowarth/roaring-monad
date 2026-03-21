@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
 use crate::domain::keys::{
-    OPEN_BITMAP_PAGE_FAMILY, STREAM_PAGE_LOCAL_ID_SPAN, log_local, log_shard,
+    OPEN_BITMAP_PAGE_TABLE, STREAM_PAGE_LOCAL_ID_SPAN, log_local, log_shard,
     open_bitmap_page_clustering_key, open_bitmap_page_partition_key,
     open_bitmap_page_shard_page_prefix, open_bitmap_page_shard_prefix, read_u64_be,
     stream_page_start_local,
@@ -70,7 +70,7 @@ pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
         open_bitmap_page_clustering_key(page.shard, page.page_start_local, &page.stream_id);
     let _ = meta_store
         .scan_put(
-            OPEN_BITMAP_PAGE_FAMILY,
+            OPEN_BITMAP_PAGE_TABLE,
             &partition,
             &clustering,
             Bytes::new(),
@@ -89,7 +89,7 @@ pub async fn delete_open_bitmap_page<M: MetaStore>(
         open_bitmap_page_clustering_key(page.shard, page.page_start_local, &page.stream_id);
     meta_store
         .scan_delete(
-            OPEN_BITMAP_PAGE_FAMILY,
+            OPEN_BITMAP_PAGE_TABLE,
             &partition,
             &clustering,
             DelCond::Any,
@@ -132,7 +132,7 @@ async fn list_open_bitmap_pages_in_partition<M: MetaStore>(
     loop {
         let page = meta_store
             .scan_list(
-                OPEN_BITMAP_PAGE_FAMILY,
+                OPEN_BITMAP_PAGE_TABLE,
                 &partition,
                 prefix,
                 cursor.take(),

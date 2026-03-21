@@ -4,7 +4,7 @@ use roaring::RoaringBitmap;
 
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_clustering_key,
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, bitmap_by_block_clustering_key,
     bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix, log_local,
     log_shard, read_u64_be, stream_id, stream_page_start_local,
 };
@@ -83,7 +83,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
             let clustering = bitmap_by_block_clustering_key(block.block_num);
             put_scannable_artifact_meta(
                 meta_store,
-                BITMAP_BY_BLOCK_FAMILY,
+                BITMAP_BY_BLOCK_TABLE,
                 &partition,
                 &clustering,
                 encode_bitmap_blob(&bitmap_blob)?,
@@ -120,13 +120,13 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
 ) -> Result<bool> {
     let partition = bitmap_by_block_partition_key(stream_id, page_start);
     let page = meta_store
-        .scan_list(BITMAP_BY_BLOCK_FAMILY, &partition, b"", None, usize::MAX)
+        .scan_list(BITMAP_BY_BLOCK_TABLE, &partition, b"", None, usize::MAX)
         .await?;
     let mut merged = RoaringBitmap::new();
     for clustering in page.keys {
         let _block_num = read_u64_be(&clustering).ok_or(Error::Decode("invalid block key"))?;
         let Some(record) = meta_store
-            .scan_get(BITMAP_BY_BLOCK_FAMILY, &partition, &clustering)
+            .scan_get(BITMAP_BY_BLOCK_TABLE, &partition, &clustering)
             .await?
         else {
             continue;
@@ -162,7 +162,7 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     .await?;
     put_artifact_meta(
         meta_store,
-        BITMAP_PAGE_META_FAMILY,
+        BITMAP_PAGE_META_TABLE,
         &bitmap_page_meta_suffix(stream_id, page_start),
         meta.encode(),
     )

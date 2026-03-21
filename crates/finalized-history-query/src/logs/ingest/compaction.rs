@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::core::ids::LogId;
 use crate::domain::keys::{
-    LOG_DIR_BUCKET_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
+    LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, log_dir_bucket_start, log_dir_bucket_suffix,
     log_dir_by_block_partition_key, log_dir_sub_bucket_start, log_dir_sub_bucket_suffix,
 };
@@ -102,12 +102,12 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
 ) -> Result<()> {
     let partition = log_dir_by_block_partition_key(sub_bucket_start);
     let page = meta_store
-        .scan_list(LOG_DIR_BY_BLOCK_FAMILY, &partition, b"", None, usize::MAX)
+        .scan_list(LOG_DIR_BY_BLOCK_TABLE, &partition, b"", None, usize::MAX)
         .await?;
     let mut fragments = Vec::with_capacity(page.keys.len());
     for clustering in page.keys {
         let Some(record) = meta_store
-            .scan_get(LOG_DIR_BY_BLOCK_FAMILY, &partition, &clustering)
+            .scan_get(LOG_DIR_BY_BLOCK_TABLE, &partition, &clustering)
             .await?
         else {
             continue;
@@ -135,7 +135,7 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
     };
     put_artifact_meta(
         meta_store,
-        LOG_DIR_SUB_BUCKET_FAMILY,
+        LOG_DIR_SUB_BUCKET_TABLE,
         &log_dir_sub_bucket_suffix(sub_bucket_start),
         bucket.encode(),
     )
@@ -152,7 +152,7 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
     while sub_bucket_start < bucket_end {
         let Some(record) = meta_store
             .get(
-                LOG_DIR_SUB_BUCKET_FAMILY,
+                LOG_DIR_SUB_BUCKET_TABLE,
                 &log_dir_sub_bucket_suffix(sub_bucket_start),
             )
             .await?
@@ -206,7 +206,7 @@ async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u6
 
     put_artifact_meta(
         meta_store,
-        LOG_DIR_BUCKET_FAMILY,
+        LOG_DIR_BUCKET_TABLE,
         &log_dir_bucket_suffix(bucket_start),
         DirBucket {
             start_block,

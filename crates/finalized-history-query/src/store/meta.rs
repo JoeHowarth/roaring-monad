@@ -5,13 +5,13 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::store::traits::{
-    DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+    DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
 
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
-    inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>), Record>>>,
-    scan_inner: Arc<RwLock<BTreeMap<(ScannableFamilyId, Vec<u8>, Vec<u8>), Record>>>,
+    inner: Arc<RwLock<BTreeMap<(TableId, Vec<u8>), Record>>>,
+    scan_inner: Arc<RwLock<BTreeMap<(ScannableTableId, Vec<u8>, Vec<u8>), Record>>>,
 }
 
 impl InMemoryMetaStore {
@@ -30,17 +30,17 @@ impl Default for InMemoryMetaStore {
 }
 
 impl MetaStore for InMemoryMetaStore {
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
+    async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>> {
         let guard = self
             .inner
             .read()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
-        Ok(guard.get(&(family, key.to_vec())).cloned())
+        Ok(guard.get(&(table, key.to_vec())).cloned())
     }
 
     async fn put(
         &self,
-        family: FamilyId,
+        table: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
@@ -50,7 +50,7 @@ impl MetaStore for InMemoryMetaStore {
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let entry_key = (family, key.to_vec());
+        let entry_key = (table, key.to_vec());
         let current = guard.get(&entry_key).cloned();
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
@@ -81,13 +81,13 @@ impl MetaStore for InMemoryMetaStore {
         })
     }
 
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
+    async fn delete(&self, table: TableId, key: &[u8], cond: DelCond) -> Result<()> {
         let mut guard = self
             .inner
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let entry_key = (family, key.to_vec());
+        let entry_key = (table, key.to_vec());
         let should_delete = match (cond, guard.get(&entry_key)) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
@@ -103,7 +103,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
@@ -112,13 +112,13 @@ impl MetaStore for InMemoryMetaStore {
             .read()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
         Ok(guard
-            .get(&(family, partition.to_vec(), clustering.to_vec()))
+            .get(&(table, partition.to_vec(), clustering.to_vec()))
             .cloned())
     }
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -129,7 +129,7 @@ impl MetaStore for InMemoryMetaStore {
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let entry_key = (family, partition.to_vec(), clustering.to_vec());
+        let entry_key = (table, partition.to_vec(), clustering.to_vec());
         let current = guard.get(&entry_key).cloned();
         let allowed = match (cond, current.as_ref()) {
             (PutCond::Any, _) => true,
@@ -162,7 +162,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -172,7 +172,7 @@ impl MetaStore for InMemoryMetaStore {
             .write()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
-        let entry_key = (family, partition.to_vec(), clustering.to_vec());
+        let entry_key = (table, partition.to_vec(), clustering.to_vec());
         let should_delete = match (cond, guard.get(&entry_key)) {
             (DelCond::Any, Some(_)) => true,
             (DelCond::Any, None) => false,
@@ -188,7 +188,7 @@ impl MetaStore for InMemoryMetaStore {
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -204,8 +204,8 @@ impl MetaStore for InMemoryMetaStore {
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
-        for ((entry_family, entry_partition, key), _) in guard.iter() {
-            if *entry_family != family {
+        for ((entry_table, entry_partition, key), _) in guard.iter() {
+            if *entry_table != table {
                 continue;
             }
             if entry_partition.as_slice() != partition {
@@ -238,7 +238,7 @@ mod tests {
 
     use super::InMemoryMetaStore;
     use crate::domain::keys::{
-        LOG_DIR_BY_BLOCK_FAMILY, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
+        LOG_DIR_BY_BLOCK_TABLE, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
     };
     use crate::store::traits::MetaStore;
     use crate::store::traits::PutCond;
@@ -250,7 +250,7 @@ mod tests {
             for index in 0..1_025u64 {
                 store
                     .scan_put(
-                        LOG_DIR_BY_BLOCK_FAMILY,
+                        LOG_DIR_BY_BLOCK_TABLE,
                         &log_dir_by_block_partition_key(0),
                         &log_dir_by_block_clustering_key(index),
                         Bytes::from_static(b"v"),
@@ -265,7 +265,7 @@ mod tests {
             loop {
                 let page = store
                     .scan_list(
-                        LOG_DIR_BY_BLOCK_FAMILY,
+                        LOG_DIR_BY_BLOCK_TABLE,
                         &log_dir_by_block_partition_key(0),
                         b"",
                         cursor.take(),

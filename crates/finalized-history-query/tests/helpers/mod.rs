@@ -6,14 +6,14 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::PUBLICATION_STATE_FAMILY;
+use finalized_history_query::domain::keys::PUBLICATION_STATE_TABLE;
 use finalized_history_query::domain::types::{Block, Log, PublicationState};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{
-    BlobStore, DelCond, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+    BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
 use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority, WriteSession};
 
@@ -154,7 +154,7 @@ impl ExpireBeforePublishMetaStore {
 impl MetaStore for ExpireBeforePublishMetaStore {
     async fn get(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
     ) -> finalized_history_query::Result<Option<Record>> {
         self.inner.get(family, key).await
@@ -162,12 +162,12 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn put(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> finalized_history_query::Result<PutResult> {
-        if family == PUBLICATION_STATE_FAMILY && matches!(cond, PutCond::IfVersion(_)) {
+        if family == PUBLICATION_STATE_TABLE && matches!(cond, PutCond::IfVersion(_)) {
             let Some(current) = self.inner.get(family, key).await? else {
                 return self.inner.put(family, key, value, cond).await;
             };
@@ -184,7 +184,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
             }
         }
         let result = self.inner.put(family, key, value, cond).await?;
-        if family != PUBLICATION_STATE_FAMILY && !self.advanced.swap(true, Ordering::Relaxed) {
+        if family != PUBLICATION_STATE_TABLE && !self.advanced.swap(true, Ordering::Relaxed) {
             let publication_state = self
                 .publication_store()
                 .load()
@@ -202,7 +202,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn delete(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
         cond: DelCond,
     ) -> finalized_history_query::Result<()> {
@@ -211,7 +211,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> finalized_history_query::Result<Option<Record>> {
@@ -220,7 +220,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -248,7 +248,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -260,7 +260,7 @@ impl MetaStore for ExpireBeforePublishMetaStore {
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -281,7 +281,7 @@ pub struct PublishConflictOnceMetaStore {
 impl MetaStore for PublishConflictOnceMetaStore {
     async fn get(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
     ) -> finalized_history_query::Result<Option<Record>> {
         self.inner.get(family, key).await
@@ -289,12 +289,12 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn put(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> finalized_history_query::Result<PutResult> {
-        if family == PUBLICATION_STATE_FAMILY
+        if family == PUBLICATION_STATE_TABLE
             && matches!(cond, PutCond::IfVersion(_))
             && !self.conflicted.swap(true, Ordering::Relaxed)
         {
@@ -309,7 +309,7 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn delete(
         &self,
-        family: FamilyId,
+        family: TableId,
         key: &[u8],
         cond: DelCond,
     ) -> finalized_history_query::Result<()> {
@@ -318,7 +318,7 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> finalized_history_query::Result<Option<Record>> {
@@ -327,7 +327,7 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -340,7 +340,7 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
@@ -352,7 +352,7 @@ impl MetaStore for PublishConflictOnceMetaStore {
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        family: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,

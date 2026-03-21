@@ -1,6 +1,6 @@
 #![cfg(feature = "distributed-stores")]
 
-use finalized_history_query::domain::keys::BLOCK_RECORD_FAMILY;
+use finalized_history_query::domain::keys::BLOCK_RECORD_TABLE;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 
@@ -21,7 +21,7 @@ async fn lwt_if_absent_has_single_winner() {
 
     let t1 = tokio::spawn(async move {
         s1.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             &key,
             bytes::Bytes::from_static(b"writer1"),
             PutCond::IfAbsent,
@@ -34,7 +34,7 @@ async fn lwt_if_absent_has_single_winner() {
     let key2 = b"cas_race".to_vec();
     let t2 = tokio::spawn(async move {
         s2.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             &key2,
             bytes::Bytes::from_static(b"writer2"),
             PutCond::IfAbsent,
@@ -49,7 +49,7 @@ async fn lwt_if_absent_has_single_winner() {
     assert_ne!(a, b, "exactly one writer must win IF NOT EXISTS");
 
     let rec = store
-        .get(BLOCK_RECORD_FAMILY, b"cas_race")
+        .get(BLOCK_RECORD_TABLE, b"cas_race")
         .await
         .expect("get")
         .expect("row");
@@ -70,7 +70,7 @@ async fn lwt_if_version_has_single_winner() {
         .expect("connect scylla");
     let seed = store
         .put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             b"ver_race",
             bytes::Bytes::from_static(b"seed"),
             PutCond::IfAbsent,
@@ -85,7 +85,7 @@ async fn lwt_if_version_has_single_winner() {
 
     let t1 = tokio::spawn(async move {
         s1.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             b"ver_race",
             bytes::Bytes::from_static(b"writer1"),
             PutCond::IfVersion(expected_version),
@@ -97,7 +97,7 @@ async fn lwt_if_version_has_single_winner() {
 
     let t2 = tokio::spawn(async move {
         s2.put(
-            BLOCK_RECORD_FAMILY,
+            BLOCK_RECORD_TABLE,
             b"ver_race",
             bytes::Bytes::from_static(b"writer2"),
             PutCond::IfVersion(expected_version),
@@ -112,7 +112,7 @@ async fn lwt_if_version_has_single_winner() {
     assert_ne!(a, b, "exactly one writer must win IF version=expected");
 
     let rec = store
-        .get(BLOCK_RECORD_FAMILY, b"ver_race")
+        .get(BLOCK_RECORD_TABLE, b"ver_race")
         .await
         .expect("get")
         .expect("row");

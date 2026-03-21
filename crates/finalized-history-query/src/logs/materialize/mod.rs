@@ -109,7 +109,7 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             meta.put(
-                crate::domain::keys::LOG_DIR_BUCKET_FAMILY,
+                crate::domain::keys::LOG_DIR_BUCKET_TABLE,
                 &crate::domain::keys::log_dir_bucket_suffix(0),
                 DirBucket {
                     start_block: 700,
@@ -146,7 +146,7 @@ mod tests {
             let blob = InMemoryBlobStore::default();
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.scan_put(
-                crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
+                crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
                 &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
                     log_id,
                 )),
@@ -188,7 +188,7 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
-                crate::domain::keys::LOG_DIR_BUCKET_FAMILY,
+                crate::domain::keys::LOG_DIR_BUCKET_TABLE,
                 &crate::domain::keys::log_dir_bucket_suffix(log_dir_bucket_start(log_id)),
                 DirBucket {
                     start_block: 700,
@@ -246,7 +246,7 @@ mod tests {
             let encoded = log.encode();
 
             meta.scan_put(
-                crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
+                crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
                 &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
                     log_id,
                 )),
@@ -262,7 +262,7 @@ mod tests {
             .await
             .expect("write directory fragment");
             meta.put(
-                crate::domain::keys::BLOCK_LOG_HEADER_FAMILY,
+                crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
                 &crate::domain::keys::block_log_header_suffix(block_num),
                 BlockLogHeader {
                     offsets: vec![0, encoded.len() as u32],
@@ -358,7 +358,7 @@ mod tests {
             }
 
             meta.put(
-                crate::domain::keys::BLOCK_LOG_HEADER_FAMILY,
+                crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
                 &crate::domain::keys::block_log_header_suffix(block_num),
                 BlockLogHeader { offsets }.encode(),
                 PutCond::Any,

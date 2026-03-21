@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::keys::{PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX};
+use crate::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use crate::domain::types::PublicationState;
 use crate::error::Result;
 use crate::store::traits::{KvTable, MetaStore, PutCond};
@@ -24,7 +24,7 @@ pub struct MetaPublicationStore<M> {
 impl<M: MetaStore> MetaPublicationStore<M> {
     pub fn new(meta_store: Arc<M>) -> Self {
         Self {
-            table: meta_store.table(PUBLICATION_STATE_FAMILY),
+            table: meta_store.table(PUBLICATION_STATE_TABLE),
         }
     }
 }

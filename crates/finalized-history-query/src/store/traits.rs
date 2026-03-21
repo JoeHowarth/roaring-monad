@@ -5,9 +5,9 @@ use bytes::Bytes;
 use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FamilyId(&'static str);
+pub struct TableId(&'static str);
 
-impl FamilyId {
+impl TableId {
     pub const fn new(name: &'static str) -> Self {
         Self(name)
     }
@@ -18,9 +18,9 @@ impl FamilyId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ScannableFamilyId(&'static str);
+pub struct ScannableTableId(&'static str);
 
-impl ScannableFamilyId {
+impl ScannableTableId {
     pub const fn new(name: &'static str) -> Self {
         Self(name)
     }
@@ -65,16 +65,16 @@ pub struct Page {
 #[derive(Debug)]
 pub struct KvTable<M> {
     store: Arc<M>,
-    family: FamilyId,
+    table: TableId,
 }
 
 impl<M> KvTable<M> {
-    pub fn new(store: Arc<M>, family: FamilyId) -> Self {
-        Self { store, family }
+    pub fn new(store: Arc<M>, table: TableId) -> Self {
+        Self { store, table }
     }
 
-    pub fn family(&self) -> FamilyId {
-        self.family
+    pub fn table(&self) -> TableId {
+        self.table
     }
 }
 
@@ -82,68 +82,68 @@ impl<M> Clone for KvTable<M> {
     fn clone(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
-            family: self.family,
+            table: self.table,
         }
     }
 }
 
 impl<M: MetaStore> KvTable<M> {
     pub async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        self.store.get(self.family, key).await
+        self.store.get(self.table, key).await
     }
 
     pub async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        self.store.put(self.family, key, value, cond).await
+        self.store.put(self.table, key, value, cond).await
     }
 
     pub async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        self.store.delete(self.family, key, cond).await
+        self.store.delete(self.table, key, cond).await
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct KvTableRef<'a, M> {
     store: &'a M,
-    family: FamilyId,
+    table: TableId,
 }
 
 impl<'a, M> KvTableRef<'a, M> {
-    pub fn new(store: &'a M, family: FamilyId) -> Self {
-        Self { store, family }
+    pub fn new(store: &'a M, table: TableId) -> Self {
+        Self { store, table }
     }
 
-    pub fn family(&self) -> FamilyId {
-        self.family
+    pub fn table(&self) -> TableId {
+        self.table
     }
 }
 
 impl<M: MetaStore> KvTableRef<'_, M> {
     pub async fn get(&self, key: &[u8]) -> Result<Option<Record>> {
-        self.store.get(self.family, key).await
+        self.store.get(self.table, key).await
     }
 
     pub async fn put(&self, key: &[u8], value: Bytes, cond: PutCond) -> Result<PutResult> {
-        self.store.put(self.family, key, value, cond).await
+        self.store.put(self.table, key, value, cond).await
     }
 
     pub async fn delete(&self, key: &[u8], cond: DelCond) -> Result<()> {
-        self.store.delete(self.family, key, cond).await
+        self.store.delete(self.table, key, cond).await
     }
 }
 
 #[derive(Debug)]
 pub struct ScannableKvTable<M> {
     store: Arc<M>,
-    family: ScannableFamilyId,
+    table: ScannableTableId,
 }
 
 impl<M> ScannableKvTable<M> {
-    pub fn new(store: Arc<M>, family: ScannableFamilyId) -> Self {
-        Self { store, family }
+    pub fn new(store: Arc<M>, table: ScannableTableId) -> Self {
+        Self { store, table }
     }
 
-    pub fn family(&self) -> ScannableFamilyId {
-        self.family
+    pub fn table(&self) -> ScannableTableId {
+        self.table
     }
 }
 
@@ -151,16 +151,14 @@ impl<M> Clone for ScannableKvTable<M> {
     fn clone(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
-            family: self.family,
+            table: self.table,
         }
     }
 }
 
 impl<M: MetaStore> ScannableKvTable<M> {
     pub async fn get(&self, partition: &[u8], clustering: &[u8]) -> Result<Option<Record>> {
-        self.store
-            .scan_get(self.family, partition, clustering)
-            .await
+        self.store.scan_get(self.table, partition, clustering).await
     }
 
     pub async fn put(
@@ -171,13 +169,13 @@ impl<M: MetaStore> ScannableKvTable<M> {
         cond: PutCond,
     ) -> Result<PutResult> {
         self.store
-            .scan_put(self.family, partition, clustering, value, cond)
+            .scan_put(self.table, partition, clustering, value, cond)
             .await
     }
 
     pub async fn delete(&self, partition: &[u8], clustering: &[u8], cond: DelCond) -> Result<()> {
         self.store
-            .scan_delete(self.family, partition, clustering, cond)
+            .scan_delete(self.table, partition, clustering, cond)
             .await
     }
 
@@ -189,7 +187,7 @@ impl<M: MetaStore> ScannableKvTable<M> {
         limit: usize,
     ) -> Result<Page> {
         self.store
-            .scan_list(self.family, partition, prefix, cursor, limit)
+            .scan_list(self.table, partition, prefix, cursor, limit)
             .await
     }
 }
@@ -197,24 +195,22 @@ impl<M: MetaStore> ScannableKvTable<M> {
 #[derive(Debug, Clone, Copy)]
 pub struct ScannableKvTableRef<'a, M> {
     store: &'a M,
-    family: ScannableFamilyId,
+    table: ScannableTableId,
 }
 
 impl<'a, M> ScannableKvTableRef<'a, M> {
-    pub fn new(store: &'a M, family: ScannableFamilyId) -> Self {
-        Self { store, family }
+    pub fn new(store: &'a M, table: ScannableTableId) -> Self {
+        Self { store, table }
     }
 
-    pub fn family(&self) -> ScannableFamilyId {
-        self.family
+    pub fn table(&self) -> ScannableTableId {
+        self.table
     }
 }
 
 impl<M: MetaStore> ScannableKvTableRef<'_, M> {
     pub async fn get(&self, partition: &[u8], clustering: &[u8]) -> Result<Option<Record>> {
-        self.store
-            .scan_get(self.family, partition, clustering)
-            .await
+        self.store.scan_get(self.table, partition, clustering).await
     }
 
     pub async fn put(
@@ -225,13 +221,13 @@ impl<M: MetaStore> ScannableKvTableRef<'_, M> {
         cond: PutCond,
     ) -> Result<PutResult> {
         self.store
-            .scan_put(self.family, partition, clustering, value, cond)
+            .scan_put(self.table, partition, clustering, value, cond)
             .await
     }
 
     pub async fn delete(&self, partition: &[u8], clustering: &[u8], cond: DelCond) -> Result<()> {
         self.store
-            .scan_delete(self.family, partition, clustering, cond)
+            .scan_delete(self.table, partition, clustering, cond)
             .await
     }
 
@@ -243,59 +239,59 @@ impl<M: MetaStore> ScannableKvTableRef<'_, M> {
         limit: usize,
     ) -> Result<Page> {
         self.store
-            .scan_list(self.family, partition, prefix, cursor, limit)
+            .scan_list(self.table, partition, prefix, cursor, limit)
             .await
     }
 }
 
 #[allow(async_fn_in_trait)]
 pub trait MetaStore: Send + Sync {
-    fn table(self: Arc<Self>, family: FamilyId) -> KvTable<Self>
+    fn table(self: Arc<Self>, table: TableId) -> KvTable<Self>
     where
         Self: Sized,
     {
-        KvTable::new(self, family)
+        KvTable::new(self, table)
     }
 
-    fn table_ref(&self, family: FamilyId) -> KvTableRef<'_, Self>
+    fn table_ref(&self, table: TableId) -> KvTableRef<'_, Self>
     where
         Self: Sized,
     {
-        KvTableRef::new(self, family)
+        KvTableRef::new(self, table)
     }
 
-    fn scannable_table(self: Arc<Self>, family: ScannableFamilyId) -> ScannableKvTable<Self>
+    fn scannable_table(self: Arc<Self>, table: ScannableTableId) -> ScannableKvTable<Self>
     where
         Self: Sized,
     {
-        ScannableKvTable::new(self, family)
+        ScannableKvTable::new(self, table)
     }
 
-    fn scannable_table_ref(&self, family: ScannableFamilyId) -> ScannableKvTableRef<'_, Self>
+    fn scannable_table_ref(&self, table: ScannableTableId) -> ScannableKvTableRef<'_, Self>
     where
         Self: Sized,
     {
-        ScannableKvTableRef::new(self, family)
+        ScannableKvTableRef::new(self, table)
     }
 
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>>;
+    async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>>;
     async fn put(
         &self,
-        family: FamilyId,
+        table: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> Result<PutResult>;
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
+    async fn delete(&self, table: TableId, key: &[u8], cond: DelCond) -> Result<()>;
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>>;
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
@@ -303,14 +299,14 @@ pub trait MetaStore: Send + Sync {
     ) -> Result<PutResult>;
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
     ) -> Result<()>;
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
@@ -319,68 +315,68 @@ pub trait MetaStore: Send + Sync {
 }
 
 impl<T: MetaStore> MetaStore for Arc<T> {
-    async fn get(&self, family: FamilyId, key: &[u8]) -> Result<Option<Record>> {
-        self.as_ref().get(family, key).await
+    async fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Record>> {
+        self.as_ref().get(table, key).await
     }
 
     async fn put(
         &self,
-        family: FamilyId,
+        table: TableId,
         key: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> Result<PutResult> {
-        self.as_ref().put(family, key, value, cond).await
+        self.as_ref().put(table, key, value, cond).await
     }
 
-    async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()> {
-        self.as_ref().delete(family, key, cond).await
+    async fn delete(&self, table: TableId, key: &[u8], cond: DelCond) -> Result<()> {
+        self.as_ref().delete(table, key, cond).await
     }
 
     async fn scan_get(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
     ) -> Result<Option<Record>> {
-        self.as_ref().scan_get(family, partition, clustering).await
+        self.as_ref().scan_get(table, partition, clustering).await
     }
 
     async fn scan_put(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         value: Bytes,
         cond: PutCond,
     ) -> Result<PutResult> {
         self.as_ref()
-            .scan_put(family, partition, clustering, value, cond)
+            .scan_put(table, partition, clustering, value, cond)
             .await
     }
 
     async fn scan_delete(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         clustering: &[u8],
         cond: DelCond,
     ) -> Result<()> {
         self.as_ref()
-            .scan_delete(family, partition, clustering, cond)
+            .scan_delete(table, partition, clustering, cond)
             .await
     }
 
     async fn scan_list(
         &self,
-        family: ScannableFamilyId,
+        table: ScannableTableId,
         partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         self.as_ref()
-            .scan_list(family, partition, prefix, cursor, limit)
+            .scan_list(table, partition, prefix, cursor, limit)
             .await
     }
 }

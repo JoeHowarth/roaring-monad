@@ -236,14 +236,14 @@ mod tests {
     use bytes::Bytes;
 
     use crate::domain::keys::{
-        BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_clustering_key,
+        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, bitmap_by_block_clustering_key,
         bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
     };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{
-        BlobStore, FamilyId, MetaStore, Page, PutCond, PutResult, Record, ScannableFamilyId,
+        BlobStore, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
     };
     use crate::streams::bitmap_blob::{BitmapBlob, encode_bitmap_blob};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
@@ -252,7 +252,7 @@ mod tests {
 
     struct CountingMetaStore {
         inner: InMemoryMetaStore,
-        target_family: FamilyId,
+        target_family: TableId,
         target_key: Vec<u8>,
         get_count: Arc<AtomicU64>,
     }
@@ -260,7 +260,7 @@ mod tests {
     impl MetaStore for CountingMetaStore {
         async fn get(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: crate::store::traits::TableId,
             key: &[u8],
         ) -> crate::Result<Option<Record>> {
             if family == self.target_family && key == self.target_key.as_slice() {
@@ -271,7 +271,7 @@ mod tests {
 
         async fn put(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: crate::store::traits::TableId,
             key: &[u8],
             value: Bytes,
             cond: PutCond,
@@ -281,7 +281,7 @@ mod tests {
 
         async fn delete(
             &self,
-            family: crate::store::traits::FamilyId,
+            family: crate::store::traits::TableId,
             key: &[u8],
             cond: crate::store::traits::DelCond,
         ) -> crate::Result<()> {
@@ -290,7 +290,7 @@ mod tests {
 
         async fn scan_get(
             &self,
-            family: ScannableFamilyId,
+            family: ScannableTableId,
             partition: &[u8],
             clustering: &[u8],
         ) -> crate::Result<Option<Record>> {
@@ -299,7 +299,7 @@ mod tests {
 
         async fn scan_put(
             &self,
-            family: ScannableFamilyId,
+            family: ScannableTableId,
             partition: &[u8],
             clustering: &[u8],
             value: Bytes,
@@ -312,7 +312,7 @@ mod tests {
 
         async fn scan_delete(
             &self,
-            family: ScannableFamilyId,
+            family: ScannableTableId,
             partition: &[u8],
             clustering: &[u8],
             cond: crate::store::traits::DelCond,
@@ -324,7 +324,7 @@ mod tests {
 
         async fn scan_list(
             &self,
-            family: ScannableFamilyId,
+            family: ScannableTableId,
             partition: &[u8],
             prefix: &[u8],
             cursor: Option<Vec<u8>>,
@@ -389,7 +389,7 @@ mod tests {
             let partition = bitmap_by_block_partition_key(stream, page_start);
 
             meta.scan_put(
-                BITMAP_BY_BLOCK_FAMILY,
+                BITMAP_BY_BLOCK_TABLE,
                 &partition,
                 &bitmap_by_block_clustering_key(block_num),
                 encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
@@ -399,7 +399,7 @@ mod tests {
             .expect("write stream fragment");
 
             meta.put(
-                BITMAP_PAGE_META_FAMILY,
+                BITMAP_PAGE_META_TABLE,
                 &bitmap_page_meta_suffix(stream, page_start),
                 StreamBitmapMeta {
                     block_num: 0,
@@ -448,7 +448,7 @@ mod tests {
 
             inner_meta
                 .put(
-                    BITMAP_PAGE_META_FAMILY,
+                    BITMAP_PAGE_META_TABLE,
                     &meta_key,
                     StreamBitmapMeta {
                         block_num: 7,
@@ -471,7 +471,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
-                target_family: BITMAP_PAGE_META_FAMILY,
+                target_family: BITMAP_PAGE_META_TABLE,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };
@@ -532,7 +532,7 @@ mod tests {
 
             inner_meta
                 .put(
-                    BITMAP_PAGE_META_FAMILY,
+                    BITMAP_PAGE_META_TABLE,
                     &meta_key,
                     StreamBitmapMeta {
                         block_num: 7,
@@ -555,7 +555,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
-                target_family: BITMAP_PAGE_META_FAMILY,
+                target_family: BITMAP_PAGE_META_TABLE,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };
