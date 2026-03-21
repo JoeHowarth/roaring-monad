@@ -46,7 +46,6 @@ See [caching.md](caching.md) for cache design details.
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `backend_error_throttle_after` | `u64` | `3` | Consecutive backend errors before throttling |
 | `backend_error_degraded_after` | `u64` | `10` | Consecutive backend errors before degraded state |
 
 ## Backend-Specific Config

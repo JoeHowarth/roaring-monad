@@ -3,15 +3,16 @@ use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
 use crate::logs::state::load_log_block_window;
 use crate::logs::types::LogBlockWindow;
-use crate::store::traits::MetaStore;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogWindowResolver;
 
 impl LogWindowResolver {
-    pub async fn resolve<M: MetaStore>(
+    pub async fn resolve<M: MetaStore, B: BlobStore>(
         &self,
-        meta_store: &M,
+        tables: &Tables<M, B>,
         block_range: &ResolvedBlockRange,
     ) -> Result<Option<PrimaryIdRange>> {
         if block_range.is_empty() {
@@ -19,14 +20,12 @@ impl LogWindowResolver {
         }
 
         let Some(from_block_window) = self
-            .load_block_window(meta_store, block_range.from_block)
+            .load_block_window(tables, block_range.from_block)
             .await?
         else {
             return Ok(None);
         };
-        let Some(to_block_window) = self
-            .load_block_window(meta_store, block_range.to_block)
-            .await?
+        let Some(to_block_window) = self.load_block_window(tables, block_range.to_block).await?
         else {
             return Ok(None);
         };
@@ -48,11 +47,11 @@ impl LogWindowResolver {
         ))
     }
 
-    async fn load_block_window<M: MetaStore>(
+    async fn load_block_window<M: MetaStore, B: BlobStore>(
         &self,
-        meta_store: &M,
+        tables: &Tables<M, B>,
         block_num: u64,
     ) -> Result<Option<LogBlockWindow>> {
-        load_log_block_window(meta_store, block_num).await
+        load_log_block_window(tables, block_num).await
     }
 }

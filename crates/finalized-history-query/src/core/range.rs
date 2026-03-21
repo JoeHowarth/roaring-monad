@@ -3,7 +3,8 @@ use crate::core::refs::BlockRef;
 use crate::core::state::{load_block_identity, load_finalized_head_state};
 use crate::error::{Error, Result};
 use crate::store::publication::PublicationStore;
-use crate::store::traits::MetaStore;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedBlockRange {
@@ -36,7 +37,7 @@ pub struct RangeResolver;
 impl RangeResolver {
     pub async fn resolve<M: MetaStore + PublicationStore>(
         &self,
-        meta_store: &M,
+        tables: &Tables<M, impl BlobStore>,
         from_block: u64,
         to_block: u64,
         order: QueryOrder,
@@ -51,14 +52,14 @@ impl RangeResolver {
             ));
         }
 
-        let finalized_head = load_finalized_head_state(meta_store)
+        let finalized_head = load_finalized_head_state(tables.meta_store())
             .await?
             .indexed_finalized_head;
 
         let anchor = if finalized_head == 0 {
             BlockRef::zero(0)
         } else {
-            self.load_block_ref(meta_store, finalized_head)
+            self.load_block_ref(tables, finalized_head)
                 .await?
                 .unwrap_or_else(|| BlockRef::zero(finalized_head))
         };
@@ -68,10 +69,10 @@ impl RangeResolver {
         }
 
         let clipped_to = to_block.min(finalized_head);
-        let Some(resolved_from_ref) = self.load_block_ref(meta_store, from_block).await? else {
+        let Some(resolved_from_ref) = self.load_block_ref(tables, from_block).await? else {
             return Ok(ResolvedBlockRange::empty(anchor));
         };
-        let Some(resolved_to_ref) = self.load_block_ref(meta_store, clipped_to).await? else {
+        let Some(resolved_to_ref) = self.load_block_ref(tables, clipped_to).await? else {
             return Ok(ResolvedBlockRange::empty(anchor));
         };
 
@@ -84,12 +85,12 @@ impl RangeResolver {
         })
     }
 
-    pub async fn load_block_ref<M: MetaStore>(
+    pub async fn load_block_ref<M: MetaStore, B: BlobStore>(
         &self,
-        meta_store: &M,
+        tables: &Tables<M, B>,
         block_num: u64,
     ) -> Result<Option<BlockRef>> {
-        Ok(load_block_identity(meta_store, block_num)
+        Ok(load_block_identity(tables, block_num)
             .await?
             .map(|identity| identity.into_block_ref()))
     }

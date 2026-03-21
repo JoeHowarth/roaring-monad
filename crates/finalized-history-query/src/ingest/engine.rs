@@ -12,6 +12,7 @@ use crate::logs::ingest::{
     persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
 };
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 pub struct IngestEngine<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub config: Config,
@@ -20,7 +21,7 @@ pub struct IngestEngine<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub blob_store: B,
 }
 
-impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
+impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine<A, M, B> {
     pub fn new(config: Config, authority: A, meta_store: M, blob_store: B) -> Self {
         Self {
             config,
@@ -58,10 +59,12 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
             .await?;
         debug_assert_eq!(prior_epoch, token.epoch);
 
-        validate_block_sequence(&self.meta_store, blocks, &token).await?;
-
-        let from_next_log_id =
-            derive_next_log_id(&self.meta_store, token.indexed_finalized_head).await?;
+        let tables = Tables::without_cache(
+            std::sync::Arc::new(self.meta_store.clone()),
+            std::sync::Arc::new(self.blob_store.clone()),
+        );
+        validate_block_sequence(&tables, blocks, &token).await?;
+        let from_next_log_id = derive_next_log_id(&tables, token.indexed_finalized_head).await?;
         let mut next_log_id = from_next_log_id;
         let mut opened_during = Vec::<OpenBitmapPage>::new();
         let epoch = token.epoch;
@@ -158,8 +161,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> IngestEngine<A, M, B> {
     }
 }
 
-async fn validate_block_sequence<M: MetaStore>(
-    meta_store: &M,
+async fn validate_block_sequence<M: MetaStore + Clone, B: BlobStore + Clone>(
+    tables: &Tables<M, B>,
     blocks: &[Block],
     token: &WriteToken,
 ) -> Result<()> {
@@ -174,7 +177,7 @@ async fn validate_block_sequence<M: MetaStore>(
     let expected_parent = if token.indexed_finalized_head == 0 {
         [0u8; 32]
     } else {
-        load_block_identity(meta_store, token.indexed_finalized_head)
+        load_block_identity(tables, token.indexed_finalized_head)
             .await?
             .ok_or(Error::NotFound)?
             .hash

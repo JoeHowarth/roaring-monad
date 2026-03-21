@@ -75,22 +75,13 @@ impl LogsQueryEngine {
 
         let block_range = self
             .range_resolver
-            .resolve(
-                tables.meta_store(),
-                request.from_block,
-                request.to_block,
-                request.order,
-            )
+            .resolve(tables, request.from_block, request.to_block, request.order)
             .await?;
         if block_range.is_empty() {
             return Ok(self.empty_page(&block_range));
         }
 
-        let Some(mut log_window) = self
-            .window_resolver
-            .resolve(tables.meta_store(), &block_range)
-            .await?
-        else {
+        let Some(mut log_window) = self.window_resolver.resolve(tables, &block_range).await? else {
             return Ok(self.empty_page(&block_range));
         };
 

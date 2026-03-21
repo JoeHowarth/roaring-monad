@@ -171,7 +171,11 @@ fn startup_plan_should_not_take_publication_ownership() {
             finalized_history_query::store::publication::CasOutcome::Applied(_)
         ));
 
-        let _ = startup_plan(&meta, &blob, 0)
+        let tables = finalized_history_query::tables::Tables::without_cache(
+            std::sync::Arc::new(meta.clone()),
+            std::sync::Arc::new(blob.clone()),
+        );
+        let _ = startup_plan(&tables, 0)
             .await
             .expect("startup plan should succeed");
 

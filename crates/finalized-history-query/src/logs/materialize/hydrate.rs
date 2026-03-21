@@ -50,14 +50,12 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
 
         let block_ref = if let Some(block_ref) = self
             .range_resolver
-            .load_block_ref(self.tables.meta_store(), block_num)
+            .load_block_ref(self.tables, block_num)
             .await?
         {
             block_ref
         } else {
-            let Some(block_record) =
-                load_log_block_record(self.tables.meta_store(), block_num).await?
-            else {
+            let Some(block_record) = load_log_block_record(self.tables, block_num).await? else {
                 return Err(Error::NotFound);
             };
             BlockRef {

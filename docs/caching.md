@@ -33,6 +33,7 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 
 | Table                    | What it caches                                                        |
 | ------------------------ | --------------------------------------------------------------------- |
+| `BlockRecords`           | `block_record/<block_num>` — immutable block-to-log and hash metadata |
 | `BlockLogHeaders`        | `block_log_header/<block_num>` — byte offset tables                  |
 | `DirBuckets`    | `log_dir_bucket/<bucket_start>` — 1M compacted directory buckets             |
 | `LogDirSubBuckets` | `log_dir_sub_bucket/<sub_bucket_start>` — 10K compacted sub-buckets          |

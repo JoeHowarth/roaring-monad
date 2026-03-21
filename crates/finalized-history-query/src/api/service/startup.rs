@@ -12,7 +12,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
 {
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
-            let result = startup_plan(&self.ingest.meta_store, &self.ingest.blob_store, 0).await;
+            let result = startup_plan(self.tables(), 0).await;
             self.update_backend_state(&result);
             return result;
         }
@@ -83,8 +83,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     }
 
     async fn recover_and_plan(&self, token: WriteToken) -> Result<StartupPlan> {
-        let next_log_id =
-            derive_next_log_id(&self.ingest.meta_store, token.indexed_finalized_head).await?;
+        let next_log_id = derive_next_log_id(self.tables(), token.indexed_finalized_head).await?;
         Ok(build_startup_plan(
             token.indexed_finalized_head,
             token.epoch,

@@ -477,13 +477,13 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .await
             .expect("retry should overwrite unpublished artifacts");
 
-        let plan = startup_plan(
-            &takeover_writer.ingest.meta_store,
-            &takeover_writer.ingest.blob_store,
-            0,
-        )
-        .await
-        .expect("post conflict startup plan");
+        let tables = finalized_history_query::tables::Tables::without_cache(
+            std::sync::Arc::clone(&takeover_writer.ingest.meta_store),
+            std::sync::Arc::clone(&takeover_writer.ingest.blob_store),
+        );
+        let plan = startup_plan(&tables, 0)
+            .await
+            .expect("post conflict startup plan");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);
         let items = query_range(&takeover_writer, 2, 2).await;
         assert_eq!(items.len(), 4);

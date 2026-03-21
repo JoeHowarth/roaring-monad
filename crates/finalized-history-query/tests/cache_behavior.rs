@@ -181,3 +181,45 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
         assert_eq!(metrics.point_log_payloads.misses, 2);
     });
 }
+
+#[test]
+fn service_reuses_cached_block_records_across_queries() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedHistoryService::new_reader_writer(
+            Config {
+                bytes_cache: BytesCacheConfig {
+                    block_records: TableCacheConfig {
+                        max_bytes: 1024 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+                ..lease_writer_config()
+            },
+            meta,
+            blob,
+            1,
+        );
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(7, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest block");
+
+        let first = query_page(&svc, 1, 1, indexed_address_filter(7), 10, None)
+            .await
+            .expect("first query");
+        let second = query_page(&svc, 1, 1, indexed_address_filter(7), 10, None)
+            .await
+            .expect("second query");
+
+        assert_eq!(first.items, second.items);
+
+        let metrics = svc.cache_metrics();
+        assert_eq!(metrics.block_records.misses, 1);
+        assert!(metrics.block_records.hits >= 1);
+        assert_eq!(metrics.block_records.inserts, 1);
+        assert_eq!(metrics.block_records.evictions, 0);
+        assert!(metrics.block_records.bytes_used > 0);
+    });
+}

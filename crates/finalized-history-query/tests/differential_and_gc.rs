@@ -204,7 +204,11 @@ fn recovery_startup_smoke_check() {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
 
-        let rec = startup_plan(&meta, &blob, 0).await.expect("startup plan");
+        let tables = finalized_history_query::tables::Tables::without_cache(
+            std::sync::Arc::new(meta.clone()),
+            std::sync::Arc::new(blob.clone()),
+        );
+        let rec = startup_plan(&tables, 0).await.expect("startup plan");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
         assert_eq!(rec.log_state.next_log_id, LogId::new(0));
     });

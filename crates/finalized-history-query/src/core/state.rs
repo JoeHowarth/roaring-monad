@@ -1,9 +1,9 @@
 use crate::core::refs::BlockRef;
-use crate::domain::keys::block_record_key;
 use crate::domain::types::{BlockRecord, PublicationState};
 use crate::error::{Error, Result};
 use crate::store::publication::PublicationStore;
-use crate::store::traits::MetaStore;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizedHeadState {
@@ -59,32 +59,27 @@ pub async fn load_finalized_head_state<P: PublicationStore>(
     })
 }
 
-pub async fn load_block_identity<M: MetaStore>(
-    meta_store: &M,
+pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     block_num: u64,
 ) -> Result<Option<BlockIdentity>> {
-    let Some(record) = meta_store.get(&block_record_key(block_num)).await? else {
+    let Some(block_record) = tables.block_records().get(block_num).await? else {
         return Ok(None);
     };
-    let block_record = BlockRecord::decode(&record.value)?;
     Ok(Some(BlockIdentity::from((block_num, &block_record))))
 }
 
-pub async fn derive_next_log_id<M: MetaStore>(
-    meta_store: &M,
+pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     indexed_finalized_head: u64,
 ) -> Result<u64> {
     if indexed_finalized_head == 0 {
         return Ok(0);
     }
 
-    let Some(record) = meta_store
-        .get(&block_record_key(indexed_finalized_head))
-        .await?
-    else {
+    let Some(block_record) = tables.block_records().get(indexed_finalized_head).await? else {
         return Err(Error::NotFound);
     };
-    let block_record = BlockRecord::decode(&record.value)?;
     Ok(block_record
         .first_log_id
         .saturating_add(u64::from(block_record.count)))
@@ -95,10 +90,13 @@ mod tests {
     use super::{derive_next_log_id, load_block_identity, load_finalized_head_state};
     use crate::domain::keys::block_record_key;
     use crate::domain::types::{BlockRecord, PublicationState};
+    use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::publication::{CasOutcome, PublicationStore};
     use crate::store::traits::{MetaStore, PutCond};
+    use crate::tables::Tables;
     use futures::executor::block_on;
+    use std::sync::Arc;
 
     #[test]
     fn load_finalized_head_state_defaults_when_missing() {
@@ -116,6 +114,10 @@ mod tests {
     fn load_block_identity_returns_shared_block_fields() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
+            let tables = Tables::without_cache(
+                Arc::new(meta.clone()),
+                Arc::new(InMemoryBlobStore::default()),
+            );
             assert!(matches!(
                 meta.create_if_absent(&PublicationState {
                     owner_id: 5,
@@ -145,7 +147,7 @@ mod tests {
             let state = load_finalized_head_state(&meta)
                 .await
                 .expect("load finalized head state");
-            let identity = load_block_identity(&meta, 7)
+            let identity = load_block_identity(&tables, 7)
                 .await
                 .expect("load block identity")
                 .expect("block identity present");
@@ -156,7 +158,7 @@ mod tests {
             assert_eq!(identity.hash, [3; 32]);
             assert_eq!(identity.parent_hash, [4; 32]);
             assert_eq!(
-                derive_next_log_id(&meta, 7)
+                derive_next_log_id(&tables, 7)
                     .await
                     .expect("derive next log id"),
                 92

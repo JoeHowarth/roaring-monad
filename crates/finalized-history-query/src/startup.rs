@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::logs::types::LogSequencingState;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone)]
 pub struct StartupPlan {
@@ -13,12 +14,11 @@ pub struct StartupPlan {
 }
 
 pub async fn startup_plan<M: MetaStore + PublicationStore, B: BlobStore>(
-    meta_store: &M,
-    _blob_store: &B,
+    tables: &Tables<M, B>,
     warm_streams: usize,
 ) -> Result<StartupPlan> {
-    let head_state = load_finalized_head_state(meta_store).await?;
-    let next_log_id = derive_next_log_id(meta_store, head_state.indexed_finalized_head).await?;
+    let head_state = load_finalized_head_state(tables.meta_store()).await?;
+    let next_log_id = derive_next_log_id(tables, head_state.indexed_finalized_head).await?;
     Ok(build_startup_plan(
         head_state.indexed_finalized_head,
         head_state.publication_epoch,
