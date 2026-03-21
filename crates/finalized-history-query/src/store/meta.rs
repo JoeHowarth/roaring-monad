@@ -238,8 +238,8 @@ mod tests {
     use futures::executor::block_on;
 
     use super::InMemoryMetaStore;
-    use crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE;
-    use crate::domain::table_specs::LogDirByBlockSpec;
+    use crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE;
+    use crate::logs::table_specs::LogDirByBlockSpec;
     use crate::store::traits::MetaStore;
     use crate::store::traits::PutCond;
 

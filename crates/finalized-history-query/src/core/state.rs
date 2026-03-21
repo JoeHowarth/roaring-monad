@@ -1,6 +1,6 @@
 use crate::core::refs::BlockRef;
-use crate::domain::types::BlockRecord;
 use crate::error::{Error, Result};
+use crate::logs::types::BlockRecord;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -60,9 +60,10 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
 #[cfg(test)]
 mod tests {
     use super::{derive_next_log_id, load_block_identity};
-    use crate::domain::keys::BLOCK_RECORD_TABLE;
-    use crate::domain::table_specs::BlockRecordSpec;
-    use crate::domain::types::{BlockRecord, PublicationState};
+    use crate::domain::types::PublicationState;
+    use crate::logs::keys::BLOCK_RECORD_TABLE;
+    use crate::logs::table_specs::BlockRecordSpec;
+    use crate::logs::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};

@@ -2,14 +2,14 @@ use bytes::Bytes;
 
 use crate::codec::finalized_state::encode_u64;
 use crate::config::Config;
-use crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
-use crate::domain::table_specs::{
-    BlobTableSpec, BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec,
-    LogDirByBlockSpec, LogDirSubBucketSpec, PointTableSpec, ScannableTableSpec,
-};
-use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
+use crate::domain::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::error::{Error, Result};
-use crate::logs::types::Block;
+use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
+use crate::logs::table_specs::{
+    BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirByBlockSpec,
+    LogDirSubBucketSpec,
+};
+use crate::logs::types::{Block, BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, ScannableTableId, TableId};
 
 pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(

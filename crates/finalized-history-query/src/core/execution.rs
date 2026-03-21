@@ -4,8 +4,8 @@ use roaring::RoaringBitmap;
 
 use crate::core::ids::{LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id};
 use crate::core::refs::BlockRef;
-use crate::domain::keys::MAX_LOCAL_ID;
 use crate::error::Result;
+use crate::logs::keys::MAX_LOCAL_ID;
 
 pub type ShardBitmapSet = BTreeMap<LogShard, RoaringBitmap>;
 

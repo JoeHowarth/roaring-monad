@@ -1,4 +1,4 @@
-use crate::domain::keys::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
+use crate::logs::keys::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
 
 const MAX_LOG_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
 
@@ -134,7 +134,7 @@ impl PrimaryIdRange {
 #[cfg(test)]
 mod tests {
     use super::{LogId, LogLocalId, LogShard, MAX_LOG_SHARD, PrimaryIdRange, compose_log_id};
-    use crate::domain::keys::MAX_LOCAL_ID;
+    use crate::logs::keys::MAX_LOCAL_ID;
 
     #[test]
     fn log_id_roundtrips_at_boundaries() {

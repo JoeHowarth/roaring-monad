@@ -8,7 +8,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::logs::types::{Block, Log};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_history_query::store::meta::InMemoryMetaStore;

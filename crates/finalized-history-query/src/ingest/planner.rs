@@ -1,4 +1,4 @@
-use crate::domain::types::Block;
+use crate::logs::types::Block;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamAppendStats {
@@ -19,7 +19,7 @@ pub fn estimate_stream_appends(block: &Block) -> StreamAppendStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::types::{Block, Log};
+    use crate::logs::types::{Block, Log};
 
     #[test]
     fn estimate_counts_address_and_topics() {

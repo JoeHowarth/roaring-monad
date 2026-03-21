@@ -1,8 +1,12 @@
+pub mod codec;
 pub mod filter;
 pub mod index_spec;
 pub mod ingest;
+pub mod keys;
+pub mod log_ref;
 pub mod materialize;
 pub mod query;
 pub mod state;
+pub mod table_specs;
 pub mod types;
 pub mod window;

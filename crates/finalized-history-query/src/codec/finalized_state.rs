@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use crate::domain::types::{BlockRecord, PublicationState};
+use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
 
 const PUBLICATION_STATE_VERSION: u8 = 4;
@@ -15,18 +15,6 @@ fixed_codec! {
             session_id: [u8; 16],
             indexed_finalized_head: u64,
             lease_valid_through_block: u64,
-        }
-    }
-}
-
-fixed_codec! {
-    impl BlockRecord {
-        length_error = "invalid block_record length";
-        fields {
-            block_hash: [u8; 32],
-            parent_hash: [u8; 32],
-            first_log_id: u64,
-            count: u32,
         }
     }
 }
@@ -49,7 +37,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_publication_state_and_block_record() {
+    fn roundtrip_publication_state() {
         let publication_state = PublicationState {
             owner_id: 8,
             session_id: [7u8; 16],
@@ -61,17 +49,5 @@ mod tests {
                 .expect("decode publication state"),
             publication_state
         );
-
-        let meta = BlockRecord {
-            block_hash: [1u8; 32],
-            parent_hash: [2u8; 32],
-            first_log_id: 77,
-            count: 99,
-        };
-        let dec_meta = BlockRecord::decode(&meta.encode()).expect("decode meta");
-        assert_eq!(dec_meta.first_log_id, meta.first_log_id);
-        assert_eq!(dec_meta.count, meta.count);
-        assert_eq!(dec_meta.block_hash, meta.block_hash);
-        assert_eq!(dec_meta.parent_hash, meta.parent_hash);
     }
 }

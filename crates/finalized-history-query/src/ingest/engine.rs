@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::core::state::{derive_next_log_id, load_block_identity};
-use crate::domain::types::{Block, IngestOutcome};
 use crate::error::{Error, Result};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::ingest::open_pages::{
@@ -11,6 +10,7 @@ use crate::logs::ingest::{
     compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
     persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
 };
+use crate::logs::types::{Block, IngestOutcome};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 

@@ -2,10 +2,11 @@ use bytes::Bytes;
 use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
-use crate::domain::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
-use crate::domain::table_specs::{self, OpenBitmapPageSpec, ScannableTableSpec};
+use crate::domain::table_specs::ScannableTableSpec;
 use crate::error::{Error, Result};
 use crate::logs::ingest::compact_stream_page;
+use crate::logs::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
+use crate::logs::table_specs::{self, OpenBitmapPageSpec};
 use crate::store::traits::BlobStore;
 use crate::store::traits::{DelCond, MetaStore, PutCond};
 

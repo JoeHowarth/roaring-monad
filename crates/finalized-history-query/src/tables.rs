@@ -5,14 +5,14 @@ use bytes::Bytes;
 use quick_cache::sync::Cache;
 use quick_cache::{DefaultHashBuilder, Lifecycle, OptionsBuilder, Weighter};
 
-use crate::codec::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
-use crate::domain::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
-    BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
-    PointTableSpec, ScannableTableSpec,
-};
-use crate::domain::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
+use crate::domain::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::error::{Error, Result};
+use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
+use crate::logs::table_specs::{
+    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockLogBlobSpec,
+    BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
+};
+use crate::logs::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
 use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

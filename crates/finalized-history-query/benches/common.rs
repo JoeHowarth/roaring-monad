@@ -8,24 +8,24 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::codec::log::validate_log;
 use finalized_history_query::config::Config;
 use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::core::ids::{
     LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id,
 };
 use finalized_history_query::core::refs::BlockRef;
-use finalized_history_query::domain::keys::{
-    BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, MAX_LOCAL_ID,
-    PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
-};
-use finalized_history_query::domain::table_specs::{
-    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
-};
-use finalized_history_query::domain::types::{
-    Block, BlockRecord, DirBucket, Log, PublicationState,
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
+use finalized_history_query::domain::types::PublicationState;
+use finalized_history_query::logs::codec::validate_log;
+use finalized_history_query::logs::keys::{
+    BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE,
+    MAX_LOCAL_ID,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
+use finalized_history_query::logs::table_specs::{
+    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
+};
+use finalized_history_query::logs::types::{Block, BlockLogHeader, BlockRecord, DirBucket, Log};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
@@ -637,7 +637,7 @@ pub fn seed_materialized_blocks(
                     meta_store,
                     BLOCK_LOG_HEADER_TABLE,
                     &BlockLogHeaderSpec::key(block.block_num),
-                    finalized_history_query::domain::types::BlockLogHeader { offsets }.encode(),
+                    BlockLogHeader { offsets }.encode(),
                 )
                 .await;
                 blob_store
@@ -664,9 +664,7 @@ pub fn seed_materialized_blocks(
                 if bucket_start == last_bucket_start {
                     break;
                 }
-                bucket_start = bucket_start.saturating_add(
-                    finalized_history_query::domain::keys::LOG_DIRECTORY_BUCKET_SIZE,
-                );
+                bucket_start = bucket_start.saturating_add(LOG_DIRECTORY_BUCKET_SIZE);
             }
         }
 
@@ -754,7 +752,7 @@ async fn put_meta_record(
 }
 
 pub fn spanning_bucket_blocks() -> Vec<SeededLogBlock> {
-    let first_log_id = finalized_history_query::domain::keys::LOG_DIRECTORY_BUCKET_SIZE - 3;
+    let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
     vec![
         SeededLogBlock {
             block_num: 700,

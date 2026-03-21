@@ -3,15 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use roaring::RoaringBitmap;
 
 use crate::core::ids::LogId;
-use crate::domain::keys::read_u64_be;
-use crate::domain::table_specs;
-use crate::domain::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, PointTableSpec,
-    ScannableTableSpec,
-};
-use crate::domain::types::StreamBitmapMeta;
+use crate::domain::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::error::{Error, Result};
+use crate::logs::keys::read_u64_be;
+use crate::logs::table_specs;
+use crate::logs::table_specs::{BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec};
 use crate::logs::types::Block;
+use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 

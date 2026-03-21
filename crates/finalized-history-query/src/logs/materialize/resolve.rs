@@ -1,9 +1,9 @@
-use crate::codec::log_ref::DirBucketRef;
 use crate::core::ids::LogId;
-use crate::domain::table_specs::LogDirBucketSpec;
-use crate::domain::table_specs::LogDirSubBucketSpec;
-use crate::domain::types::DirByBlock;
 use crate::error::{Error, Result};
+use crate::logs::log_ref::DirBucketRef;
+use crate::logs::table_specs::LogDirBucketSpec;
+use crate::logs::table_specs::LogDirSubBucketSpec;
+use crate::logs::types::DirByBlock;
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::{LogMaterializer, ResolvedLogLocation};

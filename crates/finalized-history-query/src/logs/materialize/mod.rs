@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
-use crate::domain::types::DirByBlock;
+use crate::logs::types::DirByBlock;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -48,12 +48,12 @@ mod tests {
 
     use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
-    use crate::domain::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
-    use crate::domain::table_specs::{
+    use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
+    use crate::logs::table_specs::{
         BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
     };
-    use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
+    use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, BlobTableId, MetaStore, Page, PutCond};
@@ -119,7 +119,7 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             meta.put(
-                crate::domain::keys::LOG_DIR_BUCKET_TABLE,
+                crate::logs::keys::LOG_DIR_BUCKET_TABLE,
                 &LogDirBucketSpec::key(0),
                 DirBucket {
                     start_block: 700,
@@ -156,7 +156,7 @@ mod tests {
             let blob = InMemoryBlobStore::default();
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.scan_put(
-                crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
+                crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE,
                 &LogDirByBlockSpec::partition(LogDirSubBucketSpec::sub_bucket_start(log_id.get())),
                 &LogDirByBlockSpec::clustering(700),
                 DirByBlock {
@@ -196,7 +196,7 @@ mod tests {
             let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
             let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
-                crate::domain::keys::LOG_DIR_BUCKET_TABLE,
+                crate::logs::keys::LOG_DIR_BUCKET_TABLE,
                 &LogDirBucketSpec::key(LogDirBucketSpec::bucket_start(log_id.get())),
                 DirBucket {
                     start_block: 700,
@@ -254,7 +254,7 @@ mod tests {
             let encoded = log.encode();
 
             meta.scan_put(
-                crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE,
+                crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE,
                 &LogDirByBlockSpec::partition(LogDirSubBucketSpec::sub_bucket_start(log_id.get())),
                 &LogDirByBlockSpec::clustering(block_num),
                 DirByBlock {
@@ -268,7 +268,7 @@ mod tests {
             .await
             .expect("write directory fragment");
             meta.put(
-                crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
+                crate::logs::keys::BLOCK_LOG_HEADER_TABLE,
                 &BlockLogHeaderSpec::key(block_num),
                 BlockLogHeader {
                     offsets: vec![0, encoded.len() as u32],
@@ -368,7 +368,7 @@ mod tests {
             }
 
             meta.put(
-                crate::domain::keys::BLOCK_LOG_HEADER_TABLE,
+                crate::logs::keys::BLOCK_LOG_HEADER_TABLE,
                 &BlockLogHeaderSpec::key(block_num),
                 BlockLogHeader { offsets }.encode(),
                 PutCond::Any,

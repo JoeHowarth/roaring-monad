@@ -6,7 +6,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::types::{Block, Log};
+use finalized_history_query::logs::types::{Block, Log};
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
 use finalized_history_query::{Clause, LogFilter};

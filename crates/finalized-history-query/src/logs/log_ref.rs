@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
-use crate::domain::types::{Address20, Hash32, Log, Topic32};
 use crate::error::{Error, Result};
+use crate::logs::types::{Address20, Hash32, Log, Topic32};
 
 /// Zero-copy view over an encoded log record.
 ///
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn block_log_header_ref_roundtrip() {
-        use crate::domain::types::BlockLogHeader;
+        use crate::logs::types::BlockLogHeader;
 
         let header = BlockLogHeader {
             offsets: vec![0, 41, 97, 124],
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn log_dir_bucket_ref_roundtrip() {
-        use crate::domain::types::DirBucket;
+        use crate::logs::types::DirBucket;
 
         let bucket = DirBucket {
             start_block: 5001,
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn log_dir_bucket_ref_partition_point() {
-        use crate::domain::types::DirBucket;
+        use crate::logs::types::DirBucket;
 
         let bucket = DirBucket {
             start_block: 0,

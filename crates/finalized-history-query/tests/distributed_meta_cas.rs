@@ -1,6 +1,6 @@
 #![cfg(feature = "distributed-stores")]
 
-use finalized_history_query::domain::keys::BLOCK_RECORD_TABLE;
+use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 

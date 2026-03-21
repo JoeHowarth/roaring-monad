@@ -1,12 +1,12 @@
 use crate::core::clause::Clause;
 use crate::core::ids::LogId;
-use crate::domain::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
-};
-use crate::domain::table_specs::{self, BitmapByBlockSpec, BitmapPageMetaSpec};
-use crate::domain::types::StreamBitmapMeta;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
+use crate::logs::keys::{
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
+};
+use crate::logs::table_specs::{self, BitmapByBlockSpec, BitmapPageMetaSpec};
+use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::MetaStore;
 use crate::streams::bitmap_blob::decode_bitmap_blob;
 

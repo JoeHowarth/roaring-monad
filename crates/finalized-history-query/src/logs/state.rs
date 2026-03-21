@@ -1,5 +1,5 @@
-use crate::domain::types::BlockRecord;
 use crate::error::Result;
+use crate::logs::types::BlockRecord;
 use crate::logs::types::LogBlockWindow;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -25,9 +25,9 @@ pub async fn load_log_block_window<M: MetaStore, B: BlobStore>(
 mod tests {
     use super::{load_log_block_record, load_log_block_window};
     use crate::core::ids::LogId;
-    use crate::domain::keys::BLOCK_RECORD_TABLE;
-    use crate::domain::table_specs::BlockRecordSpec;
-    use crate::domain::types::BlockRecord;
+    use crate::logs::keys::BLOCK_RECORD_TABLE;
+    use crate::logs::table_specs::BlockRecordSpec;
+    use crate::logs::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{MetaStore, PutCond};

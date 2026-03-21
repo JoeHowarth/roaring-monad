@@ -606,9 +606,9 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::keys::LOG_DIR_BY_BLOCK_TABLE;
-    use crate::domain::table_specs::LogDirByBlockSpec;
     use crate::domain::types::PublicationState;
+    use crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE;
+    use crate::logs::table_specs::LogDirByBlockSpec;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond};
     use bytes::Bytes;

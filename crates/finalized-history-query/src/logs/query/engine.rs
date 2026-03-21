@@ -1,17 +1,17 @@
 use roaring::RoaringBitmap;
 
 use crate::api::{ExecutionBudget, QueryLogsRequest};
-use crate::codec::log_ref::LogRef;
 use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{RangeResolver, ResolvedBlockRange};
-use crate::domain::table_specs;
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::is_too_broad;
+use crate::logs::log_ref::LogRef;
 use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
+use crate::logs::table_specs;
 use crate::logs::types::Log;
 use crate::logs::window::LogWindowResolver;
 use crate::store::publication::PublicationStore;

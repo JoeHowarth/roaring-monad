@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::core::ids::LogId;
-use crate::domain::keys::{
+use crate::error::{Error, Result};
+use crate::logs::keys::{
     LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE,
 };
-use crate::domain::table_specs::{LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec};
-use crate::domain::types::{DirBucket, DirByBlock};
-use crate::error::{Error, Result};
+use crate::logs::table_specs::{LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec};
+use crate::logs::types::{DirBucket, DirByBlock};
 use crate::store::traits::MetaStore;
 
 use super::artifact::put_artifact_meta;
@@ -66,7 +66,7 @@ pub fn newly_sealed_directory_bucket_starts(
     sealed_directory_ranges(
         from_next_log_id,
         to_next_log_id,
-        crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE,
+        crate::logs::keys::LOG_DIRECTORY_BUCKET_SIZE,
         |id| LogDirBucketSpec::bucket_start(id.get()),
     )
 }
@@ -144,7 +144,7 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
 }
 
 async fn compact_directory_bucket<M: MetaStore>(meta_store: &M, bucket_start: u64) -> Result<()> {
-    let bucket_end = bucket_start.saturating_add(crate::domain::keys::LOG_DIRECTORY_BUCKET_SIZE);
+    let bucket_end = bucket_start.saturating_add(crate::logs::keys::LOG_DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
     let mut boundaries = BTreeMap::<u64, u64>::new();
     let mut sentinel = None::<u64>;

@@ -126,5 +126,3 @@ macro_rules! fixed_codec {
 pub(crate) use fixed_codec;
 
 pub mod finalized_state;
-pub mod log;
-pub mod log_ref;

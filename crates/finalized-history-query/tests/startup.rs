@@ -7,11 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{
-    BLOCK_RECORD_TABLE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
-};
-use finalized_history_query::domain::table_specs::BlockRecordSpec;
-use finalized_history_query::domain::types::BlockRecord;
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
+use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
+use finalized_history_query::logs::table_specs::BlockRecordSpec;
+use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;

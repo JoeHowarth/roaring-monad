@@ -7,9 +7,10 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::PUBLICATION_STATE_TABLE;
-use finalized_history_query::domain::table_specs::{BlobTableSpec, BlockLogBlobSpec};
-use finalized_history_query::domain::types::{Block, Log, PublicationState};
+use finalized_history_query::domain::types::PublicationState;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
+use finalized_history_query::logs::table_specs::{BlobTableSpec, BlockLogBlobSpec};
+use finalized_history_query::logs::types::{Block, Log};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};

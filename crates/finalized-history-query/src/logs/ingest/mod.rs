@@ -16,23 +16,23 @@ pub use stream::{
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::log::validate_log;
     use crate::config::Config;
     use crate::core::ids::LogId;
-    use crate::domain::keys::{
+    use crate::logs::codec::validate_log;
+    use crate::logs::ingest::{
+        compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
+        persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
+    };
+    use crate::logs::keys::{
         BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE,
         BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE,
         LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
         STREAM_PAGE_LOCAL_ID_SPAN, block_hash_index_suffix,
     };
-    use crate::domain::table_specs::{
+    use crate::logs::table_specs::{
         self, BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
         BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
-    };
-    use crate::logs::ingest::{
-        compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
-        persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
     };
     use crate::logs::types::Block;
     use crate::store::blob::InMemoryBlobStore;
@@ -42,7 +42,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::collect_stream_appends;
-    use crate::domain::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
+    use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {
         Log {
@@ -106,7 +106,7 @@ mod tests {
     fn persist_log_dir_by_block_and_compaction_cover_spanning_block() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
-            let first_log_id = crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let first_log_id = crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
             persist_log_dir_by_block(&meta, 700, first_log_id, count)
@@ -128,9 +128,7 @@ mod tests {
             let fragment1 = meta
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
-                    &LogDirByBlockSpec::partition(
-                        crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    ),
+                    &LogDirByBlockSpec::partition(crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE),
                     &LogDirByBlockSpec::clustering(700),
                 )
                 .await

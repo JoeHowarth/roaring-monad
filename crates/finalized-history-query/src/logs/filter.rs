@@ -40,7 +40,7 @@ impl LogFilter {
     }
 }
 
-pub fn exact_match(log: &impl crate::codec::log_ref::LogView, filter: &LogFilter) -> bool {
+pub fn exact_match(log: &impl crate::logs::log_ref::LogView, filter: &LogFilter) -> bool {
     if !match_address(log.address(), &filter.address) {
         return false;
     }

@@ -8,15 +8,17 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
+use finalized_history_query::domain::types::PublicationState;
+use finalized_history_query::error::{Error, Result};
+use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE,
 };
-use finalized_history_query::domain::table_specs::{
+use finalized_history_query::logs::table_specs::{
     self, BitmapPageMetaSpec, BlockRecordSpec, LogDirSubBucketSpec,
 };
-use finalized_history_query::domain::types::{Block, BlockRecord, Log, PublicationState};
-use finalized_history_query::error::{Error, Result};
+use finalized_history_query::logs::types::{Block, BlockRecord, Log};
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;

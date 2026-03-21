@@ -2,10 +2,10 @@ use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
-use crate::domain::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::domain::table_specs;
 use crate::error::{Error, Result};
 use crate::logs::index_spec::is_full_shard_range;
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::decode_bitmap_blob;
 use crate::tables::Tables;
@@ -175,7 +175,7 @@ pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     stream: &str,
     page_start: u32,
-) -> Result<Option<crate::domain::types::StreamBitmapMeta>> {
+) -> Result<Option<crate::logs::types::StreamBitmapMeta>> {
     tables.bitmap_page_meta().get(stream, page_start).await
 }
 
@@ -234,11 +234,11 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::domain::keys::{BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE};
-    use crate::domain::table_specs::{
+    use crate::logs::keys::{BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE};
+    use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
     };
-    use crate::domain::types::StreamBitmapMeta;
+    use crate::logs::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{

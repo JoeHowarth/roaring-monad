@@ -4,14 +4,14 @@ mod helpers;
 use std::sync::Arc;
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::domain::keys::{
+use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
 };
-use finalized_history_query::domain::table_specs::{
+use finalized_history_query::logs::table_specs::{
     self, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockRecordSpec, LogDirByBlockSpec,
 };
-use finalized_history_query::domain::types::BlockRecord;
+use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};

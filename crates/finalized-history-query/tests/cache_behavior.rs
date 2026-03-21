@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::table_specs::BlockLogBlobSpec;
+use finalized_history_query::logs::table_specs::BlockLogBlobSpec;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig};

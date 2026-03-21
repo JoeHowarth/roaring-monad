@@ -6,16 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
-use finalized_history_query::domain::keys::{
-    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE, PUBLICATION_STATE_SUFFIX,
-    PUBLICATION_STATE_TABLE,
-};
-use finalized_history_query::domain::table_specs::{
-    self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, BlockRecordSpec, LogDirByBlockSpec,
-};
-use finalized_history_query::domain::types::BlockRecord;
+use finalized_history_query::domain::keys::{PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE};
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
+use finalized_history_query::logs::keys::{
+    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
+};
+use finalized_history_query::logs::table_specs::{
+    self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, BlockRecordSpec, LogDirByBlockSpec,
+};
+use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};

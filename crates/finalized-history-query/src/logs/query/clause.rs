@@ -1,10 +1,10 @@
 use crate::core::execution::ShardBitmapSet;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
-use crate::domain::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::domain::table_specs;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::bitmap_blob::decode_bitmap_blob;
 use crate::tables::Tables;
