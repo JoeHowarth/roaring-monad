@@ -7,7 +7,10 @@ shared crate-level modules and into the owning family modules.
 
 The target architecture is:
 
-- the outer engine knows only about family-agnostic execution concepts
+- the public service boundary stays concrete and ergonomic
+- the inner execution and ingest machinery is family-agnostic
+- an explicit `family` boundary module connects concrete service methods to
+  family-owned implementations
 - `logs`, `txs`, and `traces` each own their own types, codecs, keys,
   table specs, filters, query planning, materialization, and ingest behavior
 - shared modules keep only truly cross-family concepts such as pagination,
@@ -39,9 +42,20 @@ That creates three problems:
 
 ## Intended End State
 
-The outer system is family-agnostic.
+The crate has two layers at the boundary:
 
-It owns:
+- a concrete outer service surface in `api.rs`
+- a family-agnostic inner executor/ingest boundary behind an explicit
+  `family.rs` module
+
+The concrete outer service owns:
+
+- user-facing methods such as `query_logs` and `ingest_finalized_block`
+- concrete request/response types such as `QueryLogsRequest` and
+  `QueryPage<Log>`
+- wiring from the concrete logs API onto the generic inner machinery
+
+The family-agnostic inner machinery owns:
 
 - query/request pagination and resume metadata
 - finalized-head and publication-state reads
@@ -64,6 +78,7 @@ Each family owns:
 Representative layout:
 
 - `src/core/`
+- `src/family.rs`
 - `src/store/`
 - `src/api.rs`
 - `src/logs/`
@@ -105,7 +120,17 @@ Prefer a small set of focused traits or family components over one large trait
 that owns planning, ingest, codec, materialization, and filter semantics all at
 once.
 
-### 3. Move `logs` First
+### 3. Keep The Outer Service Concrete
+
+Do not genericize the public service surface in `api.rs`.
+
+The abstraction boundary belongs underneath the concrete service methods, in an
+explicit `family` module and the inner executor/ingest machinery.
+
+This keeps the public API readable while still allowing the implementation to
+reuse generic internals across `logs`, `txs`, and `traces`.
+
+### 4. Move `logs` First
 
 `logs` should become the proving-ground family implementation.
 
@@ -114,7 +139,7 @@ not yet concrete. Build the smallest boundary that cleanly separates `logs`
 from the outer engine, then add `txs` and `traces` once that boundary feels
 stable.
 
-### 4. Keep Family Storage Vocabulary With The Family
+### 5. Keep Family Storage Vocabulary With The Family
 
 Once family-scoped storage handles exist, family-local keys and table specs
 should live next to the family code that uses them.
@@ -122,7 +147,7 @@ should live next to the family code that uses them.
 Shared storage code should only know about opaque family/table handles and byte
 keys.
 
-### 5. Rename Shared Modules Only After The Move
+### 6. Rename Shared Modules Only After The Move
 
 `domain` may become misleading once family-local schema moves out of it, but the
 rename should happen after the ownership boundary is already clear.
@@ -133,9 +158,12 @@ Do not combine the semantic move and the naming cleanup into one large step.
 
 ### 1. Introduce A Minimal Family Boundary
 
-Add a new shared boundary module such as `family.rs` or `families/mod.rs`.
+Add an explicit shared boundary module at `family.rs`.
 
-The outer engine should receive only what it actually needs:
+The concrete service in `api.rs` should remain logs-shaped. The inner executor
+and ingest layers should depend on the `family` boundary.
+
+The inner machinery should receive only what it actually needs:
 
 - family filter/request type
 - family query planner hook
@@ -190,17 +218,19 @@ Shared publication/common helpers can stay shared.
 
 ### 5. Refactor Generic Execution To Depend On The Family Boundary
 
-Update the service and generic execution layers so they no longer hardcode the
+Update the inner execution and ingest layers so they no longer hardcode the
 logs family.
 
 Priority targets:
 
-- `api.rs`
+- `family.rs`
 - generic query execution code in `core/*`
+- generic ingest/startup code in `ingest/*` and `startup.rs`
 - startup/recovery code that currently assumes logs-specific next-position logic
 
-The goal is that the outer engine can orchestrate a family implementation
-without importing the family's concrete structs directly.
+The goal is that the concrete service can orchestrate a family implementation
+through the explicit `family` boundary, without the inner machinery importing
+the family's concrete structs directly.
 
 ### 6. Make `logs` The First Family Implementation
 
@@ -239,17 +269,21 @@ Do this only after the family ownership boundary is already reflected in code.
 ## Suggested Execution Order
 
 1. add the minimal family boundary
-2. move logs-owned types
-3. move logs codecs
-4. move logs keys and table specs
-5. refactor generic execution onto the family boundary
-6. make `logs` the first implementation
-7. add `txs`/`traces` scaffolds
-8. rename or remove `domain`
+2. keep `api.rs` concrete while wiring it through that boundary
+3. move logs-owned types
+4. move logs codecs
+5. move logs keys and table specs
+6. refactor inner execution and ingest onto the family boundary
+7. make `logs` the first implementation
+8. add `txs`/`traces` scaffolds
+9. rename or remove `domain`
 
 ## Verification
 
 - existing logs query, ingest, startup, and publication tests still pass
+- `api.rs` remains concrete and logs-shaped while inner machinery becomes
+  family-agnostic
+- an explicit `family.rs` boundary should be visible in the final layout
 - no shared module should import logs-family item structs or logs codecs after
   the migration is complete
 - family-local keys, table specs, and codecs should be defined under their
