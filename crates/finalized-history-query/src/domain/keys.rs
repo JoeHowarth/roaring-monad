@@ -55,6 +55,14 @@ pub fn log_dir_by_block_suffix(sub_bucket_start_log_id: u64, block_num: u64) -> 
     k
 }
 
+pub fn log_dir_by_block_partition_key(sub_bucket_start_log_id: u64) -> Vec<u8> {
+    u64_be(sub_bucket_start_log_id).to_vec()
+}
+
+pub fn log_dir_by_block_clustering_key(block_num: u64) -> Vec<u8> {
+    u64_be(block_num).to_vec()
+}
+
 pub fn log_dir_by_block_prefix_suffix(sub_bucket_start_log_id: u64) -> Vec<u8> {
     let mut k = u64_be(sub_bucket_start_log_id).to_vec();
     k.push(b'/');
@@ -135,22 +143,31 @@ pub fn bitmap_page_blob_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
 }
 
 pub fn open_bitmap_page_suffix(shard: LogShard, page_start_local: u32, stream_id: &str) -> Vec<u8> {
-    let mut k = open_bitmap_page_shard_page_prefix_suffix(shard, page_start_local);
+    open_bitmap_page_clustering_key(shard, page_start_local, stream_id)
+}
+
+pub fn open_bitmap_page_partition_key() -> Vec<u8> {
+    Vec::new()
+}
+
+pub fn open_bitmap_page_clustering_key(
+    shard: LogShard,
+    page_start_local: u32,
+    stream_id: &str,
+) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_page_prefix(shard, page_start_local);
     k.extend_from_slice(stream_id.as_bytes());
     k
 }
 
-pub fn open_bitmap_page_shard_prefix_suffix(shard: LogShard) -> Vec<u8> {
+pub fn open_bitmap_page_shard_prefix(shard: LogShard) -> Vec<u8> {
     let mut k = u64_be(shard.get()).to_vec();
     k.push(b'/');
     k
 }
 
-pub fn open_bitmap_page_shard_page_prefix_suffix(
-    shard: LogShard,
-    page_start_local: u32,
-) -> Vec<u8> {
-    let mut k = open_bitmap_page_shard_prefix_suffix(shard);
+pub fn open_bitmap_page_shard_page_prefix(shard: LogShard, page_start_local: u32) -> Vec<u8> {
+    let mut k = open_bitmap_page_shard_prefix(shard);
     k.extend_from_slice(&u64_be(u64::from(page_start_local)));
     k.push(b'/');
     k
@@ -160,6 +177,16 @@ pub fn bitmap_by_block_suffix(stream_id: &str, page_start_local: u32, block_num:
     let mut k = bitmap_by_block_prefix_suffix(stream_id, page_start_local);
     k.extend_from_slice(&u64_be(block_num));
     k
+}
+
+pub fn bitmap_by_block_partition_key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
+    let mut k = format!("{stream_id}/").into_bytes();
+    k.extend_from_slice(&u64_be(u64::from(page_start_local)));
+    k
+}
+
+pub fn bitmap_by_block_clustering_key(block_num: u64) -> Vec<u8> {
+    u64_be(block_num).to_vec()
 }
 
 pub fn bitmap_by_block_prefix_suffix(stream_id: &str, page_start_local: u32) -> Vec<u8> {

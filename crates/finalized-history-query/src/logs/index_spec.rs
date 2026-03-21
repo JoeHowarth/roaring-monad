@@ -2,7 +2,7 @@ use crate::core::clause::Clause;
 use crate::core::ids::LogId;
 use crate::domain::keys::{
     BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
-    bitmap_by_block_prefix_suffix, bitmap_page_meta_suffix, local_range_for_shard, log_shard,
+    bitmap_by_block_partition_key, bitmap_page_meta_suffix, local_range_for_shard, log_shard,
     stream_id, stream_page_start_local,
 };
 use crate::domain::types::StreamBitmapMeta;
@@ -180,16 +180,15 @@ async fn estimate_stream_overlap<M: MetaStore>(
                 count = count.saturating_add(u64::from(meta.count));
             }
         } else {
+            let partition = bitmap_by_block_partition_key(stream_id, page_start);
             let page = meta_store
-                .list_prefix(
-                    BITMAP_BY_BLOCK_FAMILY,
-                    &bitmap_by_block_prefix_suffix(stream_id, page_start),
-                    None,
-                    usize::MAX,
-                )
+                .scan_list(BITMAP_BY_BLOCK_FAMILY, &partition, b"", None, usize::MAX)
                 .await?;
-            for key in page.keys {
-                let Some(record) = meta_store.get(BITMAP_BY_BLOCK_FAMILY, &key).await? else {
+            for clustering in page.keys {
+                let Some(record) = meta_store
+                    .scan_get(BITMAP_BY_BLOCK_FAMILY, &partition, &clustering)
+                    .await?
+                else {
                     continue;
                 };
                 let meta = decode_bitmap_blob(&record.value)?;

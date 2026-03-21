@@ -19,7 +19,7 @@ pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
     range_resolver: RangeResolver,
     // directory_fragment_cache stays as a per-request HashMap because fragments
-    // are assembled from multiple list_prefix + get calls (not a single stored
+    // are assembled from multiple scannable table reads (not a single stored
     // value), and each DirByBlock is only 25 bytes. Not worth BytesCache.
     directory_fragment_cache: HashMap<u64, Vec<DirByBlock>>,
     // block_ref_cache remains because BlockRef is a small Copy type
@@ -145,12 +145,12 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
-            meta.put(
+            meta.scan_put(
                 crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
-                &crate::domain::keys::log_dir_by_block_suffix(
-                    log_dir_sub_bucket_start(log_id),
-                    700,
-                ),
+                &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
+                    log_id,
+                )),
+                &crate::domain::keys::log_dir_by_block_clustering_key(700),
                 DirByBlock {
                     block_num: 700,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
@@ -245,12 +245,12 @@ mod tests {
             };
             let encoded = log.encode();
 
-            meta.put(
+            meta.scan_put(
                 crate::domain::keys::LOG_DIR_BY_BLOCK_FAMILY,
-                &crate::domain::keys::log_dir_by_block_suffix(
-                    log_dir_sub_bucket_start(log_id),
-                    block_num,
-                ),
+                &crate::domain::keys::log_dir_by_block_partition_key(log_dir_sub_bucket_start(
+                    log_id,
+                )),
+                &crate::domain::keys::log_dir_by_block_clustering_key(block_num),
                 DirByBlock {
                     block_num,
                     first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,

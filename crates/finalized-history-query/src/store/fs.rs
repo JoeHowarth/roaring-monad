@@ -21,12 +21,20 @@ impl FsMetaStore {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(root.join("meta"))
             .map_err(|e| Error::Backend(format!("create fs meta dir: {e}")))?;
+        fs::create_dir_all(root.join("meta_scan"))
+            .map_err(|e| Error::Backend(format!("create fs scannable meta dir: {e}")))?;
         let _ = min_epoch;
         Ok(Self { root })
     }
 
     fn family_dir(&self, family: FamilyId) -> PathBuf {
         let mut p = self.root.join("meta");
+        p.push(family.as_str());
+        p
+    }
+
+    fn scan_family_dir(&self, family: FamilyId) -> PathBuf {
+        let mut p = self.root.join("meta_scan");
         p.push(family.as_str());
         p
     }
@@ -43,14 +51,45 @@ impl FsMetaStore {
         p
     }
 
+    fn scan_partition_dir(&self, family: FamilyId, partition: &[u8]) -> PathBuf {
+        let mut p = self.scan_family_dir(family);
+        p.push(hex(partition));
+        p
+    }
+
+    fn scan_key_path(&self, family: FamilyId, partition: &[u8], clustering: &[u8]) -> PathBuf {
+        let mut p = self.scan_partition_dir(family, partition);
+        p.push(hex(clustering));
+        p
+    }
+
+    fn scan_version_path(&self, family: FamilyId, partition: &[u8], clustering: &[u8]) -> PathBuf {
+        let mut p = self.scan_partition_dir(family, partition);
+        p.push(format!("{}.ver", hex(clustering)));
+        p
+    }
+
     fn key_lock(&self, family: FamilyId, key: &[u8]) -> Result<Arc<Mutex<()>>> {
+        self.path_lock(self.key_path(family, key))
+    }
+
+    fn scan_key_lock(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Arc<Mutex<()>>> {
+        self.path_lock(self.scan_key_path(family, partition, clustering))
+    }
+
+    fn path_lock(&self, path: PathBuf) -> Result<Arc<Mutex<()>>> {
         static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
         let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
         let mut guard = locks
             .lock()
             .map_err(|_| Error::Backend("poisoned fs key lock map".to_string()))?;
         Ok(guard
-            .entry(self.key_path(family, key))
+            .entry(path)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone())
     }
@@ -163,22 +202,142 @@ impl MetaStore for FsMetaStore {
         Ok(())
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Option<Record>> {
+        let kp = self.scan_key_path(family, partition, clustering);
+        if !kp.exists() {
+            return Ok(None);
+        }
+        let vp = self.scan_version_path(family, partition, clustering);
+        let value = read_file_bytes(&kp)?;
+        let version = if vp.exists() {
+            let b = read_file_bytes(&vp)?;
+            if b.len() != 8 {
+                return Err(Error::Decode("invalid fs version bytes"));
+            }
+            let mut a = [0u8; 8];
+            a.copy_from_slice(&b);
+            u64::from_be_bytes(a)
+        } else {
+            0
+        };
+
+        Ok(Some(Record {
+            value: Bytes::from(value),
+            version,
+        }))
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let lock = if matches!(cond, PutCond::Any) {
+            None
+        } else {
+            Some(self.scan_key_lock(family, partition, clustering)?)
+        };
+        let _guard = if let Some(lock) = lock.as_ref() {
+            Some(
+                lock.lock()
+                    .map_err(|_| Error::Backend("poisoned fs key lock".to_string()))?,
+            )
+        } else {
+            None
+        };
+        let current = self.scan_get(family, partition, clustering).await?;
+
+        let allowed = match (cond, current.as_ref()) {
+            (PutCond::Any, _) => true,
+            (PutCond::IfAbsent, None) => true,
+            (PutCond::IfAbsent, Some(_)) => false,
+            (PutCond::IfVersion(v), Some(r)) => r.version == v,
+            (PutCond::IfVersion(_), None) => false,
+        };
+        if !allowed {
+            return Ok(PutResult {
+                applied: false,
+                version: current.map(|c| c.version),
+            });
+        }
+
+        let kp = self.scan_key_path(family, partition, clustering);
+        let vp = self.scan_version_path(family, partition, clustering);
+        if let Some(parent) = kp.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                Error::Backend(format!("create fs scannable meta partition dir: {e}"))
+            })?;
+        }
+        write_file_bytes(&kp, &value)?;
+
+        let next_version = current.map_or(1, |c| c.version + 1);
+        write_file_bytes(&vp, &next_version.to_be_bytes())?;
+
+        Ok(PutResult {
+            applied: true,
+            version: Some(next_version),
+        })
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> Result<()> {
+        let lock = if matches!(cond, DelCond::Any) {
+            None
+        } else {
+            Some(self.scan_key_lock(family, partition, clustering)?)
+        };
+        let _guard = if let Some(lock) = lock.as_ref() {
+            Some(
+                lock.lock()
+                    .map_err(|_| Error::Backend("poisoned fs key lock".to_string()))?,
+            )
+        } else {
+            None
+        };
+        let current = self.scan_get(family, partition, clustering).await?;
+        let allowed = match (cond, current.as_ref()) {
+            (DelCond::Any, Some(_)) => true,
+            (DelCond::Any, None) => false,
+            (DelCond::IfVersion(v), Some(r)) => r.version == v,
+            (DelCond::IfVersion(_), None) => false,
+        };
+        if allowed {
+            let _ = fs::remove_file(self.scan_key_path(family, partition, clustering));
+            let _ = fs::remove_file(self.scan_version_path(family, partition, clustering));
+        }
+        Ok(())
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         let mut all = Vec::<Vec<u8>>::new();
-        let family_dir = self.family_dir(family);
-        if !family_dir.exists() {
+        let partition_dir = self.scan_partition_dir(family, partition);
+        if !partition_dir.exists() {
             return Ok(Page {
                 keys: Vec::new(),
                 next_cursor: None,
             });
         }
-        collect_keys_from_family_dir(&family_dir, true, prefix, &mut all)?;
+        collect_keys_from_partition_dir(&partition_dir, prefix, &mut all)?;
         all.sort();
 
         let has_cursor = cursor.is_some();
@@ -403,9 +562,15 @@ fn extract_group(key: &[u8]) -> String {
     }
 }
 
-fn collect_keys_from_family_dir(
+fn extract_group_from_prefix(prefix: &[u8]) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(extract_group(prefix))
+}
+
+fn collect_keys_from_partition_dir(
     dir: &Path,
-    skip_ver: bool,
     prefix: &[u8],
     out: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
@@ -419,7 +584,7 @@ fn collect_keys_from_family_dir(
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if skip_ver && name.ends_with(".ver") {
+        if name.ends_with(".ver") {
             continue;
         }
         let key = unhex(&name)?;
@@ -428,13 +593,6 @@ fn collect_keys_from_family_dir(
         }
     }
     Ok(())
-}
-
-fn extract_group_from_prefix(prefix: &[u8]) -> Option<String> {
-    if prefix.is_empty() {
-        return None;
-    }
-    Some(extract_group(prefix))
 }
 
 fn collect_keys_from_group_dir(
@@ -467,7 +625,9 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::keys::BLOCK_RECORD_FAMILY;
+    use crate::domain::keys::{
+        LOG_DIR_BY_BLOCK_FAMILY, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
+    };
     use crate::domain::types::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
     use crate::store::traits::{BlobStore, MetaStore, PutCond};
@@ -574,19 +734,20 @@ mod tests {
         let root = unique_temp_root("fs-list-prefix");
         let meta_store = FsMetaStore::new(&root, 0).expect("fs meta store");
         let blob_store = FsBlobStore::new(&root).expect("fs blob store");
+        let partition = log_dir_by_block_partition_key(0);
 
         block_on(async {
             for index in 0..1_025u64 {
-                let key = format!("{index:04}").into_bytes();
                 meta_store
-                    .put(
-                        BLOCK_RECORD_FAMILY,
-                        &key,
+                    .scan_put(
+                        LOG_DIR_BY_BLOCK_FAMILY,
+                        &partition,
+                        &log_dir_by_block_clustering_key(index),
                         Bytes::from_static(b"v"),
                         PutCond::Any,
                     )
                     .await
-                    .expect("seed meta key");
+                    .expect("seed scannable meta key");
                 let blob_key = format!("list-prefix/{index:04}").into_bytes();
                 blob_store
                     .put_blob(&blob_key, Bytes::from_static(b"v"))
@@ -598,7 +759,13 @@ mod tests {
             let mut meta_seen = Vec::new();
             loop {
                 let page = meta_store
-                    .list_prefix(BLOCK_RECORD_FAMILY, b"", meta_cursor.take(), 1_024)
+                    .scan_list(
+                        LOG_DIR_BY_BLOCK_FAMILY,
+                        &partition,
+                        b"",
+                        meta_cursor.take(),
+                        1_024,
+                    )
                     .await
                     .expect("list meta");
                 meta_seen.extend(page.keys.iter().cloned());

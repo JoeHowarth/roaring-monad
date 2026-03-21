@@ -102,7 +102,13 @@ struct ScyllaStatements {
     put_if_version: PreparedStatement,
     delete_any: PreparedStatement,
     delete_if_version: PreparedStatement,
-    list_prefix: PreparedStatement,
+    scan_get: PreparedStatement,
+    scan_put_any: PreparedStatement,
+    scan_put_if_absent: PreparedStatement,
+    scan_put_if_version: PreparedStatement,
+    scan_delete_any: PreparedStatement,
+    scan_delete_if_version: PreparedStatement,
+    scan_list: PreparedStatement,
 }
 
 impl ScyllaMetaStore {
@@ -133,6 +139,7 @@ impl ScyllaMetaStore {
             .map_err(|e| Error::Backend(format!("use keyspace: {e}")))?;
 
         let table = "meta_kv".to_string();
+        let scan_table = "meta_scan_kv".to_string();
         let fence_table = "meta_fence".to_string();
 
         session
@@ -151,6 +158,23 @@ impl ScyllaMetaStore {
             )
             .await
             .map_err(|e| Error::Backend(format!("create table meta_kv: {e}")))?;
+
+        session
+            .query_unpaged(
+                format!(
+                    "CREATE TABLE IF NOT EXISTS {scan_table} (\
+                     grp text, \
+                     pk blob, \
+                     ck blob, \
+                     v blob, \
+                     version bigint, \
+                     PRIMARY KEY ((grp, pk), ck)\
+                    )"
+                ),
+                &[],
+            )
+            .await
+            .map_err(|e| Error::Backend(format!("create table meta_scan_kv: {e}")))?;
 
         session
             .query_unpaged(
@@ -216,10 +240,54 @@ impl ScyllaMetaStore {
                 "delete_if_version",
             )
             .await?,
-            list_prefix: prepare_statement(
+            scan_get: prepare_statement(
                 &session,
-                format!("SELECT k FROM {table} WHERE grp = ? AND bucket = ?"),
-                "list_prefix",
+                format!("SELECT v, version FROM {scan_table} WHERE grp = ? AND pk = ? AND ck = ?"),
+                "scan_get",
+            )
+            .await?,
+            scan_put_any: prepare_statement(
+                &session,
+                format!(
+                    "INSERT INTO {scan_table} (grp, pk, ck, v, version) VALUES (?, ?, ?, ?, ?)"
+                ),
+                "scan_put_any",
+            )
+            .await?,
+            scan_put_if_absent: prepare_statement(
+                &session,
+                format!(
+                    "INSERT INTO {scan_table} (grp, pk, ck, v, version) VALUES (?, ?, ?, ?, ?) IF NOT EXISTS"
+                ),
+                "scan_put_if_absent",
+            )
+            .await?,
+            scan_put_if_version: prepare_statement(
+                &session,
+                format!(
+                    "UPDATE {scan_table} SET v = ?, version = ? WHERE grp = ? AND pk = ? AND ck = ? IF version = ?"
+                ),
+                "scan_put_if_version",
+            )
+            .await?,
+            scan_delete_any: prepare_statement(
+                &session,
+                format!("DELETE FROM {scan_table} WHERE grp = ? AND pk = ? AND ck = ?"),
+                "scan_delete_any",
+            )
+            .await?,
+            scan_delete_if_version: prepare_statement(
+                &session,
+                format!(
+                    "DELETE FROM {scan_table} WHERE grp = ? AND pk = ? AND ck = ? IF version = ?"
+                ),
+                "scan_delete_if_version",
+            )
+            .await?,
+            scan_list: prepare_statement(
+                &session,
+                format!("SELECT ck FROM {scan_table} WHERE grp = ? AND pk = ?"),
+                "scan_list",
             )
             .await?,
         };
@@ -419,9 +487,183 @@ impl MetaStore for ScyllaMetaStore {
         Ok(())
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Option<Record>> {
+        let stmt = self.stmts.scan_get.clone();
+        let res = self
+            .with_retry("scan_get", || async {
+                self.session
+                    .execute_unpaged(
+                        &stmt,
+                        (family.as_str(), partition.to_vec(), clustering.to_vec()),
+                    )
+                    .await
+                    .map_err(|e| Error::Backend(format!("scylla scan get: {e}")))
+            })
+            .await?;
+
+        let row = first_row_v_version(res);
+        Ok(row.map(|(v, version)| Record {
+            value: Bytes::from(v),
+            version: version as u64,
+        }))
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let partition_vec = partition.to_vec();
+        let clustering_vec = clustering.to_vec();
+
+        match cond {
+            PutCond::Any => {
+                let stmt = self.stmts.scan_put_any.clone();
+                self.with_retry("scan_put_any", || async {
+                    self.session
+                        .execute_unpaged(
+                            &stmt,
+                            (
+                                family.as_str(),
+                                partition_vec.clone(),
+                                clustering_vec.clone(),
+                                value.to_vec(),
+                                now_millis_u64() as i64,
+                            ),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla scan put any: {e}")))?;
+                    Ok(())
+                })
+                .await?;
+                Ok(PutResult {
+                    applied: true,
+                    version: None,
+                })
+            }
+            PutCond::IfAbsent => {
+                let cas_op = format!("scan_put_if_absent:{}", family.as_str());
+                self.telemetry.record_cas_attempt(&cas_op);
+                let stmt = self.stmts.scan_put_if_absent.clone();
+                let res = self
+                    .with_retry("scan_put_if_absent", || async {
+                        self.session
+                            .execute_unpaged(
+                                &stmt,
+                                (
+                                    family.as_str(),
+                                    partition_vec.clone(),
+                                    clustering_vec.clone(),
+                                    value.to_vec(),
+                                    1_i64,
+                                ),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla scan put if absent: {e}")))
+                    })
+                    .await?;
+                let applied = lwt_applied(res)?;
+                if !applied {
+                    self.telemetry.record_cas_conflict(&cas_op);
+                }
+                Ok(PutResult {
+                    applied,
+                    version: applied.then_some(1),
+                })
+            }
+            PutCond::IfVersion(v) => {
+                let cas_op = format!("scan_put_if_version:{}", family.as_str());
+                self.telemetry.record_cas_attempt(&cas_op);
+                let stmt = self.stmts.scan_put_if_version.clone();
+                let res = self
+                    .with_retry("scan_put_if_version", || async {
+                        self.session
+                            .execute_unpaged(
+                                &stmt,
+                                (
+                                    value.to_vec(),
+                                    (v + 1) as i64,
+                                    family.as_str(),
+                                    partition_vec.clone(),
+                                    clustering_vec.clone(),
+                                    v as i64,
+                                ),
+                            )
+                            .await
+                            .map_err(|e| Error::Backend(format!("scylla scan put if version: {e}")))
+                    })
+                    .await?;
+                let applied = lwt_applied(res)?;
+                if !applied {
+                    self.telemetry.record_cas_conflict(&cas_op);
+                }
+                Ok(PutResult {
+                    applied,
+                    version: applied.then_some(v + 1),
+                })
+            }
+        }
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> Result<()> {
+        match cond {
+            DelCond::Any => {
+                let stmt = self.stmts.scan_delete_any.clone();
+                self.with_retry("scan_delete_any", || async {
+                    self.session
+                        .execute_unpaged(
+                            &stmt,
+                            (family.as_str(), partition.to_vec(), clustering.to_vec()),
+                        )
+                        .await
+                        .map_err(|e| Error::Backend(format!("scylla scan delete: {e}")))?;
+                    Ok(())
+                })
+                .await?;
+            }
+            DelCond::IfVersion(v) => {
+                let stmt = self.stmts.scan_delete_if_version.clone();
+                let _ = self
+                    .with_retry("scan_delete_if_version", || async {
+                        self.session
+                            .execute_unpaged(
+                                &stmt,
+                                (
+                                    family.as_str(),
+                                    partition.to_vec(),
+                                    clustering.to_vec(),
+                                    v as i64,
+                                ),
+                            )
+                            .await
+                            .map_err(|e| {
+                                Error::Backend(format!("scylla scan delete if version: {e}"))
+                            })
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
@@ -429,41 +671,34 @@ impl MetaStore for ScyllaMetaStore {
         let mut keys = Vec::new();
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
+        let stmt = self.stmts.scan_list.clone();
+        let res = self
+            .with_retry("scan_list", || async {
+                self.session
+                    .execute_unpaged(&stmt, (family.as_str(), partition.to_vec()))
+                    .await
+                    .map_err(|e| Error::Backend(format!("scylla scan list: {e}")))
+            })
+            .await?;
 
-        for bucket in 0..META_BUCKETS {
-            if keys.len() >= limit {
-                break;
-            }
-            let stmt = self.stmts.list_prefix.clone();
-            let res = self
-                .with_retry("list_prefix", || async {
-                    self.session
-                        .execute_unpaged(&stmt, (family.as_str(), bucket as i16))
-                        .await
-                        .map_err(|e| Error::Backend(format!("scylla list prefix: {e}")))
-                })
-                .await?;
-
-            if let Ok(rows_result) = res.into_rows_result()
-                && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
-            {
-                for row in iter {
-                    let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
-                    if (has_cursor && k <= start) || (!has_cursor && k < start) {
-                        continue;
-                    }
-                    if !k.starts_with(prefix) {
-                        continue;
-                    }
-                    keys.push(k);
-                    if keys.len() >= limit {
-                        break;
-                    }
+        if let Ok(rows_result) = res.into_rows_result()
+            && let Ok(iter) = rows_result.rows::<(Vec<u8>,)>()
+        {
+            for row in iter {
+                let (k,) = row.map_err(|e| Error::Backend(format!("decode row: {e}")))?;
+                if (has_cursor && k <= start) || (!has_cursor && k < start) {
+                    continue;
+                }
+                if !k.starts_with(prefix) {
+                    continue;
+                }
+                keys.push(k);
+                if keys.len() >= limit {
+                    break;
                 }
             }
         }
 
-        keys.sort();
         let next_cursor = if keys.len() == limit {
             keys.last().cloned()
         } else {

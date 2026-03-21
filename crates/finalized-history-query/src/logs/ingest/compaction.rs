@@ -4,7 +4,7 @@ use crate::core::ids::LogId;
 use crate::domain::keys::{
     LOG_DIR_BUCKET_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, log_dir_bucket_start, log_dir_bucket_suffix,
-    log_dir_by_block_prefix_suffix, log_dir_sub_bucket_start, log_dir_sub_bucket_suffix,
+    log_dir_by_block_partition_key, log_dir_sub_bucket_start, log_dir_sub_bucket_suffix,
 };
 use crate::domain::types::{DirBucket, DirByBlock};
 use crate::error::{Error, Result};
@@ -100,17 +100,16 @@ async fn compact_directory_sub_bucket<M: MetaStore>(
     meta_store: &M,
     sub_bucket_start: u64,
 ) -> Result<()> {
+    let partition = log_dir_by_block_partition_key(sub_bucket_start);
     let page = meta_store
-        .list_prefix(
-            LOG_DIR_BY_BLOCK_FAMILY,
-            &log_dir_by_block_prefix_suffix(sub_bucket_start),
-            None,
-            usize::MAX,
-        )
+        .scan_list(LOG_DIR_BY_BLOCK_FAMILY, &partition, b"", None, usize::MAX)
         .await?;
     let mut fragments = Vec::with_capacity(page.keys.len());
-    for key in page.keys {
-        let Some(record) = meta_store.get(LOG_DIR_BY_BLOCK_FAMILY, &key).await? else {
+    for clustering in page.keys {
+        let Some(record) = meta_store
+            .scan_get(LOG_DIR_BY_BLOCK_FAMILY, &partition, &clustering)
+            .await?
+        else {
             continue;
         };
         fragments.push(DirByBlock::decode(&record.value)?);

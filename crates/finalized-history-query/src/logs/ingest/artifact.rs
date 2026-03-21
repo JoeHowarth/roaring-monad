@@ -6,8 +6,8 @@ use crate::core::ids::LogId;
 use crate::domain::keys::{
     BLOCK_HASH_INDEX_FAMILY, BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, block_hash_index_suffix, block_log_blob_key,
-    block_log_header_suffix, block_record_suffix, log_dir_by_block_suffix,
-    log_dir_sub_bucket_start,
+    block_log_header_suffix, block_record_suffix, log_dir_by_block_clustering_key,
+    log_dir_by_block_partition_key, log_dir_sub_bucket_start,
 };
 use crate::domain::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
 use crate::error::{Error, Result};
@@ -21,6 +21,19 @@ pub(in crate::logs) async fn put_artifact_meta<M: MetaStore>(
     value: Bytes,
 ) -> Result<()> {
     let _ = meta_store.put(family, key, value, PutCond::Any).await?;
+    Ok(())
+}
+
+pub(in crate::logs) async fn put_scannable_artifact_meta<M: MetaStore>(
+    meta_store: &M,
+    family: FamilyId,
+    partition: &[u8],
+    clustering: &[u8],
+    value: Bytes,
+) -> Result<()> {
+    let _ = meta_store
+        .scan_put(family, partition, clustering, value, PutCond::Any)
+        .await?;
     Ok(())
 }
 
@@ -108,10 +121,13 @@ pub async fn persist_log_dir_by_block<M: MetaStore>(
     let encoded_fragment = fragment.encode();
 
     loop {
-        put_artifact_meta(
+        let partition = log_dir_by_block_partition_key(sub_bucket_start);
+        let clustering = log_dir_by_block_clustering_key(block_num);
+        put_scannable_artifact_meta(
             meta_store,
             LOG_DIR_BY_BLOCK_FAMILY,
-            &log_dir_by_block_suffix(sub_bucket_start, block_num),
+            &partition,
+            &clustering,
             encoded_fragment.clone(),
         )
         .await?;
@@ -141,13 +157,4 @@ pub fn parse_stream_shard(stream_id: &str) -> Option<crate::core::ids::LogShard>
     let (_, shard_hex) = stream_id.rsplit_once('/')?;
     let raw = u64::from_str_radix(shard_hex, 16).ok()?;
     crate::core::ids::LogShard::new(raw).ok()
-}
-
-pub(in crate::logs) fn read_u64_suffix(key: &[u8]) -> Result<u64> {
-    if key.len() < 8 {
-        return Err(Error::Decode("short key suffix"));
-    }
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&key[key.len() - 8..]);
-    Ok(u64::from_be_bytes(bytes))
 }

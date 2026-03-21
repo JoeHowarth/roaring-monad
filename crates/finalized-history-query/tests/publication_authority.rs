@@ -8,8 +8,9 @@ use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
 use finalized_history_query::domain::keys::{
     BITMAP_BY_BLOCK_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, PUBLICATION_STATE_FAMILY,
-    PUBLICATION_STATE_SUFFIX, bitmap_by_block_suffix, block_log_blob_key, block_record_suffix,
-    log_dir_by_block_suffix, stream_id, stream_page_start_local,
+    PUBLICATION_STATE_SUFFIX, bitmap_by_block_clustering_key, bitmap_by_block_partition_key,
+    block_log_blob_key, block_record_suffix, log_dir_by_block_clustering_key,
+    log_dir_by_block_partition_key, stream_id, stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::ingest::authority::lease::LeaseAuthority;
@@ -64,7 +65,11 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 1))
+                .scan_get(
+                    LOG_DIR_BY_BLOCK_FAMILY,
+                    &log_dir_by_block_partition_key(0),
+                    &log_dir_by_block_clustering_key(1),
+                )
                 .await
                 .expect("directory fragment get")
                 .is_some()
@@ -79,9 +84,10 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(
+                .scan_get(
                     BITMAP_BY_BLOCK_FAMILY,
-                    &bitmap_by_block_suffix(&sid, page_start, 1),
+                    &bitmap_by_block_partition_key(&sid, page_start),
+                    &bitmap_by_block_clustering_key(1),
                 )
                 .await
                 .expect("stream fragment get")

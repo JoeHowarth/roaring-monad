@@ -7,8 +7,8 @@ use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::domain::keys::{
     BITMAP_PAGE_META_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BY_BLOCK_FAMILY,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_page_blob_key,
-    bitmap_page_meta_suffix, block_record_suffix, log_dir_by_block_suffix, stream_id,
-    stream_page_start_local,
+    bitmap_page_meta_suffix, block_record_suffix, log_dir_by_block_clustering_key,
+    log_dir_by_block_partition_key, stream_id, stream_page_start_local,
 };
 use finalized_history_query::domain::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -178,7 +178,11 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         assert!(
             svc.ingest
                 .meta_store
-                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 2))
+                .scan_get(
+                    LOG_DIR_BY_BLOCK_FAMILY,
+                    &log_dir_by_block_partition_key(0),
+                    &log_dir_by_block_clustering_key(2),
+                )
                 .await
                 .expect("directory fragment")
                 .is_some()

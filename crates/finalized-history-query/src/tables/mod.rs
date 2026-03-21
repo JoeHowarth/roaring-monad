@@ -9,13 +9,13 @@ use crate::codec::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::domain::keys::{
     BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY,
     LOG_DIR_BUCKET_FAMILY, LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY,
-    bitmap_by_block_prefix_suffix, bitmap_page_blob_key, bitmap_page_meta_suffix,
+    bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
     block_log_blob_key, block_log_header_suffix, block_record_suffix, log_dir_bucket_suffix,
-    log_dir_by_block_prefix_suffix, log_dir_sub_bucket_suffix, point_log_payload_cache_key,
+    log_dir_by_block_partition_key, log_dir_sub_bucket_suffix, point_log_payload_cache_key,
 };
 use crate::domain::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
 use crate::error::{Error, Result};
-use crate::store::traits::{BlobStore, KvTable, MetaStore};
+use crate::store::traits::{BlobStore, KvTable, MetaStore, ScannableKvTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableCacheConfig {
@@ -233,7 +233,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 cache: HashMapTableBytesCache::default(),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().table(LOG_DIR_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_FAMILY),
             },
             point_log_payloads: PointLogPayloadTable {
                 blob_store: Arc::clone(&blob_store),
@@ -241,7 +241,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 block_log_headers,
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().table(BITMAP_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_FAMILY),
             },
             bitmap_page_meta: BitmapPageMetaTable {
                 table: meta_store.table(BITMAP_PAGE_META_FAMILY),
@@ -274,7 +274,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 cache: HashMapTableBytesCache::new(config.log_dir_sub_buckets.max_bytes),
             },
             directory_fragments: DirectoryFragmentTable {
-                table: meta_store.clone().table(LOG_DIR_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(LOG_DIR_BY_BLOCK_FAMILY),
             },
             point_log_payloads: PointLogPayloadTable {
                 blob_store: Arc::clone(&blob_store),
@@ -282,7 +282,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 block_log_headers: block_log_headers.clone(),
             },
             bitmap_by_block: BitmapByBlockTable {
-                table: meta_store.clone().table(BITMAP_BY_BLOCK_FAMILY),
+                table: meta_store.clone().scannable_table(BITMAP_BY_BLOCK_FAMILY),
             },
             bitmap_page_meta: BitmapPageMetaTable {
                 table: meta_store.table(BITMAP_PAGE_META_FAMILY),
@@ -436,7 +436,7 @@ impl<M: MetaStore> LogDirSubBucketTable<M> {
 }
 
 pub struct DirectoryFragmentTable<M> {
-    table: KvTable<M>,
+    table: ScannableKvTable<M>,
 }
 
 impl<M: MetaStore> DirectoryFragmentTable<M> {
@@ -444,17 +444,17 @@ impl<M: MetaStore> DirectoryFragmentTable<M> {
         &self,
         sub_bucket_start: u64,
     ) -> Result<Vec<DirByBlock>> {
-        let prefix = log_dir_by_block_prefix_suffix(sub_bucket_start);
+        let partition = log_dir_by_block_partition_key(sub_bucket_start);
         let mut cursor = None;
         let mut fragments = Vec::new();
 
         loop {
             let page = self
                 .table
-                .list_prefix(&prefix, cursor.take(), 1_024)
+                .list_prefix(&partition, b"", cursor.take(), 1_024)
                 .await?;
-            for key in page.keys {
-                let Some(record) = self.table.get(&key).await? else {
+            for clustering in page.keys {
+                let Some(record) = self.table.get(&partition, &clustering).await? else {
                     continue;
                 };
                 fragments.push(DirByBlock::decode(&record.value)?);
@@ -471,22 +471,22 @@ impl<M: MetaStore> DirectoryFragmentTable<M> {
 }
 
 pub struct BitmapByBlockTable<M> {
-    table: KvTable<M>,
+    table: ScannableKvTable<M>,
 }
 
 impl<M: MetaStore> BitmapByBlockTable<M> {
     pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
-        let prefix = bitmap_by_block_prefix_suffix(stream, page_start);
+        let partition = bitmap_by_block_partition_key(stream, page_start);
         let mut cursor = None;
         let mut fragments = Vec::new();
 
         loop {
             let page = self
                 .table
-                .list_prefix(&prefix, cursor.take(), 1_024)
+                .list_prefix(&partition, b"", cursor.take(), 1_024)
                 .await?;
-            for key in page.keys {
-                let Some(record) = self.table.get(&key).await? else {
+            for clustering in page.keys {
+                let Some(record) = self.table.get(&partition, &clustering).await? else {
                     continue;
                 };
                 fragments.push(record.value);

@@ -236,8 +236,8 @@ mod tests {
     use bytes::Bytes;
 
     use crate::domain::keys::{
-        BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_suffix,
-        bitmap_page_blob_key, bitmap_page_meta_suffix,
+        BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, bitmap_by_block_clustering_key,
+        bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
     };
     use crate::domain::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
@@ -286,14 +286,51 @@ mod tests {
             self.inner.delete(family, key, cond).await
         }
 
-        async fn list_prefix(
+        async fn scan_get(
             &self,
             family: crate::store::traits::FamilyId,
+            partition: &[u8],
+            clustering: &[u8],
+        ) -> crate::Result<Option<Record>> {
+            self.inner.scan_get(family, partition, clustering).await
+        }
+
+        async fn scan_put(
+            &self,
+            family: crate::store::traits::FamilyId,
+            partition: &[u8],
+            clustering: &[u8],
+            value: Bytes,
+            cond: PutCond,
+        ) -> crate::Result<PutResult> {
+            self.inner
+                .scan_put(family, partition, clustering, value, cond)
+                .await
+        }
+
+        async fn scan_delete(
+            &self,
+            family: crate::store::traits::FamilyId,
+            partition: &[u8],
+            clustering: &[u8],
+            cond: crate::store::traits::DelCond,
+        ) -> crate::Result<()> {
+            self.inner
+                .scan_delete(family, partition, clustering, cond)
+                .await
+        }
+
+        async fn scan_list(
+            &self,
+            family: crate::store::traits::FamilyId,
+            partition: &[u8],
             prefix: &[u8],
             cursor: Option<Vec<u8>>,
             limit: usize,
         ) -> crate::Result<Page> {
-            self.inner.list_prefix(family, prefix, cursor, limit).await
+            self.inner
+                .scan_list(family, partition, prefix, cursor, limit)
+                .await
         }
     }
 
@@ -347,10 +384,12 @@ mod tests {
                 crc32: 0,
                 bitmap: fragment_bitmap,
             };
+            let partition = bitmap_by_block_partition_key(stream, page_start);
 
-            meta.put(
+            meta.scan_put(
                 BITMAP_BY_BLOCK_FAMILY,
-                &bitmap_by_block_suffix(stream, page_start, block_num),
+                &partition,
+                &bitmap_by_block_clustering_key(block_num),
                 encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
                 PutCond::Any,
             )

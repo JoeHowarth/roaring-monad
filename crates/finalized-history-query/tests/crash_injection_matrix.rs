@@ -108,6 +108,19 @@ impl FaultyMetaStore {
         out
     }
 
+    fn scan_logical_key(family: FamilyId, partition: &[u8], clustering: &[u8]) -> Vec<u8> {
+        let mut out = family.as_str().as_bytes().to_vec();
+        if !partition.is_empty() {
+            out.push(b'/');
+            out.extend_from_slice(partition);
+        }
+        if !clustering.is_empty() {
+            out.push(b'/');
+            out.extend_from_slice(clustering);
+        }
+        out
+    }
+
     fn publication_state_logical_key() -> Vec<u8> {
         Self::logical_key(PUBLICATION_STATE_FAMILY, PUBLICATION_STATE_SUFFIX)
     }
@@ -139,14 +152,53 @@ impl MetaStore for FaultyMetaStore {
         self.inner.delete(family, key, cond).await
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Option<Record>> {
+        self.inner.scan_get(family, partition, clustering).await
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let logical_key = Self::scan_logical_key(family, partition, clustering);
+        self.injector.maybe_fail(FaultOp::MetaPut, &logical_key)?;
+        self.inner
+            .scan_put(family, partition, clustering, value, cond)
+            .await
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> Result<()> {
+        self.inner
+            .scan_delete(family, partition, clustering, cond)
+            .await
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
-        self.inner.list_prefix(family, prefix, cursor, limit).await
+        self.inner
+            .scan_list(family, partition, prefix, cursor, limit)
+            .await
     }
 }
 

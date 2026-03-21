@@ -4,8 +4,12 @@ This document describes the store trait abstractions and their implementations.
 
 ## MetaStore
 
-The `MetaStore` trait provides family-scoped key-value storage with conditional
-writes:
+The `MetaStore` trait provides two metadata access shapes:
+
+- point tables keyed by `family + key`
+- scannable tables keyed by `family + partition + clustering`
+
+The core trait supports both:
 
 ```rust
 pub struct FamilyId(&'static str);
@@ -20,9 +24,32 @@ pub trait MetaStore: Send + Sync {
         cond: PutCond,
     ) -> Result<PutResult>;
     async fn delete(&self, family: FamilyId, key: &[u8], cond: DelCond) -> Result<()>;
-    async fn list_prefix(
+
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Option<Record>>;
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult>;
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> Result<()>;
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
@@ -30,9 +57,13 @@ pub trait MetaStore: Send + Sync {
 }
 ```
 
-The generic storage boundary also exposes family-scoped handles such as
-`KvTable<M>` and `KvTableRef<'_, M>` so higher-level code can bind a family once
-and then operate only on suffix keys.
+The generic storage boundary also exposes family-scoped handles:
+
+- `KvTable<M>` / `KvTableRef<'_, M>` for point tables
+- `ScannableKvTable<M>` / `ScannableKvTableRef<'_, M>` for scannable tables
+
+Higher-level code binds a family once, then works only with suffix keys or with
+explicit `(partition, clustering)` components.
 
 - `Record { value: Bytes, version: u64 }` — every stored value carries a monotonic version
 - `PutCond` — `Any`, `IfAbsent`, or `IfVersion(u64)` for conditional writes
@@ -76,11 +107,19 @@ Backends no longer implement `PublicationStore` directly. The crate provides a
 `MetaPublicationStore<M>` wrapper that stores publication state in the
 `publication_state` metadata family on top of any `MetaStore`.
 
+Scannable tables are only used for metadata families that actually enumerate:
+
+- `log_dir_by_block`
+- `bitmap_by_block`
+- `open_bitmap_page`
+
+All other metadata families stay on the simpler point-table shape.
+
 ## InMemoryMetaStore / InMemoryBlobStore
 
 Test doubles backed by in-memory collections.
 
-- `InMemoryMetaStore` — `BTreeMap<(FamilyId, Vec<u8>), Record>` behind `RwLock`, implements `MetaStore`
+- `InMemoryMetaStore` — point records in `BTreeMap<(FamilyId, Vec<u8>), Record>` and scannable records in `BTreeMap<(FamilyId, Vec<u8>, Vec<u8>), Record>` behind `RwLock`
 - `InMemoryBlobStore` — `HashMap<Vec<u8>, Bytes>` behind `RwLock`, implements `BlobStore`
 
 ## FsMetaStore / FsBlobStore
@@ -90,6 +129,7 @@ File-system backed stores for local development and testing.
 - Keys are hex-encoded into file paths under a `meta/` or `blob/` root directory
 - Metadata family names map to directories under `meta/<family>/`
 - Metadata files are keyed by the hex-encoded suffix bytes within that family
+- Scannable metadata families live under `meta_scan/<family>/<hex_partition>/<hex_clustering>`
 - Versions are stored in `.ver` sidecar files
 - `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
 
@@ -101,28 +141,35 @@ Scylla (Cassandra-compatible) implementation for `MetaStore`.
 
 ### Schema
 
-Two metadata tables are created:
+Three tables are created:
 
-- `meta_kv (grp text, bucket smallint, k blob, v blob, version bigint, PRIMARY KEY ((grp, bucket), k))` — main key-value store
+- `meta_kv (grp text, bucket smallint, k blob, v blob, version bigint, PRIMARY KEY ((grp, bucket), k))` — point metadata table
+- `meta_scan_kv (grp text, pk blob, ck blob, v blob, version bigint, PRIMARY KEY ((grp, pk), ck))` — scannable metadata table
 - `meta_fence (id text PRIMARY KEY, min_epoch bigint)` — auxiliary compatibility/operations state
 
 ### Key partitioning
 
-Keys are partitioned by:
+Point-table keys are partitioned by:
 
 1. **Group** — the explicit metadata family (for example `block_record` or `log_dir_sub_bucket`)
 2. **Bucket** — FNV-1a hash of the suffix key modulo 256
 
-This distributes load across partitions while keeping related keys in the same
-family for efficient family-local prefix listing.
+This distributes load across partitions for point lookups and conditional
+writes.
+
+Scannable-table rows are partitioned by `(family, partition)` and ordered by the
+clustering key. This lets the backend support exact lookup and ordered scans for
+the actual enumerable metadata families without the old family-wide bucket
+fanout.
 
 ### CAS operations
 
 `PutCond::IfAbsent` uses Scylla's `IF NOT EXISTS` lightweight transactions.
-`PutCond::IfVersion` uses `IF version = ?` LWT. Both track CAS attempts and
-conflicts in telemetry. Normal artifact writes now use unconditional puts on the
-write path; conditional writes remain for publication-state CAS and any callers
-that still need them through `MetaPublicationStore`.
+`PutCond::IfVersion` uses `IF version = ?` LWT. Both point and scannable tables
+track CAS attempts and conflicts in telemetry. Normal artifact writes now use
+unconditional puts on the write path; conditional writes remain for
+publication-state CAS, open-page markers, and any callers that still need them
+through `MetaPublicationStore`.
 
 ### Retry policy
 

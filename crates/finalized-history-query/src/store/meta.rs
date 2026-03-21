@@ -9,12 +9,14 @@ use crate::store::traits::{DelCond, FamilyId, MetaStore, Page, PutCond, PutResul
 #[derive(Clone)]
 pub struct InMemoryMetaStore {
     inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>), Record>>>,
+    scan_inner: Arc<RwLock<BTreeMap<(FamilyId, Vec<u8>, Vec<u8>), Record>>>,
 }
 
 impl InMemoryMetaStore {
     pub fn with_min_epoch(_min_epoch: u64) -> Self {
         Self {
             inner: Arc::new(RwLock::new(BTreeMap::new())),
+            scan_inner: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 }
@@ -97,15 +99,101 @@ impl MetaStore for InMemoryMetaStore {
         Ok(())
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> Result<Option<Record>> {
+        let guard = self
+            .scan_inner
+            .read()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+        Ok(guard
+            .get(&(family, partition.to_vec(), clustering.to_vec()))
+            .cloned())
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> Result<PutResult> {
+        let mut guard = self
+            .scan_inner
+            .write()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+
+        let entry_key = (family, partition.to_vec(), clustering.to_vec());
+        let current = guard.get(&entry_key).cloned();
+        let allowed = match (cond, current.as_ref()) {
+            (PutCond::Any, _) => true,
+            (PutCond::IfAbsent, None) => true,
+            (PutCond::IfAbsent, Some(_)) => false,
+            (PutCond::IfVersion(v), Some(r)) => r.version == v,
+            (PutCond::IfVersion(_), None) => false,
+        };
+
+        if !allowed {
+            return Ok(PutResult {
+                applied: false,
+                version: current.map(|r| r.version),
+            });
+        }
+
+        let next_version = current.map_or(1, |r| r.version + 1);
+        guard.insert(
+            entry_key,
+            Record {
+                value,
+                version: next_version,
+            },
+        );
+        Ok(PutResult {
+            applied: true,
+            version: Some(next_version),
+        })
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> Result<()> {
+        let mut guard = self
+            .scan_inner
+            .write()
+            .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
+
+        let entry_key = (family, partition.to_vec(), clustering.to_vec());
+        let should_delete = match (cond, guard.get(&entry_key)) {
+            (DelCond::Any, Some(_)) => true,
+            (DelCond::Any, None) => false,
+            (DelCond::IfVersion(v), Some(r)) => r.version == v,
+            (DelCond::IfVersion(_), None) => false,
+        };
+
+        if should_delete {
+            guard.remove(&entry_key);
+        }
+        Ok(())
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Page> {
         let guard = self
-            .inner
+            .scan_inner
             .read()
             .map_err(|_| Error::Backend("poisoned lock".to_string()))?;
 
@@ -114,8 +202,11 @@ impl MetaStore for InMemoryMetaStore {
         let has_cursor = cursor.is_some();
         let start = cursor.unwrap_or_default();
 
-        for ((entry_family, key), _) in guard.iter() {
+        for ((entry_family, entry_partition, key), _) in guard.iter() {
             if *entry_family != family {
+                continue;
+            }
+            if entry_partition.as_slice() != partition {
                 continue;
             }
             if !key.starts_with(prefix) {
@@ -144,7 +235,9 @@ mod tests {
     use futures::executor::block_on;
 
     use super::InMemoryMetaStore;
-    use crate::domain::keys::BLOCK_RECORD_FAMILY;
+    use crate::domain::keys::{
+        LOG_DIR_BY_BLOCK_FAMILY, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
+    };
     use crate::store::traits::MetaStore;
     use crate::store::traits::PutCond;
 
@@ -153,11 +246,11 @@ mod tests {
         block_on(async {
             let store = InMemoryMetaStore::default();
             for index in 0..1_025u64 {
-                let key = format!("{index:04}").into_bytes();
                 store
-                    .put(
-                        BLOCK_RECORD_FAMILY,
-                        &key,
+                    .scan_put(
+                        LOG_DIR_BY_BLOCK_FAMILY,
+                        &log_dir_by_block_partition_key(0),
+                        &log_dir_by_block_clustering_key(index),
                         Bytes::from_static(b"v"),
                         PutCond::Any,
                     )
@@ -169,7 +262,13 @@ mod tests {
             let mut seen = Vec::new();
             loop {
                 let page = store
-                    .list_prefix(BLOCK_RECORD_FAMILY, b"", cursor.take(), 1_024)
+                    .scan_list(
+                        LOG_DIR_BY_BLOCK_FAMILY,
+                        &log_dir_by_block_partition_key(0),
+                        b"",
+                        cursor.take(),
+                        1_024,
+                    )
                     .await
                     .expect("list");
                 seen.extend(page.keys.iter().cloned());

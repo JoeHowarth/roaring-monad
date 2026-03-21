@@ -209,14 +209,66 @@ impl MetaStore for ExpireBeforePublishMetaStore {
         self.inner.delete(family, key, cond).await
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.scan_get(family, partition, clustering).await
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> finalized_history_query::Result<PutResult> {
+        let result = self
+            .inner
+            .scan_put(family, partition, clustering, value, cond)
+            .await?;
+        if family != PUBLICATION_STATE_FAMILY && !self.advanced.swap(true, Ordering::Relaxed) {
+            let publication_state = self
+                .publication_store()
+                .load()
+                .await?
+                .expect("publication state should exist before artifact writes");
+            CONTROLLED_OBSERVED_FINALIZED_BLOCK.store(
+                publication_state
+                    .lease_valid_through_block
+                    .saturating_add(1),
+                Ordering::Relaxed,
+            );
+        }
+        Ok(result)
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> finalized_history_query::Result<()> {
+        self.inner
+            .scan_delete(family, partition, clustering, cond)
+            .await
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(family, prefix, cursor, limit).await
+        self.inner
+            .scan_list(family, partition, prefix, cursor, limit)
+            .await
     }
 }
 
@@ -264,14 +316,51 @@ impl MetaStore for PublishConflictOnceMetaStore {
         self.inner.delete(family, key, cond).await
     }
 
-    async fn list_prefix(
+    async fn scan_get(
         &self,
         family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+    ) -> finalized_history_query::Result<Option<Record>> {
+        self.inner.scan_get(family, partition, clustering).await
+    }
+
+    async fn scan_put(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        value: Bytes,
+        cond: PutCond,
+    ) -> finalized_history_query::Result<PutResult> {
+        self.inner
+            .scan_put(family, partition, clustering, value, cond)
+            .await
+    }
+
+    async fn scan_delete(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
+        clustering: &[u8],
+        cond: DelCond,
+    ) -> finalized_history_query::Result<()> {
+        self.inner
+            .scan_delete(family, partition, clustering, cond)
+            .await
+    }
+
+    async fn scan_list(
+        &self,
+        family: FamilyId,
+        partition: &[u8],
         prefix: &[u8],
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        self.inner.list_prefix(family, prefix, cursor, limit).await
+        self.inner
+            .scan_list(family, partition, prefix, cursor, limit)
+            .await
     }
 }
 

@@ -23,10 +23,11 @@ mod tests {
         BITMAP_BY_BLOCK_FAMILY, BITMAP_PAGE_META_FAMILY, BLOCK_HASH_INDEX_FAMILY,
         BLOCK_LOG_HEADER_FAMILY, BLOCK_RECORD_FAMILY, LOG_DIR_BUCKET_FAMILY,
         LOG_DIR_BY_BLOCK_FAMILY, LOG_DIR_SUB_BUCKET_FAMILY, LOG_DIRECTORY_BUCKET_SIZE,
-        LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_suffix,
-        bitmap_page_blob_key, bitmap_page_meta_suffix, block_hash_index_suffix, block_log_blob_key,
-        block_log_header_suffix, block_record_suffix, log_dir_bucket_suffix,
-        log_dir_by_block_suffix, log_dir_sub_bucket_suffix, log_local, stream_page_start_local,
+        LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, bitmap_by_block_clustering_key,
+        bitmap_by_block_partition_key, bitmap_page_blob_key, bitmap_page_meta_suffix,
+        block_hash_index_suffix, block_log_blob_key, block_log_header_suffix, block_record_suffix,
+        log_dir_bucket_suffix, log_dir_by_block_clustering_key, log_dir_by_block_partition_key,
+        log_dir_sub_bucket_suffix, log_local, stream_page_start_local,
     };
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
@@ -115,17 +116,21 @@ mod tests {
                 .expect("compact directory");
 
             let fragment0 = meta
-                .get(LOG_DIR_BY_BLOCK_FAMILY, &log_dir_by_block_suffix(0, 700))
+                .scan_get(
+                    LOG_DIR_BY_BLOCK_FAMILY,
+                    &log_dir_by_block_partition_key(0),
+                    &log_dir_by_block_clustering_key(700),
+                )
                 .await
                 .expect("read fragment0")
                 .expect("fragment0");
             let fragment1 = meta
-                .get(
+                .scan_get(
                     LOG_DIR_BY_BLOCK_FAMILY,
-                    &log_dir_by_block_suffix(
+                    &log_dir_by_block_partition_key(
                         crate::domain::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                        700,
                     ),
+                    &log_dir_by_block_clustering_key(700),
                 )
                 .await
                 .expect("read fragment1")
@@ -197,9 +202,10 @@ mod tests {
                 .expect("stream");
             let first_page = stream_page_start_local(log_local(LogId::new(first_log_id)).get());
             let fragment = meta
-                .get(
+                .scan_get(
                     BITMAP_BY_BLOCK_FAMILY,
-                    &bitmap_by_block_suffix(&sid, first_page, block.block_num),
+                    &bitmap_by_block_partition_key(&sid, first_page),
+                    &bitmap_by_block_clustering_key(block.block_num),
                 )
                 .await
                 .expect("read stream fragment")
