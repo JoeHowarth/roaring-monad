@@ -7,7 +7,7 @@ use crate::logs::types::{Block, IngestOutcome, Log};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
-use super::{FinalizedHistoryService, reader_only_mode_error, should_clear_writer};
+use super::{FinalizedHistoryService, reader_only_mode_error};
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     FinalizedHistoryService<A, M, B>
@@ -36,18 +36,7 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             return Err(reader_only_mode_error());
         }
 
-        let _write_guard = self.write_guard.lock().await;
-        let _ = self.startup_locked().await?;
-
-        match self.ingest.ingest_finalized_blocks(&blocks).await {
-            Ok(outcome) => Ok(outcome),
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    self.ingest.authority.clear().await;
-                }
-                Err(error)
-            }
-        }
+        self.ingest.ingest_finalized_blocks(&blocks).await
     }
 }
 

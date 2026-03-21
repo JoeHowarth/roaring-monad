@@ -1,11 +1,11 @@
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
-use crate::ingest::authority::WriteAuthority;
+use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::startup::{StartupPlan, build_startup_plan, startup_plan};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 
-use super::{FinalizedHistoryService, should_clear_writer};
+use super::FinalizedHistoryService;
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
     FinalizedHistoryService<A, M, B>
@@ -17,7 +17,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             return result;
         }
 
-        let _write_guard = self.write_guard.lock().await;
         let result = self.startup_locked().await;
         self.update_backend_state(&result);
         result
@@ -42,30 +41,13 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
         M: PublicationStore,
     {
         debug_assert!(self.allows_writes);
-        let state = match self
+        let session = self
             .ingest
             .authority
-            .ensure_writer(self.config.observe_upstream_finalized_block.as_ref()())
+            .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
+            .await?;
+        self.recover_and_plan(session.state().indexed_finalized_head)
             .await
-        {
-            Ok(state) => state,
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    self.ingest.authority.clear().await;
-                }
-                return Err(error);
-            }
-        };
-
-        match self.recover_and_plan(state.indexed_finalized_head).await {
-            Ok(plan) => Ok(plan),
-            Err(error) => {
-                if should_clear_writer(&error) {
-                    self.ingest.authority.clear().await;
-                }
-                Err(error)
-            }
-        }
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {

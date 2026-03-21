@@ -4,7 +4,7 @@ use futures::executor::block_on;
 
 use crate::domain::types::PublicationState;
 use crate::error::{Error, Result};
-use crate::ingest::authority::WriteAuthority;
+use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::store::meta::InMemoryMetaStore;
 use crate::store::publication::{CasOutcome, PublicationStore};
 
@@ -72,12 +72,12 @@ fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
         });
         let authority = LeaseAuthority::with_session(store, 7, [7u8; 16], 100, 0);
 
-        let lease = authority
-            .ensure_writer(Some(1_000))
+        let session = authority
+            .begin_write(Some(1_000))
             .await
             .expect("acquire publication");
 
-        assert_eq!(lease.indexed_finalized_head, 0);
+        assert_eq!(session.state().indexed_finalized_head, 0);
         assert_eq!(
             authority
                 .publication_store
@@ -99,11 +99,11 @@ fn fresh_lease_rejects_takeover_until_expiry() {
         let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
 
         let _ = first
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("bootstrap publication");
         let err = second
-            .ensure_writer(Some(120))
+            .begin_write(Some(120))
             .await
             .expect_err("fresh foreign lease should reject takeover");
 
@@ -119,7 +119,7 @@ fn same_owner_restart_after_expiry_uses_new_session() {
         let second = LeaseAuthority::with_session(store, 7, [2u8; 16], 50, 0);
 
         first
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("first acquire publication");
         let first_session = first
@@ -130,7 +130,7 @@ fn same_owner_restart_after_expiry_uses_new_session() {
             .expect("state")
             .session_id;
         second
-            .ensure_writer(Some(151))
+            .begin_write(Some(151))
             .await
             .expect("same owner restart after expiry");
         let second_session = second
@@ -153,12 +153,12 @@ fn same_owner_restart_before_expiry_uses_new_session() {
         let second = LeaseAuthority::with_session(store.clone(), 7, [2u8; 16], 50, 0);
 
         first
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("first acquire publication");
         let first_session = store.load().await.expect("load").expect("state").session_id;
         second
-            .ensure_writer(Some(120))
+            .begin_write(Some(120))
             .await
             .expect("same owner restart before expiry");
         let second_session = store.load().await.expect("load").expect("state").session_id;
@@ -180,12 +180,12 @@ fn authorize_returns_lease_lost_after_external_takeover() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 10);
-        authority.ensure_writer(Some(100)).await.expect("acquire");
+        authority.begin_write(Some(100)).await.expect("acquire");
         let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 10);
-        let _ = takeover.ensure_writer(Some(151)).await.expect("takeover");
+        let _ = takeover.begin_write(Some(151)).await.expect("takeover");
 
         let err = authority
-            .ensure_writer(Some(151))
+            .begin_write(Some(151))
             .await
             .expect_err("authorize should observe takeover");
 
@@ -198,12 +198,12 @@ fn publish_returns_lease_lost_on_session_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        authority.ensure_writer(Some(100)).await.expect("acquire");
+        let session = authority.begin_write(Some(100)).await.expect("acquire");
         let takeover = LeaseAuthority::with_session(store, 8, [2u8; 16], 50, 0);
-        let _ = takeover.ensure_writer(Some(151)).await.expect("takeover");
+        let _ = takeover.begin_write(Some(151)).await.expect("takeover");
 
-        let err = authority
-            .publish(1)
+        let err = session
+            .publish(1, Some(151))
             .await
             .expect_err("publish should fail after takeover");
 
@@ -216,7 +216,7 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 50, 0);
-        authority.ensure_writer(Some(100)).await.expect("acquire");
+        let session = authority.begin_write(Some(100)).await.expect("acquire");
         let current = store.load().await.expect("load").expect("state");
         let next = PublicationState {
             indexed_finalized_head: 9,
@@ -227,8 +227,8 @@ fn publish_returns_publication_conflict_on_head_mismatch() {
             .await
             .expect("mutate state");
 
-        let err = authority
-            .publish(1)
+        let err = session
+            .publish(1, Some(100))
             .await
             .expect_err("publish should reject head mismatch");
 
@@ -243,7 +243,7 @@ fn same_session_reacquire_after_expiry_keeps_session() {
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
 
         authority
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("first acquire");
         let first_session = authority
@@ -254,17 +254,10 @@ fn same_session_reacquire_after_expiry_keeps_session() {
             .expect("state")
             .session_id;
         // valid_through = 100 + 49 = 149; observed 150 > 149 -> expired
-        let err = authority
-            .ensure_writer(Some(150))
-            .await
-            .expect_err("expired cached lease should fail");
-        assert!(matches!(err, Error::LeaseLost));
-
-        authority.clear().await;
         authority
-            .ensure_writer(Some(150))
+            .begin_write(Some(150))
             .await
-            .expect("re-acquire after clear");
+            .expect("re-acquire after expiry");
         let second_session = authority
             .publication_store
             .load()
@@ -284,7 +277,7 @@ fn same_session_acquire_before_expiry_keeps_session() {
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
 
         authority
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("first acquire");
         let first_session = authority
@@ -296,7 +289,7 @@ fn same_session_acquire_before_expiry_keeps_session() {
             .session_id;
         // valid_through = 149; observed 140 <= 149 -> still valid
         authority
-            .ensure_writer(Some(140))
+            .begin_write(Some(140))
             .await
             .expect("re-acquire before expiry");
         let second_session = authority
@@ -312,19 +305,33 @@ fn same_session_acquire_before_expiry_keeps_session() {
 }
 
 #[test]
-fn authorize_returns_lease_lost_after_own_expiry() {
+fn begin_write_reacquires_after_own_expiry() {
     block_on(async {
         let store = InMemoryMetaStore::default();
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 10);
 
-        authority.ensure_writer(Some(100)).await.expect("acquire");
-        // valid_through = 149; observed 150 > 149 -> expired, no external takeover
-        let err = authority
-            .ensure_writer(Some(150))
+        authority.begin_write(Some(100)).await.expect("acquire");
+        let first_session = authority
+            .publication_store
+            .load()
             .await
-            .expect_err("authorize should fail after own expiry");
+            .expect("load")
+            .expect("state")
+            .session_id;
+        // valid_through = 149; observed 150 > 149 -> expired, no external takeover
+        authority
+            .begin_write(Some(150))
+            .await
+            .expect("begin_write should reacquire after own expiry");
+        let second_session = authority
+            .publication_store
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
 
-        assert!(matches!(err, Error::LeaseLost));
+        assert_eq!(second_session, first_session);
     });
 }
 
@@ -335,17 +342,17 @@ fn lease_blocks_grants_exact_n_blocks() {
         let first = LeaseAuthority::with_session(store.clone(), 7, [1u8; 16], 10, 0);
         let second = LeaseAuthority::with_session(store, 8, [2u8; 16], 10, 0);
 
-        let _ = first.ensure_writer(Some(100)).await.expect("bootstrap");
+        let _ = first.begin_write(Some(100)).await.expect("bootstrap");
         // valid_through = 100 + 9 = 109; observed 109 <= 109 -> still fresh
         let err = second
-            .ensure_writer(Some(109))
+            .begin_write(Some(109))
             .await
             .expect_err("should be still fresh at last valid block");
         assert!(matches!(err, Error::LeaseStillFresh));
 
         // observed 110 > 109 -> expired, takeover allowed
         second
-            .ensure_writer(Some(110))
+            .begin_write(Some(110))
             .await
             .expect("takeover at first expired block");
         assert_eq!(
@@ -368,7 +375,7 @@ fn acquire_fails_closed_without_observed_finalized_block() {
         let authority = LeaseAuthority::with_session(store, 7, [1u8; 16], 50, 0);
 
         let err = authority
-            .ensure_writer(None)
+            .begin_write(None)
             .await
             .expect_err("missing observation should fail closed");
 

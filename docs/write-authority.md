@@ -34,17 +34,27 @@ The ingest engine owns:
 
 ```rust
 trait WriteAuthority {
-    async fn ensure_writer(
+    type Session<'a>: WriteSession
+    where
+        Self: 'a;
+
+    async fn begin_write(
         observed_upstream_finalized_block: Option<u64>,
-    ) -> Result<AuthorityState>;
-    async fn publish(new_head: u64) -> Result<()>;
-    async fn clear();
+    ) -> Result<Self::Session<'_>>;
+}
+
+trait WriteSession {
+    fn state(&self) -> AuthorityState;
+    async fn publish(
+        self,
+        new_head: u64,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<()>;
 }
 ```
 
-`ensure_writer(...)` returns the current `indexed_finalized_head` in a small
-named state object. The authority keeps the active writer session internally
-rather than exposing a separate token type.
+`begin_write(...)` returns a writer-scoped session that holds the current
+published head and owns publish/invalidation behavior for that operation.
 
 ## PublicationState
 
@@ -81,23 +91,17 @@ Required invariant: `publication_lease_renew_threshold_blocks < publication_leas
 
 Renewal rule: renew when the observed upstream finalized block enters the renew window; otherwise reuse the current lease.
 
-## Ensure / Publish Lifecycle
+## Begin / Publish Lifecycle
 
-### `ensure_writer(...)`
+### `begin_write(...)`
 
-If the authority does not have a cached lease:
+When a write-scoped session starts:
 
 1. load current `publication_state`
-2. if absent, `create_if_absent` with the initial state
-3. if present and lease expired (or same owner), CAS to claim ownership with a fresh `session_id`
-4. cache the acquired lease internally and return the current `indexed_finalized_head`
-
-If the authority already has a cached lease:
-
-1. use the cached `session_id` and head
-2. check them against the current `publication_state`
-3. verify the lease is still valid against the current upstream observation
-4. if valid, return the current `indexed_finalized_head`
+2. if no cached lease exists, acquire ownership from store
+3. if a cached lease exists, re-check and renew it against the current upstream observation
+4. if cached state is stale but same-writer reacquire is possible, drop the cache and reacquire internally
+5. return a session holding `AuthorityState { indexed_finalized_head }`
 
 ### Renewal
 
@@ -107,18 +111,23 @@ Renewal happens during ingest when the observed upstream block enters the renew 
 
 After all artifacts for a block batch are durable:
 
-1. CAS `publication_state` with `indexed_finalized_head = new_head`
-2. renewal piggybacks on publish when needed
+1. the write session re-checks and renews the lease if needed
+2. it CASes `publication_state` with `indexed_finalized_head = new_head`
+3. invalidating errors clear the cached lease inside the authority
 
 ## Hard Expiry
 
-Once a lease has expired, ownership must be reacquired through a fresh acquisition attempt. There is no silent same-session renewal after expiry.
+Once a lease has expired, the current cached lease is no longer valid.
+The authority must reacquire ownership from `publication_state` before it can
+begin another write-scoped session. For the same live process, that reacquire
+can reuse the same `session_id`.
 
 This ensures:
 
 - any gap in liveness forces the writer to re-prove ownership from `publication_state`
 
-The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing re-acquisition through the service layer.
+If a cached lease becomes unusable, the authority drops it internally before the
+next write-scoped session attempt.
 
 ## Startup Flow
 
@@ -126,10 +135,10 @@ The `authorize`/`renew_if_needed` path returns `LeaseLost` after expiry, forcing
 
 ```python
 async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
-    authority_state = ensure_writer(
+    session = begin_write(
         observed_upstream_finalized_block
     )
-    return recovery_plan_from(authority_state.indexed_finalized_head)
+    return recovery_plan_from(session.state.indexed_finalized_head)
 ```
 
 Startup derives the next write position from the published head. It does not delete unpublished suffix artifacts.

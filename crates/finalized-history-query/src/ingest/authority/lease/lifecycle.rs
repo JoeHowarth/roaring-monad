@@ -1,10 +1,66 @@
+use std::fmt;
+
+use futures::lock::MutexGuard;
+
 use crate::error::{Error, Result};
-use crate::ingest::authority::{AuthorityState, WriteAuthority};
+use crate::ingest::authority::{AuthorityState, WriteAuthority, WriteSession};
 use crate::store::publication::{CasOutcome, PublicationStore};
 
 use super::{LeaseAuthority, PublicationLease};
 
+pub struct LeaseWriteSession<'a, P> {
+    authority: &'a LeaseAuthority<P>,
+    _operation: MutexGuard<'a, ()>,
+    state: AuthorityState,
+}
+
+impl<P> fmt::Debug for LeaseWriteSession<'_, P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LeaseWriteSession")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
 impl<P: PublicationStore> LeaseAuthority<P> {
+    async fn clear_cached_lease(&self) {
+        *self.lease.lock().await = None;
+    }
+
+    fn should_invalidate_cached_lease(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::LeaseLost | Error::LeaseObservationUnavailable | Error::PublicationConflict
+        )
+    }
+
+    async fn can_retry_after_invalidation(&self) -> Result<bool> {
+        let current = self.publication_store.load().await?;
+        Ok(match current {
+            Some(state) => state.owner_id == self.owner_id && state.session_id == self.session_id,
+            None => true,
+        })
+    }
+
+    async fn ensure_cached_lease(
+        &self,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<PublicationLease> {
+        let mut guard = self.lease.lock().await;
+        let next_lease = match *guard {
+            Some(lease) => {
+                self.renew_if_needed(lease, observed_upstream_finalized_block)
+                    .await?
+            }
+            None => {
+                self.acquire_publication_with_session(observed_upstream_finalized_block)
+                    .await?
+            }
+        };
+        *guard = Some(next_lease);
+        Ok(next_lease)
+    }
+
     async fn renew_if_needed(
         &self,
         lease: PublicationLease,
@@ -57,33 +113,17 @@ impl<P: PublicationStore> LeaseAuthority<P> {
             }
         }
     }
-}
 
-impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
-    async fn ensure_writer(
+    async fn publish_current(
         &self,
+        new_head: u64,
         observed_upstream_finalized_block: Option<u64>,
-    ) -> Result<AuthorityState> {
-        let mut guard = self.lease.lock().await;
-        let next_lease = match *guard {
-            Some(lease) => {
-                self.renew_if_needed(lease, observed_upstream_finalized_block)
-                    .await?
-            }
-            None => {
-                self.acquire_publication_with_session(observed_upstream_finalized_block)
-                    .await?
-            }
-        };
-        *guard = Some(next_lease);
-        Ok(AuthorityState {
-            indexed_finalized_head: next_lease.indexed_finalized_head,
-        })
-    }
-
-    async fn publish(&self, new_head: u64) -> Result<()> {
+    ) -> Result<()> {
         let mut guard = self.lease.lock().await;
         let lease = (*guard).ok_or(Error::PublicationConflict)?;
+        let lease = self
+            .renew_if_needed(lease, observed_upstream_finalized_block)
+            .await?;
 
         let expected_state = lease.as_state();
         let next_lease = PublicationLease {
@@ -113,8 +153,71 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
             CasOutcome::Failed { current: None } => Err(Error::PublicationConflict),
         }
     }
+}
 
-    async fn clear(&self) {
-        *self.lease.lock().await = None;
+impl<P> WriteSession for LeaseWriteSession<'_, P>
+where
+    P: PublicationStore,
+{
+    fn state(&self) -> AuthorityState {
+        self.state
+    }
+
+    async fn publish(
+        self,
+        new_head: u64,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<()> {
+        let result = self
+            .authority
+            .publish_current(new_head, observed_upstream_finalized_block)
+            .await;
+        if let Err(error) = &result
+            && LeaseAuthority::<P>::should_invalidate_cached_lease(error)
+        {
+            self.authority.clear_cached_lease().await;
+        }
+        result
+    }
+}
+
+impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
+    type Session<'a>
+        = LeaseWriteSession<'a, P>
+    where
+        Self: 'a;
+
+    async fn begin_write(
+        &self,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<Self::Session<'_>> {
+        let operation = self.operation.lock().await;
+        let lease = match self
+            .ensure_cached_lease(observed_upstream_finalized_block)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                if Self::should_invalidate_cached_lease(&error) {
+                    let retry = self.can_retry_after_invalidation().await?;
+                    self.clear_cached_lease().await;
+                    if retry {
+                        self.ensure_cached_lease(observed_upstream_finalized_block)
+                            .await?
+                    } else {
+                        return Err(error);
+                    }
+                } else {
+                    return Err(error);
+                }
+            }
+        };
+        Ok(LeaseWriteSession {
+            authority: self,
+            _operation: operation,
+            state: AuthorityState {
+                indexed_finalized_head: lease.indexed_finalized_head,
+            },
+        })
     }
 }

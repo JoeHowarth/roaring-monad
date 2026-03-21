@@ -20,6 +20,7 @@ pub struct LeaseAuthority<P> {
     session_id: SessionId,
     lease_blocks: u64,
     renew_threshold_blocks: u64,
+    operation: futures::lock::Mutex<()>,
     lease: futures::lock::Mutex<Option<PublicationLease>>,
 }
 
@@ -60,6 +61,7 @@ impl<P> LeaseAuthority<P> {
             session_id,
             lease_blocks,
             renew_threshold_blocks,
+            operation: futures::lock::Mutex::new(()),
             lease: futures::lock::Mutex::new(None),
         }
     }

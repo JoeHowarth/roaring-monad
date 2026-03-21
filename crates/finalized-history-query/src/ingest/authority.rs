@@ -12,13 +12,24 @@ pub struct AuthorityState {
 }
 
 #[allow(async_fn_in_trait)]
+pub trait WriteSession: Send {
+    fn state(&self) -> AuthorityState;
+
+    async fn publish(
+        self,
+        new_head: u64,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<()>;
+}
+
+#[allow(async_fn_in_trait)]
 pub trait WriteAuthority: Send + Sync {
-    async fn ensure_writer(
+    type Session<'a>: WriteSession + 'a
+    where
+        Self: 'a;
+
+    async fn begin_write(
         &self,
         observed_upstream_finalized_block: Option<u64>,
-    ) -> Result<AuthorityState>;
-
-    async fn publish(&self, new_head: u64) -> Result<()>;
-
-    async fn clear(&self);
+    ) -> Result<Self::Session<'_>>;
 }

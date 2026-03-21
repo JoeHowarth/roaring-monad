@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::core::state::{derive_next_log_id, load_block_identity};
 use crate::domain::types::{Block, IngestOutcome};
 use crate::error::{Error, Result};
-use crate::ingest::authority::{AuthorityState, WriteAuthority};
+use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
@@ -41,12 +41,11 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
             return Err(Error::InvalidParams("ingest requires at least one block"));
         };
 
-        let AuthorityState {
-            indexed_finalized_head,
-        } = self
+        let session = self
             .authority
-            .ensure_writer(self.config.observe_upstream_finalized_block.as_ref()())
+            .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
+        let indexed_finalized_head = session.state().indexed_finalized_head;
 
         let tables = Tables::without_cache(
             std::sync::Arc::new(self.meta_store.clone()),
@@ -117,10 +116,12 @@ impl<A: WriteAuthority, M: MetaStore + Clone, B: BlobStore + Clone> IngestEngine
             delete_open_bitmap_page(&self.meta_store, &page).await?;
         }
 
-        self.authority
-            .ensure_writer(self.config.observe_upstream_finalized_block.as_ref()())
+        session
+            .publish(
+                last_block.block_num,
+                self.config.observe_upstream_finalized_block.as_ref()(),
+            )
             .await?;
-        self.authority.publish(last_block.block_num).await?;
 
         Ok(IngestOutcome {
             indexed_finalized_head: last_block.block_num,

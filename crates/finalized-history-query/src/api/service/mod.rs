@@ -22,7 +22,6 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     config: Config,
     state: Arc<RuntimeState>,
     allows_writes: bool,
-    write_guard: Arc<futures::lock::Mutex<()>>,
 }
 
 impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
@@ -51,7 +50,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             config,
             state: Arc::new(RuntimeState::default()),
             allows_writes,
-            write_guard: Arc::new(futures::lock::Mutex::new(())),
         }
     }
 
@@ -86,16 +84,6 @@ impl<A: WriteAuthority, M: MetaStore + PublicationStore, B: BlobStore>
             _ => {}
         }
     }
-}
-
-fn should_clear_writer(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::LeaseLost
-            | Error::LeaseObservationUnavailable
-            | Error::PublicationConflict
-            | Error::ReadOnlyMode(_)
-    )
 }
 
 fn reader_only_mode_error() -> Error {

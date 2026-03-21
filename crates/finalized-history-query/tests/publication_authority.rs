@@ -223,7 +223,7 @@ fn ingest_returns_lease_lost_when_lease_expires_mid_batch() {
 
         engine
             .authority
-            .ensure_writer(controlled_observed_finalized_block())
+            .begin_write(controlled_observed_finalized_block())
             .await
             .expect("bootstrap");
 
@@ -245,12 +245,12 @@ fn stale_writer_cannot_start_new_ingest_after_takeover() {
 
         engine
             .authority
-            .ensure_writer(Some(100))
+            .begin_write(Some(100))
             .await
             .expect("writer 1 acquires publication");
         let takeover = LeaseAuthority::new(meta.clone(), 2, 50, 0);
         let _takeover_lease = takeover
-            .ensure_writer(Some(151))
+            .begin_write(Some(151))
             .await
             .expect("writer 2 takes over publication");
 

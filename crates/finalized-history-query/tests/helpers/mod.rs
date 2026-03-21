@@ -15,7 +15,7 @@ use finalized_history_query::store::publication::{CasOutcome, PublicationStore};
 use finalized_history_query::store::traits::{
     BlobStore, DelCond, MetaStore, Page, PutCond, PutResult, Record,
 };
-use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority};
+use finalized_history_query::{Clause, Error, LogFilter, WriteAuthority, WriteSession};
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
 
@@ -129,10 +129,10 @@ pub async fn acquire_lease<P: PublicationStore + Clone>(
     lease_blocks: u64,
 ) -> finalized_history_query::Result<u64> {
     let authority = LeaseAuthority::new(publication_store, owner_id, lease_blocks, 0);
-    authority
-        .ensure_writer(Some(observed_upstream_finalized_block))
-        .await
-        .map(|state| state.indexed_finalized_head)
+    let session = authority
+        .begin_write(Some(observed_upstream_finalized_block))
+        .await?;
+    Ok(session.state().indexed_finalized_head)
 }
 
 pub fn controlled_observed_finalized_block() -> Option<u64> {
