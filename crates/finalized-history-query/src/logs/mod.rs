@@ -1,7 +1,6 @@
 pub mod codec;
 pub mod family;
 pub mod filter;
-pub mod index_spec;
 pub mod ingest;
 pub mod keys;
 pub mod log_ref;

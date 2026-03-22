@@ -1,15 +1,23 @@
-use crate::core::execution::ShardBitmapSet;
-use crate::core::ids::{LogId, LogLocalId, LogShard};
+use crate::core::clause::Clause;
+use crate::core::ids::{LogLocalId, LogShard};
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
-use crate::logs::index_spec::{ClauseKind, clause_values_20, clause_values_32};
-use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::keys::{MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN};
 use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
-use super::stream_bitmap::{fetch_union_log_level_with_cache, load_bitmap_page_meta, overlaps};
+use super::stream_bitmap::{load_bitmap_page_meta, overlaps};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::logs) enum ClauseKind {
+    Address,
+    Topic0,
+    Topic1,
+    Topic2,
+    Topic3,
+}
 
 #[derive(Debug, Clone)]
 pub(in crate::logs) struct IndexedClauseSpec {
@@ -23,6 +31,14 @@ pub(in crate::logs) struct PreparedShardClause {
     pub(in crate::logs) kind: ClauseKind,
     pub(in crate::logs) stream_ids: Vec<String>,
     pub(in crate::logs) estimated_count: u64,
+}
+
+pub(crate) fn is_too_broad(filter: &LogFilter, max_or_terms: usize) -> bool {
+    filter.max_or_terms() > max_or_terms
+}
+
+pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
+    local_from == 0 && local_to == MAX_LOCAL_ID
 }
 
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
@@ -166,7 +182,7 @@ async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
     Ok(estimated)
 }
 
-pub(in crate::logs) fn clause_kind_rank(kind: ClauseKind) -> u8 {
+fn clause_kind_rank(kind: ClauseKind) -> u8 {
     match kind {
         ClauseKind::Address => 0,
         ClauseKind::Topic1 => 1,
@@ -176,43 +192,18 @@ pub(in crate::logs) fn clause_kind_rank(kind: ClauseKind) -> u8 {
     }
 }
 
-async fn load_clause_sets<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    clause_specs: &[IndexedClauseSpec],
-    from_log_id: LogId,
-    to_log_id_inclusive: LogId,
-) -> Result<Vec<ShardBitmapSet>> {
-    let mut clause_sets = Vec::new();
-
-    for clause_spec in clause_specs {
-        let set = fetch_union_log_level_with_cache(
-            tables,
-            clause_spec.stream_kind,
-            &clause_spec.values,
-            from_log_id,
-            to_log_id_inclusive,
-        )
-        .await?;
-        clause_sets.push(set);
+fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
+    match clause {
+        Clause::Any => Vec::new(),
+        Clause::One(value) => vec![value.to_vec()],
+        Clause::Or(values) => values.iter().map(|value| value.to_vec()).collect(),
     }
-
-    Ok(clause_sets)
 }
 
-#[doc(hidden)]
-pub async fn load_clause_sets_for_benchmark<M: MetaStore + Clone, B: BlobStore + Clone>(
-    meta_store: &M,
-    blob_store: &B,
-    filter: &LogFilter,
-    from_log_id: LogId,
-    to_log_id_inclusive: LogId,
-) -> Result<Vec<ShardBitmapSet>> {
-    let tables = Tables::without_cache(meta_store.clone(), blob_store.clone());
-    load_clause_sets(
-        &tables,
-        &build_clause_specs(filter),
-        from_log_id,
-        to_log_id_inclusive,
-    )
-    .await
+fn clause_values_32(clause: &Clause<[u8; 32]>) -> Vec<Vec<u8>> {
+    match clause {
+        Clause::Any => Vec::new(),
+        Clause::One(value) => vec![value.to_vec()],
+        Clause::Or(values) => values.iter().map(|value| value.to_vec()).collect(),
+    }
 }

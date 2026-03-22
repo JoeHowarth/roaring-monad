@@ -2,8 +2,8 @@ use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
-use crate::error::{Error, Result};
-use crate::logs::index_spec::is_full_shard_range;
+use super::clause::is_full_shard_range;
+use crate::error::Result;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -39,59 +39,6 @@ pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobSt
     }
 
     Ok(out)
-}
-
-pub(in crate::logs) async fn fetch_union_log_level_with_cache<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    kind: &str,
-    values: &[Vec<u8>],
-    from_log_id: crate::core::ids::LogId,
-    to_log_id_inclusive: crate::core::ids::LogId,
-) -> Result<crate::core::execution::ShardBitmapSet> {
-    use std::collections::BTreeMap;
-
-    use crate::core::ids::LogShard;
-    let mut out = BTreeMap::new();
-    let from_shard = table_specs::log_shard(from_log_id);
-    let to_shard = table_specs::log_shard(to_log_id_inclusive);
-    let mut in_flight = FuturesUnordered::new();
-
-    for value in values {
-        for shard_raw in from_shard.get()..=to_shard.get() {
-            let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
-            let stream = table_specs::stream_id(kind, value, shard);
-            let (local_from, local_to) =
-                table_specs::local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
-            in_flight.push(async move {
-                let entries =
-                    load_stream_entries(tables, &stream, local_from.get(), local_to.get()).await?;
-                Ok::<(LogShard, RoaringBitmap), Error>((shard, entries))
-            });
-            if in_flight.len() >= STREAM_LOAD_CONCURRENCY
-                && let Some(result) = in_flight.next().await
-            {
-                merge_union_entries(&mut out, result?);
-            }
-        }
-    }
-
-    while let Some(result) = in_flight.next().await {
-        merge_union_entries(&mut out, result?);
-    }
-
-    Ok(out)
-}
-
-fn merge_union_entries(
-    out: &mut crate::core::execution::ShardBitmapSet,
-    (shard, entries): (crate::core::ids::LogShard, RoaringBitmap),
-) {
-    if entries.is_empty() {
-        return;
-    }
-    out.entry(shard)
-        .and_modify(|existing| *existing |= &entries)
-        .or_insert(entries);
 }
 
 pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(

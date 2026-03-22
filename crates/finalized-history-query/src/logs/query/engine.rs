@@ -1,5 +1,6 @@
 use roaring::RoaringBitmap;
 
+use super::clause::is_too_broad;
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
@@ -8,7 +9,6 @@ use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{RangeResolver, ResolvedBlockRange};
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
-use crate::logs::index_spec::is_too_broad;
 use crate::logs::log_ref::LogRef;
 use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
 use crate::logs::state::resolve_log_window;
