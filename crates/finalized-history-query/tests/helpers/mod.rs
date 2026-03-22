@@ -6,7 +6,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::ingest::authority::lease::LeaseAuthority;
+use finalized_history_query::ingest::authority::LeaseAuthority;
 use finalized_history_query::logs::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
