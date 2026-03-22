@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
-use crate::core::range::{RangeResolver, ResolvedBlockRange};
+use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
 use crate::logs::log_ref::LogRef;
@@ -35,14 +35,12 @@ impl<M: MetaStore, B: BlobStore> LogLocationResolver for LogMaterializer<'_, M, 
 #[derive(Debug, Clone)]
 pub struct LogsQueryEngine {
     max_or_terms: usize,
-    range_resolver: RangeResolver,
 }
 
 impl LogsQueryEngine {
     pub fn from_config(config: &Config) -> Self {
         Self {
             max_or_terms: config.planner_max_or_terms,
-            range_resolver: RangeResolver,
         }
     }
 
@@ -72,16 +70,14 @@ impl LogsQueryEngine {
             None => request.limit,
         };
 
-        let block_range = self
-            .range_resolver
-            .resolve(
-                tables,
-                publication_store,
-                request.from_block,
-                request.to_block,
-                request.order,
-            )
-            .await?;
+        let block_range = resolve_block_range(
+            tables,
+            publication_store,
+            request.from_block,
+            request.to_block,
+            request.order,
+        )
+        .await?;
         if block_range.is_empty() {
             return Ok(self.empty_page(&block_range));
         }

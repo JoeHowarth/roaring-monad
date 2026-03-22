@@ -40,7 +40,7 @@ async def query_logs(request, budget):
 
     effective_limit = min(request.limit, budget.max_results or request.limit)
 
-    block_window = range_resolver.resolve(
+    block_window = resolve_block_range(
         from_block=request.from_block,
         to_block=request.to_block,
         order=request.order,
@@ -48,7 +48,7 @@ async def query_logs(request, budget):
     if block_window.is_empty():
         return empty_page(block_window)
 
-    log_window = logs.window_resolver.resolve(block_window)
+    log_window = resolve_log_window(block_window)
     if log_window.is_empty():
         return empty_page(block_window)
 

@@ -48,10 +48,8 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
             return Ok(block_ref);
         }
 
-        let block_ref = if let Some(block_ref) = self
-            .range_resolver
-            .load_block_ref(self.tables, block_num)
-            .await?
+        let block_ref = if let Some(block_ref) =
+            crate::core::range::load_block_ref(self.tables, block_num).await?
         {
             block_ref
         } else {

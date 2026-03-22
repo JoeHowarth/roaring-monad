@@ -3,7 +3,6 @@ mod resolve;
 
 use std::collections::HashMap;
 
-use crate::core::range::RangeResolver;
 use crate::core::refs::BlockRef;
 use crate::logs::types::DirByBlock;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -17,7 +16,6 @@ pub(crate) struct ResolvedLogLocation {
 
 pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
-    range_resolver: RangeResolver,
     // directory_fragment_cache stays as a per-request HashMap because fragments
     // are assembled from multiple scannable table reads (not a single stored
     // value), and each DirByBlock is only 25 bytes. Not worth BytesCache.
@@ -31,7 +29,6 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     pub fn new(tables: &'a Tables<M, B>) -> Self {
         Self {
             tables,
-            range_resolver: RangeResolver,
             directory_fragment_cache: HashMap::new(),
             block_ref_cache: HashMap::new(),
         }

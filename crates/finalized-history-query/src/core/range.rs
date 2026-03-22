@@ -31,69 +31,62 @@ impl ResolvedBlockRange {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RangeResolver;
-
-impl RangeResolver {
-    pub async fn resolve<M: MetaStore, P: PublicationStore>(
-        &self,
-        tables: &Tables<M, impl BlobStore>,
-        publication_store: &P,
-        from_block: u64,
-        to_block: u64,
-        order: QueryOrder,
-    ) -> Result<ResolvedBlockRange> {
-        match order {
-            QueryOrder::Ascending => {}
-        }
-
-        if from_block > to_block {
-            return Err(Error::InvalidParams(
-                "from_block must be less than or equal to to_block",
-            ));
-        }
-
-        let finalized_head = publication_store
-            .load_finalized_head_state()
-            .await?
-            .indexed_finalized_head;
-
-        let anchor = if finalized_head == 0 {
-            BlockRef::zero(0)
-        } else {
-            self.load_block_ref(tables, finalized_head)
-                .await?
-                .unwrap_or_else(|| BlockRef::zero(finalized_head))
-        };
-
-        if finalized_head == 0 || from_block > finalized_head {
-            return Ok(ResolvedBlockRange::empty(anchor));
-        }
-
-        let clipped_to = to_block.min(finalized_head);
-        let Some(resolved_from_ref) = self.load_block_ref(tables, from_block).await? else {
-            return Ok(ResolvedBlockRange::empty(anchor));
-        };
-        let Some(resolved_to_ref) = self.load_block_ref(tables, clipped_to).await? else {
-            return Ok(ResolvedBlockRange::empty(anchor));
-        };
-
-        Ok(ResolvedBlockRange {
-            from_block,
-            to_block: clipped_to,
-            resolved_from_ref,
-            resolved_to_ref,
-            examined_endpoint_ref: resolved_to_ref,
-        })
+pub async fn resolve_block_range<M: MetaStore, P: PublicationStore>(
+    tables: &Tables<M, impl BlobStore>,
+    publication_store: &P,
+    from_block: u64,
+    to_block: u64,
+    order: QueryOrder,
+) -> Result<ResolvedBlockRange> {
+    match order {
+        QueryOrder::Ascending => {}
     }
 
-    pub async fn load_block_ref<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        block_num: u64,
-    ) -> Result<Option<BlockRef>> {
-        Ok(load_block_identity(tables, block_num)
-            .await?
-            .map(|identity| identity.into_block_ref()))
+    if from_block > to_block {
+        return Err(Error::InvalidParams(
+            "from_block must be less than or equal to to_block",
+        ));
     }
+
+    let finalized_head = publication_store
+        .load_finalized_head_state()
+        .await?
+        .indexed_finalized_head;
+
+    let anchor = if finalized_head == 0 {
+        BlockRef::zero(0)
+    } else {
+        load_block_ref(tables, finalized_head)
+            .await?
+            .unwrap_or_else(|| BlockRef::zero(finalized_head))
+    };
+
+    if finalized_head == 0 || from_block > finalized_head {
+        return Ok(ResolvedBlockRange::empty(anchor));
+    }
+
+    let clipped_to = to_block.min(finalized_head);
+    let Some(resolved_from_ref) = load_block_ref(tables, from_block).await? else {
+        return Ok(ResolvedBlockRange::empty(anchor));
+    };
+    let Some(resolved_to_ref) = load_block_ref(tables, clipped_to).await? else {
+        return Ok(ResolvedBlockRange::empty(anchor));
+    };
+
+    Ok(ResolvedBlockRange {
+        from_block,
+        to_block: clipped_to,
+        resolved_from_ref,
+        resolved_to_ref,
+        examined_endpoint_ref: resolved_to_ref,
+    })
+}
+
+pub async fn load_block_ref<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block_num: u64,
+) -> Result<Option<BlockRef>> {
+    Ok(load_block_identity(tables, block_num)
+        .await?
+        .map(|identity| identity.into_block_ref()))
 }
