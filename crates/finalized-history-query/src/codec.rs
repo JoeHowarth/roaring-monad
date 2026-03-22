@@ -129,7 +129,6 @@ pub(crate) use fixed_codec;
 
 use bytes::Bytes;
 
-use crate::error::{Error, Result};
 use crate::store::publication::PublicationState;
 
 const PUBLICATION_STATE_VERSION: u8 = 4;
@@ -148,15 +147,6 @@ fixed_codec! {
     }
 }
 
-pub fn encode_u64(v: u64) -> Bytes {
+pub(crate) fn encode_u64(v: u64) -> Bytes {
     Bytes::copy_from_slice(&v.to_be_bytes())
-}
-
-pub fn decode_u64(bytes: &[u8]) -> Result<u64> {
-    if bytes.len() != 8 {
-        return Err(Error::Decode("invalid u64 length"));
-    }
-    let mut v = [0u8; 8];
-    v.copy_from_slice(bytes);
-    Ok(u64::from_be_bytes(v))
 }

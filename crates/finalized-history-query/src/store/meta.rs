@@ -15,18 +15,12 @@ pub struct InMemoryMetaStore {
     scan_inner: Arc<RwLock<BTreeMap<(ScannableTableId, Vec<u8>, Vec<u8>), Record>>>,
 }
 
-impl InMemoryMetaStore {
-    pub fn with_min_epoch(_min_epoch: u64) -> Self {
+impl Default for InMemoryMetaStore {
+    fn default() -> Self {
         Self {
             inner: Arc::new(RwLock::new(BTreeMap::new())),
             scan_inner: Arc::new(RwLock::new(BTreeMap::new())),
         }
-    }
-}
-
-impl Default for InMemoryMetaStore {
-    fn default() -> Self {
-        Self::with_min_epoch(0)
     }
 }
 

@@ -3,7 +3,6 @@ use crate::error::Result;
 use crate::logs::family::LogsFamily;
 use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
-use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::{Trace, TraceStartupState, TracesFamily};
 use crate::txs::{Tx, TxStartupState, TxsFamily};
@@ -18,13 +17,6 @@ pub struct FinalizedBlock {
     pub logs: Vec<Log>,
     pub txs: Vec<Tx>,
     pub traces: Vec<Trace>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StartupState {
-    pub head_state: FinalizedHeadState,
-    pub family_states: FamilyStates,
-    pub warm_streams: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -108,26 +100,4 @@ impl Families {
                 .await?,
         })
     }
-}
-
-pub async fn startup_state<M, P, B>(
-    runtime: &Runtime<M, B>,
-    publication_store: &P,
-    families: &Families,
-    warm_streams: usize,
-) -> Result<StartupState>
-where
-    M: MetaStore,
-    P: PublicationStore,
-    B: BlobStore,
-{
-    let head_state = publication_store.load_finalized_head_state().await?;
-    let family_states = families
-        .load_startup_state(runtime, head_state.indexed_finalized_head)
-        .await?;
-    Ok(StartupState {
-        head_state,
-        family_states,
-        warm_streams,
-    })
 }
