@@ -86,3 +86,39 @@ fn crc32_like(bytes: &[u8]) -> u32 {
     bytes.hash(&mut h);
     (h.finish() & 0xffff_ffff) as u32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_rejects_corrupted_payload() {
+        let mut bm = RoaringBitmap::new();
+        bm.insert(5);
+        let blob = BitmapBlob {
+            min_local: 5,
+            max_local: 5,
+            count: 1,
+            crc32: 0,
+            bitmap: bm,
+        };
+        let mut encoded = encode_bitmap_blob(&blob).expect("encode").to_vec();
+        // Corrupt one byte in the bitmap payload (after the header).
+        let last = encoded.len() - 1;
+        encoded[last] ^= 0xff;
+        let err = decode_bitmap_blob(&encoded).unwrap_err();
+        assert!(
+            err.to_string().contains("checksum"),
+            "expected checksum error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_truncated_input() {
+        let err = decode_bitmap_blob(&[0u8; 4]).unwrap_err();
+        assert!(
+            err.to_string().contains("too short"),
+            "expected too-short error, got: {err}"
+        );
+    }
+}
