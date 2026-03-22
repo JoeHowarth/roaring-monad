@@ -3,8 +3,14 @@ mod helpers;
 
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
+use finalized_history_query::logs::keys::{BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE};
+use finalized_history_query::logs::table_specs::{
+    BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec,
+};
+use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::traits::{BlobStore, MetaStore};
 use futures::executor::block_on;
 
 use helpers::*;
@@ -102,6 +108,50 @@ fn ingest_rejects_parent_hash_mismatch_within_batch() {
 }
 
 // --- Empty logs in a block ---
+
+#[test]
+fn ingest_block_with_zero_logs_writes_empty_artifacts() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            meta.clone(),
+            blob.clone(),
+            1,
+        );
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect("ingest empty block");
+
+        // block_record must exist with count=0.
+        let record_bytes = meta
+            .get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
+            .await
+            .expect("read block record")
+            .expect("block record must be present for empty block");
+        let record = BlockRecord::decode(&record_bytes.value).expect("decode");
+        assert_eq!(record.count, 0);
+
+        // block_log_header must exist (sentinel with one offset).
+        let header_bytes = meta
+            .get(BLOCK_LOG_HEADER_TABLE, &BlockLogHeaderSpec::key(1))
+            .await
+            .expect("read header")
+            .expect("block_log_header must be present for empty block");
+        let header = BlockLogHeader::decode(&header_bytes.value).expect("decode");
+        assert_eq!(header.offsets, vec![0]);
+
+        // block_log_blob must exist (empty).
+        let blob_bytes = blob
+            .get_blob(BlockLogBlobSpec::TABLE, &BlockLogBlobSpec::key(1))
+            .await
+            .expect("read blob")
+            .expect("block_log_blob must be present for empty block");
+        assert!(blob_bytes.is_empty());
+    });
+}
 
 #[test]
 fn ingest_block_with_zero_logs_advances_head() {

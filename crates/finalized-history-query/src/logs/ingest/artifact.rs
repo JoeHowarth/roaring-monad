@@ -18,10 +18,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     logs: &[Log],
     _first_log_id: u64,
 ) -> Result<()> {
-    if logs.is_empty() {
-        return Ok(());
-    }
-
     let (block_blob, header) = encode_block_log_blob(logs)?;
     tables
         .point_log_payloads()

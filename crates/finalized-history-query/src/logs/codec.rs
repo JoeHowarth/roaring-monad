@@ -174,7 +174,7 @@ impl BlockLogHeader {
                 .try_into()
                 .map_err(|_| Error::Decode("block log header count"))?,
         ) as usize;
-        if count < 2 {
+        if count < 1 {
             return Err(Error::Decode("block log header missing sentinel"));
         }
         let expected_len = 1 + 4 + count * 4;
