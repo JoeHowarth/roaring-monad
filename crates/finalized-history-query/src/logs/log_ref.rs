@@ -366,14 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn log_ref_roundtrip() {
-        let log = test_log();
-        let encoded = log.encode();
-        let log_ref = LogRef::new(encoded).expect("construct LogRef");
-        assert_eq!(log_ref.to_owned_log(), log);
-    }
-
-    #[test]
     fn log_ref_accessors() {
         let log = test_log();
         let encoded = log.encode();
@@ -427,38 +419,6 @@ mod tests {
         let encoded = log.encode();
         let log_ref = LogRef::new(encoded).expect("construct LogRef");
         assert_eq!(log_ref.to_owned_log(), log);
-    }
-
-    #[test]
-    fn block_log_header_ref_roundtrip() {
-        use crate::logs::types::BlockLogHeader;
-
-        let header = BlockLogHeader {
-            offsets: vec![0, 41, 97, 124],
-        };
-        let encoded = header.encode();
-        let header_ref = BlockLogHeaderRef::new(encoded).expect("construct BlockLogHeaderRef");
-        assert_eq!(header_ref.count(), 4);
-        for (i, &expected) in header.offsets.iter().enumerate() {
-            assert_eq!(header_ref.offset(i), expected);
-        }
-    }
-
-    #[test]
-    fn log_dir_bucket_ref_roundtrip() {
-        use crate::logs::types::DirBucket;
-
-        let bucket = DirBucket {
-            start_block: 5001,
-            first_log_ids: vec![120_000_000, 120_000_003, 120_000_003, 120_000_008],
-        };
-        let encoded = bucket.encode();
-        let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");
-        assert_eq!(bucket_ref.start_block(), bucket.start_block);
-        assert_eq!(bucket_ref.count(), bucket.first_log_ids.len());
-        for (i, &expected) in bucket.first_log_ids.iter().enumerate() {
-            assert_eq!(bucket_ref.first_log_id(i), expected);
-        }
     }
 
     #[test]

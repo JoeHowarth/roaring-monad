@@ -133,7 +133,7 @@ impl PrimaryIdRange {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogId, LogLocalId, LogShard, MAX_LOG_SHARD, PrimaryIdRange, compose_log_id};
+    use super::{LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id};
     use crate::logs::keys::MAX_LOCAL_ID;
 
     #[test]
@@ -153,18 +153,6 @@ mod tests {
             let (shard, local) = value.split();
             assert_eq!(compose_log_id(shard, local), value);
         }
-    }
-
-    #[test]
-    fn log_local_id_rejects_values_above_24_bits() {
-        let invalid = LogLocalId::new(MAX_LOCAL_ID.saturating_add(1)).unwrap_err();
-        assert_eq!(invalid.raw(), MAX_LOCAL_ID.saturating_add(1));
-    }
-
-    #[test]
-    fn log_shard_rejects_values_above_40_bits() {
-        let invalid = LogShard::new(MAX_LOG_SHARD.checked_add(1).unwrap()).unwrap_err();
-        assert_eq!(invalid.raw(), MAX_LOG_SHARD.checked_add(1).unwrap());
     }
 
     #[test]

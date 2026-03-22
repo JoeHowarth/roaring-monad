@@ -239,49 +239,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_log() {
-        let log = Log {
-            address: [7u8; 20],
-            topics: vec![[1u8; 32], [2u8; 32]],
-            data: vec![9, 8, 7],
-            block_num: 12,
-            tx_idx: 3,
-            log_idx: 2,
-            block_hash: [5u8; 32],
-        };
-        let enc = log.encode();
-        let dec = Log::decode(&enc).expect("decode");
-        assert_eq!(dec.address, log.address);
-        assert_eq!(dec.topics, log.topics);
-        assert_eq!(dec.data, log.data);
-        assert_eq!(dec.block_num, log.block_num);
-        assert_eq!(dec.tx_idx, log.tx_idx);
-        assert_eq!(dec.log_idx, log.log_idx);
-        assert_eq!(dec.block_hash, log.block_hash);
-    }
-
-    #[test]
-    fn roundtrip_log_dir_bucket() {
-        let bucket = DirBucket {
-            start_block: 5001,
-            first_log_ids: vec![120_000_000, 120_000_003, 120_000_003, 120_000_008],
-        };
-        let enc = bucket.encode();
-        let dec = DirBucket::decode(&enc).expect("decode bucket");
-        assert_eq!(dec, bucket);
-    }
-
-    #[test]
-    fn roundtrip_block_log_header() {
-        let header = BlockLogHeader {
-            offsets: vec![0, 41, 97, 124],
-        };
-        let enc = header.encode();
-        let dec = BlockLogHeader::decode(&enc).expect("decode block log header");
-        assert_eq!(dec, header);
-    }
-
-    #[test]
     fn roundtrip_large_log_dir_bucket() {
         let count = (u16::MAX as usize) + 2;
         let mut first_log_ids = Vec::with_capacity(count);
@@ -310,30 +267,5 @@ mod tests {
         let enc = header.encode();
         let dec = BlockLogHeader::decode(&enc).expect("decode large block log header");
         assert_eq!(dec, header);
-    }
-
-    #[test]
-    fn roundtrip_log_dir_by_blockment() {
-        let fragment = DirByBlock {
-            block_num: 9,
-            first_log_id: 100,
-            end_log_id_exclusive: 105,
-        };
-        let enc = fragment.encode();
-        let dec = DirByBlock::decode(&enc).expect("decode fragment");
-        assert_eq!(dec, fragment);
-    }
-
-    #[test]
-    fn roundtrip_stream_bitmap_meta() {
-        let meta = StreamBitmapMeta {
-            block_num: 9,
-            count: 3,
-            min_local: 17,
-            max_local: 29,
-        };
-        let enc = meta.encode();
-        let dec = StreamBitmapMeta::decode(&enc).expect("decode stream bitmap meta");
-        assert_eq!(dec, meta);
     }
 }

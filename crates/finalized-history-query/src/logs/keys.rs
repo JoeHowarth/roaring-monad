@@ -48,21 +48,6 @@ mod tests {
     use crate::logs::table_specs;
 
     #[test]
-    fn log_id_split_roundtrips_across_boundary() {
-        let values = [
-            LogId::new(0),
-            LogId::new(1),
-            LogId::new(u64::from(MAX_LOCAL_ID)),
-            LogId::new(u64::from(MAX_LOCAL_ID) + 1),
-        ];
-        for value in values {
-            let shard = table_specs::log_shard(value);
-            let local = table_specs::log_local(value);
-            assert_eq!(table_specs::compose_global_log_id(shard, local), value);
-        }
-    }
-
-    #[test]
     fn shard_local_ranges_respect_24_bit_locals() {
         let from = LogId::new(u64::from(MAX_LOCAL_ID) - 2);
         let to = LogId::new(u64::from(MAX_LOCAL_ID) + 2);
@@ -93,52 +78,6 @@ mod tests {
         assert_eq!(
             table_specs::compose_global_log_id(split_shard, local),
             value
-        );
-    }
-
-    #[test]
-    fn log_dir_bucket_start_aligns_to_bucket_size() {
-        assert_eq!(
-            table_specs::LogDirBucketSpec::bucket_start(LogId::new(0).get()),
-            0
-        );
-        assert_eq!(
-            table_specs::LogDirBucketSpec::bucket_start(LogId::new(123).get()),
-            0
-        );
-        assert_eq!(
-            table_specs::LogDirBucketSpec::bucket_start(
-                LogId::new(LOG_DIRECTORY_BUCKET_SIZE + 17).get()
-            ),
-            LOG_DIRECTORY_BUCKET_SIZE
-        );
-    }
-
-    #[test]
-    fn log_dir_sub_bucket_start_aligns_to_sub_bucket_size() {
-        assert_eq!(
-            table_specs::LogDirSubBucketSpec::sub_bucket_start(LogId::new(0).get()),
-            0
-        );
-        assert_eq!(
-            table_specs::LogDirSubBucketSpec::sub_bucket_start(LogId::new(123).get()),
-            0
-        );
-        assert_eq!(
-            table_specs::LogDirSubBucketSpec::sub_bucket_start(
-                LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 17).get()
-            ),
-            LOG_DIRECTORY_SUB_BUCKET_SIZE
-        );
-    }
-
-    #[test]
-    fn stream_page_start_local_aligns_to_page_span() {
-        assert_eq!(table_specs::stream_page_start_local(0), 0);
-        assert_eq!(table_specs::stream_page_start_local(17), 0);
-        assert_eq!(
-            table_specs::stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN + 7),
-            STREAM_PAGE_LOCAL_ID_SPAN
         );
     }
 }

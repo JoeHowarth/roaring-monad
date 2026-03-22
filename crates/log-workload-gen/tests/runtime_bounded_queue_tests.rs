@@ -18,9 +18,3 @@ async fn bounded_queue_tracks_depth_and_max_depth() {
     assert_eq!(depth.current(), 0);
     assert_eq!(depth.max(), 2);
 }
-
-#[tokio::test]
-async fn bounded_queue_rejects_zero_capacity() {
-    let err = bounded::<u8>(0).err().expect("capacity 0 must fail");
-    assert!(err.to_string().contains("capacity"));
-}

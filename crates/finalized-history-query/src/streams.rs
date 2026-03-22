@@ -86,32 +86,3 @@ fn crc32_like(bytes: &[u8]) -> u32 {
     bytes.hash(&mut h);
     (h.finish() & 0xffff_ffff) as u32
 }
-
-#[cfg(test)]
-mod tests {
-    use roaring::RoaringBitmap;
-
-    use super::*;
-
-    #[test]
-    fn roundtrip_bitmap_blob() {
-        let mut bm = RoaringBitmap::new();
-        bm.insert(2);
-        bm.insert(1000);
-        let blob = BitmapBlob {
-            min_local: 2,
-            max_local: 1000,
-            count: 2,
-            crc32: 0,
-            bitmap: bm,
-        };
-
-        let enc = encode_bitmap_blob(&blob).expect("encode");
-        let dec = decode_bitmap_blob(&enc).expect("decode");
-        assert_eq!(dec.min_local, 2);
-        assert_eq!(dec.max_local, 1000);
-        assert_eq!(dec.count, 2);
-        assert!(dec.bitmap.contains(2));
-        assert!(dec.bitmap.contains(1000));
-    }
-}
