@@ -1,7 +1,8 @@
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
-use crate::logs::types::{Address20, Hash32, Log, Topic32};
+use crate::family::Hash32;
+use crate::logs::types::{Address20, Log, Topic32};
 
 /// Zero-copy view over an encoded log record.
 ///

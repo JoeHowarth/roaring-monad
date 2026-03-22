@@ -1,6 +1,5 @@
 use crate::core::ids::LogId;
-pub use crate::family::Hash32;
-pub use crate::store::publication::PublicationState;
+use crate::family::Hash32;
 
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];

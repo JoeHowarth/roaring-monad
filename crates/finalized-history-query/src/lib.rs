@@ -6,7 +6,6 @@ pub mod error;
 pub mod family;
 pub mod ingest;
 pub mod logs;
-pub mod metrics;
 pub mod runtime;
 pub mod startup;
 pub mod store;

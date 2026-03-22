@@ -3,13 +3,10 @@ use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
 use crate::error::{Error, Result};
-use crate::logs::ingest::compact_stream_page;
 use crate::logs::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
 use crate::logs::table_specs::{self, OpenBitmapPageSpec};
-use crate::store::traits::BlobStore;
 use crate::store::traits::{DelCond, MetaStore, PutCond};
 use crate::tables::ScannableTableSpec;
-use crate::tables::Tables;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {
@@ -216,40 +213,7 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         .collect())
 }
 
-pub async fn repair_open_bitmap_page_markers<M: MetaStore, B: BlobStore>(
-    meta_store: &M,
-    blob_store: &B,
-    next_log_id: u64,
-) -> Result<()> {
-    let tables = Tables::without_cache(meta_store.clone(), blob_store.clone());
-    let frontier_shard = table_specs::log_shard(LogId::new(next_log_id));
-    for shard in shard_range_inclusive(
-        LogShard::new(0).expect("0 is a valid shard"),
-        frontier_shard,
-    )? {
-        for page in list_open_bitmap_pages_for_shard(meta_store, shard)
-            .await?
-            .into_iter()
-            .filter(|page| page.is_sealed_at(next_log_id))
-        {
-            let _ = compact_stream_page(&tables, &page.stream_id, page.page_start_local).await?;
-            delete_open_bitmap_page(meta_store, &page).await?;
-        }
-    }
-    Ok(())
-}
-
-fn shard_range_inclusive(from: LogShard, to: LogShard) -> Result<Vec<LogShard>> {
-    let mut out = Vec::new();
-    let mut raw = from.get();
-    while raw <= to.get() {
-        out.push(LogShard::new(raw).map_err(|_| Error::Decode("invalid shard range"))?);
-        raw = raw.saturating_add(1);
-    }
-    Ok(out)
-}
-
-pub fn decode_open_bitmap_page_key(partition: &[u8], clustering: &[u8]) -> Result<OpenBitmapPage> {
+fn decode_open_bitmap_page_key(partition: &[u8], clustering: &[u8]) -> Result<OpenBitmapPage> {
     if partition.len() != 8 {
         return Err(Error::Decode("invalid open_bitmap_page partition"));
     }
