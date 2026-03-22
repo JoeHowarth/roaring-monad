@@ -11,9 +11,9 @@ use crate::logs::filter::LogFilter;
 use crate::logs::index_spec::is_too_broad;
 use crate::logs::log_ref::LogRef;
 use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
+use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
-use crate::logs::window::LogWindowResolver;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -36,7 +36,6 @@ impl<M: MetaStore, B: BlobStore> LogLocationResolver for LogMaterializer<'_, M, 
 pub struct LogsQueryEngine {
     max_or_terms: usize,
     range_resolver: RangeResolver,
-    window_resolver: LogWindowResolver,
 }
 
 impl LogsQueryEngine {
@@ -44,7 +43,6 @@ impl LogsQueryEngine {
         Self {
             max_or_terms: config.planner_max_or_terms,
             range_resolver: RangeResolver,
-            window_resolver: LogWindowResolver,
         }
     }
 
@@ -88,7 +86,7 @@ impl LogsQueryEngine {
             return Ok(self.empty_page(&block_range));
         }
 
-        let Some(mut log_window) = self.window_resolver.resolve(tables, &block_range).await? else {
+        let Some(mut log_window) = resolve_log_window(tables, &block_range).await? else {
             return Ok(self.empty_page(&block_range));
         };
 

@@ -35,10 +35,11 @@ pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_num: u64,
 ) -> Result<Option<BlockIdentity>> {
-    let Some(block_record) = tables.block_records().get(block_num).await? else {
-        return Ok(None);
-    };
-    Ok(Some(BlockIdentity::from((block_num, &block_record))))
+    tables
+        .block_records()
+        .get(block_num)
+        .await
+        .map(|opt| opt.map(|block_record| BlockIdentity::from((block_num, &block_record))))
 }
 
 pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(

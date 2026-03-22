@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roaring::RoaringBitmap;
 
-use crate::block::FinalizedBlock;
 use crate::core::ids::LogId;
 use crate::error::Result;
+use crate::family::FinalizedBlock;
 use crate::logs::table_specs;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};

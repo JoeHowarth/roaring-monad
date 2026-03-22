@@ -1,9 +1,9 @@
 use bytes::Bytes;
 
-use crate::block::FinalizedBlock;
 use crate::codec::encode_u64;
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::family::FinalizedBlock;
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{BlockHashIndexSpec, LogDirSubBucketSpec};
 use crate::logs::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};

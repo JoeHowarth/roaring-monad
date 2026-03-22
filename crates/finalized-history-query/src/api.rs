@@ -1,9 +1,9 @@
-use crate::block::FinalizedBlock;
 use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::family::Families;
+use crate::family::FinalizedBlock;
 use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
 use crate::ingest::engine::IngestEngine;
 use crate::logs::filter::LogFilter;

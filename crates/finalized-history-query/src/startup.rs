@@ -4,8 +4,8 @@ use crate::logs::types::LogSequencingState;
 use crate::runtime::Runtime;
 use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::types::TraceStartupState;
-use crate::txs::types::TxStartupState;
+use crate::traces::TraceStartupState;
+use crate::txs::TxStartupState;
 
 #[derive(Debug, Clone)]
 pub struct StartupPlan {

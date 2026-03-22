@@ -1,9 +1,17 @@
-use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::family::{FinalizedBlock, Hash32};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::txs::types::TxStartupState;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Tx {
+    pub tx_idx: u32,
+    pub tx_hash: Hash32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TxStartupState;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TxsFamily;

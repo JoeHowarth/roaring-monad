@@ -1,8 +1,8 @@
 use crate::api::IngestOutcome;
-use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
+use crate::family::FinalizedBlock;
 use crate::family::{Families, FamilyBlockWrites};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
 use crate::runtime::Runtime;

@@ -1,15 +1,24 @@
-use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::error::Result;
 use crate::logs::family::LogsFamily;
-use crate::logs::types::LogSequencingState;
+use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
 use crate::store::publication::{FinalizedHeadState, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::family::TracesFamily;
-use crate::traces::types::TraceStartupState;
-use crate::txs::family::TxsFamily;
-use crate::txs::types::TxStartupState;
+use crate::traces::{Trace, TraceStartupState, TracesFamily};
+use crate::txs::{Tx, TxStartupState, TxsFamily};
+
+pub type Hash32 = [u8; 32];
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FinalizedBlock {
+    pub block_num: u64,
+    pub block_hash: Hash32,
+    pub parent_hash: Hash32,
+    pub logs: Vec<Log>,
+    pub txs: Vec<Tx>,
+    pub traces: Vec<Trace>,
+}
 
 #[derive(Debug, Clone)]
 pub struct StartupState {

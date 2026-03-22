@@ -1,4 +1,4 @@
-use crate::block::FinalizedBlock;
+use crate::family::FinalizedBlock;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamAppendStats {
@@ -19,7 +19,7 @@ pub fn estimate_stream_appends(block: &FinalizedBlock) -> StreamAppendStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::FinalizedBlock;
+    use crate::family::FinalizedBlock;
     use crate::logs::types::Log;
 
     #[test]

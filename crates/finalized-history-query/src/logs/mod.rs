@@ -10,4 +10,3 @@ pub mod query;
 pub mod state;
 pub mod table_specs;
 pub mod types;
-pub mod window;

@@ -1,8 +1,8 @@
-use crate::block::FinalizedBlock;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
+use crate::family::FinalizedBlock;
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
