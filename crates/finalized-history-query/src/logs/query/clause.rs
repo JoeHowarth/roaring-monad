@@ -2,15 +2,15 @@ use crate::core::clause::Clause;
 use crate::core::ids::{LogLocalId, LogShard};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::error::Result;
-use crate::kernel::sharded_streams::overlaps;
 use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
+use crate::query::planner::{
+    IndexedClause, PreparedClause, StreamPlanner, StreamSelector, clause_values,
+    prepare_shard_clauses as prepare_query_shard_clauses,
+};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
-
-use super::stream_bitmap::load_bitmap_page_meta;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::logs) enum ClauseKind {
@@ -23,17 +23,10 @@ pub(in crate::logs) enum ClauseKind {
 
 #[derive(Debug, Clone)]
 pub(in crate::logs) struct IndexedClauseSpec {
-    pub(in crate::logs) kind: ClauseKind,
-    pub(in crate::logs) stream_kind: &'static str,
-    pub(in crate::logs) values: Vec<Vec<u8>>,
+    pub(in crate::logs) inner: IndexedClause<ClauseKind>,
 }
 
-#[derive(Debug, Clone)]
-pub(in crate::logs) struct PreparedShardClause {
-    pub(in crate::logs) kind: ClauseKind,
-    pub(in crate::logs) stream_ids: Vec<String>,
-    pub(in crate::logs) estimated_count: u64,
-}
+pub(in crate::logs) type PreparedShardClause = PreparedClause<ClauseKind>;
 
 pub(crate) fn is_too_broad(filter: &LogFilter, max_or_terms: usize) -> bool {
     filter.max_or_terms() > max_or_terms
@@ -50,9 +43,16 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
         let values = clause_values_20(clause);
         if !values.is_empty() {
             clauses.push(IndexedClauseSpec {
-                kind: ClauseKind::Address,
-                stream_kind: "addr",
-                values,
+                inner: IndexedClause {
+                    kind: ClauseKind::Address,
+                    selectors: values
+                        .into_iter()
+                        .map(|value| StreamSelector {
+                            stream_kind: "addr",
+                            value,
+                        })
+                        .collect(),
+                },
             });
         }
     }
@@ -61,9 +61,16 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
         let values = clause_values_32(clause);
         if !values.is_empty() {
             clauses.push(IndexedClauseSpec {
-                kind: ClauseKind::Topic1,
-                stream_kind: "topic1",
-                values,
+                inner: IndexedClause {
+                    kind: ClauseKind::Topic1,
+                    selectors: values
+                        .into_iter()
+                        .map(|value| StreamSelector {
+                            stream_kind: "topic1",
+                            value,
+                        })
+                        .collect(),
+                },
             });
         }
     }
@@ -72,9 +79,16 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
         let values = clause_values_32(clause);
         if !values.is_empty() {
             clauses.push(IndexedClauseSpec {
-                kind: ClauseKind::Topic2,
-                stream_kind: "topic2",
-                values,
+                inner: IndexedClause {
+                    kind: ClauseKind::Topic2,
+                    selectors: values
+                        .into_iter()
+                        .map(|value| StreamSelector {
+                            stream_kind: "topic2",
+                            value,
+                        })
+                        .collect(),
+                },
             });
         }
     }
@@ -83,9 +97,16 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
         let values = clause_values_32(clause);
         if !values.is_empty() {
             clauses.push(IndexedClauseSpec {
-                kind: ClauseKind::Topic3,
-                stream_kind: "topic3",
-                values,
+                inner: IndexedClause {
+                    kind: ClauseKind::Topic3,
+                    selectors: values
+                        .into_iter()
+                        .map(|value| StreamSelector {
+                            stream_kind: "topic3",
+                            value,
+                        })
+                        .collect(),
+                },
             });
         }
     }
@@ -94,9 +115,16 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
         let values = clause_values_32(clause);
         if !values.is_empty() {
             clauses.push(IndexedClauseSpec {
-                kind: ClauseKind::Topic0,
-                stream_kind: "topic0",
-                values,
+                inner: IndexedClause {
+                    kind: ClauseKind::Topic0,
+                    selectors: values
+                        .into_iter()
+                        .map(|value| StreamSelector {
+                            stream_kind: "topic0",
+                            value,
+                        })
+                        .collect(),
+                },
             });
         }
     }
@@ -111,77 +139,20 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
     local_from: LogLocalId,
     local_to: LogLocalId,
 ) -> Result<Vec<PreparedShardClause>> {
-    let mut prepared = Vec::with_capacity(clause_specs.len());
-
-    for clause_spec in clause_specs {
-        let clause = prepare_shard_clause(tables, clause_spec, shard, local_from, local_to).await?;
-        prepared.push(clause);
-    }
-
-    prepared.sort_by_key(|clause| (clause.estimated_count, clause_kind_rank(clause.kind)));
-    Ok(prepared)
-}
-
-async fn prepare_shard_clause<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    clause_spec: &IndexedClauseSpec,
-    shard: LogShard,
-    local_from: LogLocalId,
-    local_to: LogLocalId,
-) -> Result<PreparedShardClause> {
-    let mut stream_ids = Vec::with_capacity(clause_spec.values.len());
-    let mut estimated_count = 0u64;
-
-    for value in &clause_spec.values {
-        let stream = table_specs::stream_id(clause_spec.stream_kind, value, shard);
-        estimated_count = estimated_count.saturating_add(
-            estimate_stream_overlap(tables, &stream, local_from.get(), local_to.get()).await?,
-        );
-        stream_ids.push(stream);
-    }
-
-    Ok(PreparedShardClause {
-        kind: clause_spec.kind,
-        stream_ids,
-        estimated_count,
-    })
-}
-
-async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream_id: &str,
-    local_from: u32,
-    local_to: u32,
-) -> Result<u64> {
-    let mut estimated = 0u64;
-    let mut page_start = table_specs::stream_page_start_local(local_from);
-    let last_page_start = table_specs::stream_page_start_local(local_to);
-
-    loop {
-        if let Some(meta) = load_bitmap_page_meta(tables, stream_id, page_start).await? {
-            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                estimated = estimated.saturating_add(u64::from(meta.count));
-            }
-        } else {
-            for bytes in tables
-                .bitmap_by_block()
-                .load_page_fragments(stream_id, page_start)
-                .await?
-            {
-                let meta = decode_bitmap_blob(&bytes)?;
-                if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                    estimated = estimated.saturating_add(u64::from(meta.count));
-                }
-            }
-        }
-
-        if page_start == last_page_start {
-            break;
-        }
-        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
-    }
-
-    Ok(estimated)
+    let planner = LogsStreamPlanner;
+    let shared_specs = clause_specs
+        .iter()
+        .map(|spec| spec.inner.clone())
+        .collect::<Vec<_>>();
+    prepare_query_shard_clauses(
+        tables,
+        &planner,
+        &shared_specs,
+        shard,
+        local_from.get(),
+        local_to.get(),
+    )
+    .await
 }
 
 fn clause_kind_rank(kind: ClauseKind) -> u8 {
@@ -194,18 +165,72 @@ fn clause_kind_rank(kind: ClauseKind) -> u8 {
     }
 }
 
-fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
-    match clause {
-        Clause::Any => Vec::new(),
-        Clause::One(value) => vec![value.to_vec()],
-        Clause::Or(values) => values.iter().map(|value| value.to_vec()).collect(),
+struct LogsStreamPlanner;
+
+impl StreamPlanner for LogsStreamPlanner {
+    type Shard = LogShard;
+    type ClauseKind = ClauseKind;
+    type BitmapMeta = crate::logs::types::StreamBitmapMeta;
+
+    fn stream_id(&self, selector: &StreamSelector, shard: Self::Shard) -> String {
+        table_specs::stream_id(selector.stream_kind, &selector.value, shard)
+    }
+
+    fn clause_sort_rank(&self, kind: Self::ClauseKind) -> u8 {
+        clause_kind_rank(kind)
+    }
+
+    fn first_page_start(&self, local_from: u32) -> u32 {
+        table_specs::stream_page_start_local(local_from)
+    }
+
+    fn last_page_start(&self, local_to: u32) -> u32 {
+        table_specs::stream_page_start_local(local_to)
+    }
+
+    fn next_page_start(&self, page_start: u32) -> u32 {
+        page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN)
+    }
+
+    fn meta_overlaps(&self, meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
+        crate::kernel::sharded_streams::overlaps(
+            meta.min_local,
+            meta.max_local,
+            local_from,
+            local_to,
+        )
+    }
+
+    fn meta_count(&self, meta: &Self::BitmapMeta) -> u32 {
+        meta.count
+    }
+
+    async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        stream_id: &str,
+        page_start: u32,
+    ) -> Result<Option<Self::BitmapMeta>> {
+        super::stream_bitmap::load_bitmap_page_meta(tables, stream_id, page_start).await
+    }
+
+    async fn load_page_fragments<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        stream_id: &str,
+        page_start: u32,
+    ) -> Result<Vec<bytes::Bytes>> {
+        tables
+            .bitmap_by_block()
+            .load_page_fragments(stream_id, page_start)
+            .await
     }
 }
 
+fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {
+    clause_values(clause)
+}
+
 fn clause_values_32(clause: &Clause<[u8; 32]>) -> Vec<Vec<u8>> {
-    match clause {
-        Clause::Any => Vec::new(),
-        Clause::One(value) => vec![value.to_vec()],
-        Clause::Or(values) => values.iter().map(|value| value.to_vec()).collect(),
-    }
+    clause_values(clause)
 }

@@ -1,18 +1,18 @@
 use bytes::Bytes;
-use futures::stream::{FuturesUnordered, StreamExt};
 use roaring::RoaringBitmap;
 
 use super::clause::is_full_shard_range;
 use crate::error::Result;
-use crate::kernel::sharded_streams::{merge_bitmap_bytes_into, overlaps};
+use crate::kernel::sharded_streams::overlaps;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
+use crate::query::bitmap::{
+    StreamBitmapLoader, load_prepared_clause_bitmap as load_query_prepared_clause_bitmap,
+};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 use super::clause::PreparedShardClause;
-
-pub(in crate::logs) const STREAM_LOAD_CONCURRENCY: usize = 32;
 
 pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
@@ -20,89 +20,14 @@ pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobSt
     local_from: u32,
     local_to: u32,
 ) -> Result<RoaringBitmap> {
-    let mut out = RoaringBitmap::new();
-    let mut in_flight = FuturesUnordered::new();
-
-    for stream_id in &prepared_clause.stream_ids {
-        in_flight.push(async move {
-            load_stream_entries(tables, stream_id, local_from, local_to).await
-        });
-        if in_flight.len() >= STREAM_LOAD_CONCURRENCY
-            && let Some(result) = in_flight.next().await
-        {
-            out |= &result?;
-        }
-    }
-
-    while let Some(result) = in_flight.next().await {
-        out |= &result?;
-    }
-
-    Ok(out)
-}
-
-pub(in crate::logs) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream: &str,
-    local_from: u32,
-    local_to: u32,
-) -> Result<RoaringBitmap> {
-    let mut out = RoaringBitmap::new();
-    let mut page_start = table_specs::stream_page_start_local(local_from);
-    let last_page_start = table_specs::stream_page_start_local(local_to);
-
-    loop {
-        if let Some(meta) = load_bitmap_page_meta(tables, stream, page_start).await? {
-            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
-                let loaded_page_blob = maybe_merge_cached_bitmap_blob(
-                    tables, stream, page_start, &mut out, local_from, local_to,
-                )
-                .await?;
-                if !loaded_page_blob {
-                    load_bitmap_by_block_entries_for_page(
-                        tables, stream, page_start, local_from, local_to, &mut out,
-                    )
-                    .await?;
-                }
-            }
-        } else {
-            load_bitmap_by_block_entries_for_page(
-                tables, stream, page_start, local_from, local_to, &mut out,
-            )
-            .await?;
-        }
-
-        if page_start == last_page_start {
-            break;
-        }
-        page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
-    }
-
-    Ok(out)
-}
-
-async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream: &str,
-    page_start: u32,
-    local_from: u32,
-    local_to: u32,
-    out: &mut RoaringBitmap,
-) -> Result<()> {
-    for bytes in tables
-        .bitmap_by_block()
-        .load_page_fragments(stream, page_start)
-        .await?
-    {
-        let _ = merge_bitmap_bytes_into(
-            &bytes,
-            out,
-            local_from,
-            local_to,
-            is_full_shard_range(local_from, local_to),
-        )?;
-    }
-    Ok(())
+    load_query_prepared_clause_bitmap(
+        tables,
+        &LogsBitmapLoader,
+        prepared_clause,
+        local_from,
+        local_to,
+    )
+    .await
 }
 
 pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
@@ -124,29 +49,65 @@ async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
         .await
 }
 
-async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream: &str,
-    page_start: u32,
-    out: &mut RoaringBitmap,
-    local_from: u32,
-    local_to: u32,
-) -> Result<bool> {
-    let Some(bytes) = load_bitmap_page_blob(tables, stream, page_start).await? else {
-        return Ok(false);
-    };
-    merge_bitmap_bytes_into(
-        &bytes,
-        out,
-        local_from,
-        local_to,
-        is_full_shard_range(local_from, local_to),
-    )
+struct LogsBitmapLoader;
+
+impl StreamBitmapLoader for LogsBitmapLoader {
+    type BitmapMeta = crate::logs::types::StreamBitmapMeta;
+
+    fn is_full_shard_range(&self, local_from: u32, local_to: u32) -> bool {
+        is_full_shard_range(local_from, local_to)
+    }
+
+    fn first_page_start(&self, local_from: u32) -> u32 {
+        table_specs::stream_page_start_local(local_from)
+    }
+
+    fn last_page_start(&self, local_to: u32) -> u32 {
+        table_specs::stream_page_start_local(local_to)
+    }
+
+    fn next_page_start(&self, page_start: u32) -> u32 {
+        page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN)
+    }
+
+    fn meta_overlaps(&self, meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
+        overlaps(meta.min_local, meta.max_local, local_from, local_to)
+    }
+
+    async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        stream: &str,
+        page_start: u32,
+    ) -> Result<Option<Self::BitmapMeta>> {
+        load_bitmap_page_meta(tables, stream, page_start).await
+    }
+
+    async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        stream: &str,
+        page_start: u32,
+    ) -> Result<Option<Bytes>> {
+        load_bitmap_page_blob(tables, stream, page_start).await
+    }
+
+    async fn load_page_fragments<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        stream: &str,
+        page_start: u32,
+    ) -> Result<Vec<Bytes>> {
+        tables
+            .bitmap_by_block()
+            .load_page_fragments(stream, page_start)
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::load_stream_entries;
+    use super::LogsBitmapLoader;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -158,6 +119,7 @@ mod tests {
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
     };
     use crate::logs::types::StreamBitmapMeta;
+    use crate::query::bitmap::load_stream_entries as load_query_stream_entries;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{
@@ -341,7 +303,7 @@ mod tests {
             .expect("write stream page meta");
 
             let tables = Tables::without_cache(meta, blob);
-            let entries = load_stream_entries(&tables, stream, 0, 20)
+            let entries = load_query_stream_entries(&tables, &LogsBitmapLoader, stream, 0, 20)
                 .await
                 .expect("load stream entries");
 
@@ -422,10 +384,10 @@ mod tests {
                 },
             );
 
-            let first = load_stream_entries(&tables, stream, 0, 20)
+            let first = load_query_stream_entries(&tables, &LogsBitmapLoader, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries(&tables, stream, 0, 20)
+            let second = load_query_stream_entries(&tables, &LogsBitmapLoader, stream, 0, 20)
                 .await
                 .expect("second load");
 
@@ -504,10 +466,10 @@ mod tests {
                 },
             );
 
-            let first = load_stream_entries(&tables, stream, 0, 20)
+            let first = load_query_stream_entries(&tables, &LogsBitmapLoader, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries(&tables, stream, 0, 20)
+            let second = load_query_stream_entries(&tables, &LogsBitmapLoader, stream, 0, 20)
                 .await
                 .expect("second load");
 
