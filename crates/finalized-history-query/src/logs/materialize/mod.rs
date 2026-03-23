@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::core::refs::BlockRef;
 use crate::logs::types::DirByBlock;
+use crate::query::runner::CandidateLocation;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -12,6 +13,16 @@ use crate::tables::Tables;
 pub(crate) struct ResolvedLogLocation {
     pub block_num: u64,
     pub local_ordinal: usize,
+}
+
+impl CandidateLocation for ResolvedLogLocation {
+    fn block_num(self) -> u64 {
+        self.block_num
+    }
+
+    fn local_ordinal(self) -> usize {
+        self.local_ordinal
+    }
 }
 
 pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {

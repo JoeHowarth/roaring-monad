@@ -6,6 +6,7 @@ use crate::core::ids::TraceId;
 use crate::core::range::load_block_ref;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
+use crate::query::runner::{CandidateLocation, QueryMaterializer};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
@@ -16,6 +17,16 @@ use crate::traces::types::{DirBucket, Trace};
 pub(crate) struct ResolvedTraceLocation {
     pub block_num: u64,
     pub local_ordinal: usize,
+}
+
+impl CandidateLocation for ResolvedTraceLocation {
+    fn block_num(self) -> u64 {
+        self.block_num
+    }
+
+    fn local_ordinal(self) -> usize {
+        self.local_ordinal
+    }
 }
 
 pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
@@ -137,6 +148,47 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
             .trace_payloads()
             .load_trace_at(block_num, local_ordinal)
             .await
+    }
+}
+
+impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, B> {
+    type Id = TraceId;
+    type Location = ResolvedTraceLocation;
+    type Item = Trace;
+    type Filter = TraceFilter;
+    type Output = Trace;
+
+    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
+        self.resolve_trace_id(id).await
+    }
+
+    async fn load_run(
+        &mut self,
+        run: &[(Self::Id, Self::Location)],
+    ) -> Result<Vec<(Self::Id, Self::Item)>> {
+        let mut items = Vec::with_capacity(run.len());
+        for (id, location) in run.iter().copied() {
+            let Some(item) = self
+                .load_trace_at(location.block_num, location.local_ordinal)
+                .await?
+            else {
+                continue;
+            };
+            items.push((id, item));
+        }
+        Ok(items)
+    }
+
+    async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
+        self.block_ref_for_trace(item).await
+    }
+
+    fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
+        self.exact_match_trace(item, filter)
+    }
+
+    fn into_output(item: Self::Item) -> Self::Output {
+        item
     }
 }
 

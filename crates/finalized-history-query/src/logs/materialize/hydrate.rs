@@ -5,6 +5,7 @@ use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
 use crate::logs::query::execution::PrimaryMaterializer;
 use crate::logs::state::load_log_block_record;
+use crate::query::runner::QueryMaterializer;
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::LogMaterializer;
@@ -68,5 +69,51 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
 
     fn exact_match(&self, item: &Self::Primary, filter: &Self::Filter) -> bool {
         exact_match(item, filter)
+    }
+}
+
+impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B> {
+    type Id = LogId;
+    type Location = super::ResolvedLogLocation;
+    type Item = LogRef;
+    type Filter = LogFilter;
+    type Output = crate::logs::types::Log;
+
+    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
+        self.resolve_log_id(id).await
+    }
+
+    async fn load_run(
+        &mut self,
+        run: &[(Self::Id, Self::Location)],
+    ) -> Result<Vec<(Self::Id, Self::Item)>> {
+        let Some((_, first)) = run.first().copied() else {
+            return Ok(Vec::new());
+        };
+        let last = run.last().expect("run must be non-empty").1;
+        let run_items = self
+            .load_contiguous_run(first.block_num, first.local_ordinal, last.local_ordinal)
+            .await?;
+        if run_items.len() != run.len() {
+            return Err(Error::NotFound);
+        }
+        Ok(run
+            .iter()
+            .copied()
+            .map(|(id, _)| id)
+            .zip(run_items)
+            .collect())
+    }
+
+    async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
+        PrimaryMaterializer::block_ref_for(self, item).await
+    }
+
+    fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
+        PrimaryMaterializer::exact_match(self, item, filter)
+    }
+
+    fn into_output(item: Self::Item) -> Self::Output {
+        item.to_owned_log()
     }
 }

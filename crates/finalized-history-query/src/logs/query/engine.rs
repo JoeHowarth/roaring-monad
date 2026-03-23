@@ -1,37 +1,24 @@
-use roaring::RoaringBitmap;
-
-use super::clause::is_too_broad;
-use super::execution::{MatchedPrimary, PrimaryMaterializer};
+use super::clause::{
+    ClauseKind, IndexedClauseSpec, build_clause_specs, is_too_broad, prepare_shard_clauses,
+};
+use super::stream_bitmap::load_prepared_clause_bitmap;
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
-use crate::core::page::{QueryPage, QueryPageMeta};
-use crate::core::range::{ResolvedBlockRange, resolve_block_range};
+use crate::core::ids::{LogId, LogLocalId, LogShard};
+use crate::core::page::QueryPage;
+use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
 use crate::logs::filter::LogFilter;
-use crate::logs::log_ref::LogRef;
-use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
+use crate::logs::materialize::LogMaterializer;
 use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
 use crate::query::normalized::{effective_limit, normalize_query};
+use crate::query::planner::PreparedClause;
+use crate::query::runner::{QueryDescriptor, build_page, empty_page, execute_indexed_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-
-use super::clause::{build_clause_specs, prepare_shard_clauses};
-use super::stream_bitmap::load_prepared_clause_bitmap;
-
-#[allow(async_fn_in_trait)]
-trait LogLocationResolver {
-    async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>>;
-}
-
-impl<M: MetaStore, B: BlobStore> LogLocationResolver for LogMaterializer<'_, M, B> {
-    async fn resolve_log_id(&mut self, id: LogId) -> Result<Option<ResolvedLogLocation>> {
-        LogMaterializer::resolve_log_id(self, id).await
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct LogsQueryEngine {
@@ -68,11 +55,11 @@ impl LogsQueryEngine {
         )
         .await?;
         if block_range.is_empty() {
-            return Ok(self.empty_page(&block_range));
+            return Ok(empty_page(&block_range));
         }
 
         let Some(log_window) = resolve_log_window(tables, &block_range).await? else {
-            return Ok(self.empty_page(&block_range));
+            return Ok(empty_page(&block_range));
         };
 
         if is_too_broad(&request.filter, self.max_or_terms) {
@@ -91,335 +78,95 @@ impl LogsQueryEngine {
             "resume_log_id outside resolved block window",
         )?
         else {
-            return Ok(self.empty_page(&block_range));
+            return Ok(empty_page(&block_range));
         };
-        let matched = self
-            .execute_indexed_query(
-                tables,
-                &request.filter,
-                (normalized.id_range.start, normalized.id_range.end_inclusive),
-                normalized.take,
-            )
-            .await?;
+        let descriptor = LogsQueryDescriptor;
+        let mut materializer = LogMaterializer::new(tables);
+        let matched = execute_indexed_query(
+            tables,
+            &descriptor,
+            &request.filter,
+            (normalized.id_range.start, normalized.id_range.end_inclusive),
+            normalized.take,
+            &mut materializer,
+        )
+        .await?;
 
-        Ok(self.build_page(normalized.block_range, normalized.effective_limit, matched))
+        Ok(build_page::<LogMaterializer<'_, M, B>>(
+            normalized.block_range,
+            normalized.effective_limit,
+            matched,
+        ))
+    }
+}
+
+struct LogsQueryDescriptor;
+
+impl QueryDescriptor for LogsQueryDescriptor {
+    type Id = LogId;
+    type Shard = LogShard;
+    type ClauseKind = ClauseKind;
+    type ClauseSpec = IndexedClauseSpec;
+    type Filter = LogFilter;
+
+    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
+        build_clause_specs(filter)
     }
 
-    fn empty_page(&self, block_range: &ResolvedBlockRange) -> QueryPage<Log> {
-        QueryPage {
-            items: Vec::new(),
-            meta: QueryPageMeta {
-                resolved_from_block: block_range.resolved_from_ref,
-                resolved_to_block: block_range.resolved_to_ref,
-                cursor_block: block_range.examined_endpoint_ref,
-                has_more: false,
-                next_resume_id: None,
-            },
-        }
+    fn first_shard_raw(&self, id: Self::Id) -> u64 {
+        id.shard().get()
     }
 
-    fn build_page(
+    fn last_shard_raw(&self, id: Self::Id) -> u64 {
+        id.shard().get()
+    }
+
+    fn shard_from_raw(&self, shard_raw: u64) -> Self::Shard {
+        LogShard::new(shard_raw).expect("shard derived from LogId range")
+    }
+
+    fn local_range_for_shard(
         &self,
-        block_range: ResolvedBlockRange,
-        effective_limit: usize,
-        mut matched: Vec<MatchedPrimary<LogRef>>,
-    ) -> QueryPage<Log> {
-        let has_more = matched.len() > effective_limit;
-        if has_more {
-            matched.truncate(effective_limit);
-        }
-
-        let next_resume_id = if has_more {
-            matched.last().map(|matched_log| matched_log.id.get())
-        } else {
-            None
-        };
-        let cursor_block = matched
-            .last()
-            .map(|matched_log| matched_log.block_ref)
-            .unwrap_or(block_range.examined_endpoint_ref);
-        // Convert LogRef → Log at the API boundary
-        let items = matched
-            .into_iter()
-            .map(|matched_log| matched_log.item.to_owned_log())
-            .collect();
-
-        QueryPage {
-            items,
-            meta: QueryPageMeta {
-                resolved_from_block: block_range.resolved_from_ref,
-                resolved_to_block: block_range.resolved_to_ref,
-                cursor_block,
-                has_more,
-                next_resume_id,
-            },
-        }
+        from: Self::Id,
+        to_inclusive: Self::Id,
+        shard: Self::Shard,
+    ) -> (u32, u32) {
+        let (local_from, local_to) = table_specs::local_range_for_shard(from, to_inclusive, shard);
+        (local_from.get(), local_to.get())
     }
 
-    async fn execute_indexed_query<M: MetaStore, B: BlobStore>(
+    fn compose_id(&self, shard: Self::Shard, local_raw: u32) -> Self::Id {
+        table_specs::compose_global_log_id(
+            shard,
+            LogLocalId::new(local_raw).expect("bitmap values must fit local-id"),
+        )
+    }
+
+    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
-        filter: &LogFilter,
-        id_window: (LogId, LogId),
-        take: usize,
-    ) -> Result<Vec<MatchedPrimary<LogRef>>> {
-        let (from_log_id, to_log_id_inclusive) = id_window;
-        let clause_specs = build_clause_specs(filter);
-        let mut matched = Vec::new();
-        let mut materializer = LogMaterializer::new(tables);
-
-        for shard_raw in from_log_id.shard().get()..=to_log_id_inclusive.shard().get() {
-            let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
-            let (local_from, local_to) =
-                table_specs::local_range_for_shard(from_log_id, to_log_id_inclusive, shard);
-            let shard_clauses =
-                prepare_shard_clauses(tables, &clause_specs, shard, local_from, local_to).await?;
-
-            if shard_clauses.is_empty() {
-                continue;
-            }
-
-            let mut shard_accumulator: Option<RoaringBitmap> = None;
-            for prepared_clause in shard_clauses {
-                let clause_bitmap = load_prepared_clause_bitmap(
-                    tables,
-                    &prepared_clause,
-                    local_from.get(),
-                    local_to.get(),
-                )
-                .await?;
-                if clause_bitmap.is_empty() {
-                    shard_accumulator = Some(RoaringBitmap::new());
-                    break;
-                }
-
-                match shard_accumulator.as_mut() {
-                    Some(accumulator) => {
-                        *accumulator &= &clause_bitmap;
-                        if accumulator.is_empty() {
-                            break;
-                        }
-                    }
-                    None => shard_accumulator = Some(clause_bitmap),
-                }
-            }
-
-            let Some(shard_accumulator) = shard_accumulator else {
-                continue;
-            };
-            if shard_accumulator.is_empty() {
-                continue;
-            }
-
-            let mut locals = shard_accumulator.into_iter().peekable();
-            while let Some(local_raw) = locals.next() {
-                let local = LogLocalId::new(local_raw).expect("bitmap values must fit local-id");
-                let id = compose_log_id(shard, local);
-                let Some(location) = materializer.resolve_log_id(id).await? else {
-                    continue;
-                };
-
-                let run = collect_contiguous_chunk(
-                    &mut locals,
-                    shard,
-                    (id, location),
-                    remaining_needed_for_chunk(take, matched.len()),
-                    &mut materializer,
-                )
-                .await?;
-
-                let run_items = materializer
-                    .load_contiguous_run(
-                        location.block_num,
-                        run.first().expect("run must be non-empty").1.local_ordinal,
-                        run.last().expect("run must be non-empty").1.local_ordinal,
-                    )
-                    .await?;
-                if run_items.len() != run.len() {
-                    return Err(Error::NotFound);
-                }
-                for ((run_id, _), item) in run.into_iter().zip(run_items) {
-                    if !materializer.exact_match(&item, filter) {
-                        continue;
-                    }
-
-                    let block_ref = materializer.block_ref_for(&item).await?;
-                    matched.push(MatchedPrimary {
-                        id: run_id,
-                        item,
-                        block_ref,
-                    });
-                    if matched.len() >= take {
-                        return Ok(matched);
-                    }
-                }
-            }
-        }
-
-        Ok(matched)
-    }
-}
-
-async fn collect_contiguous_chunk<I, R: LogLocationResolver>(
-    locals: &mut std::iter::Peekable<I>,
-    shard: LogShard,
-    first: (LogId, ResolvedLogLocation),
-    max_len: usize,
-    materializer: &mut R,
-) -> Result<Vec<(LogId, ResolvedLogLocation)>>
-where
-    I: Iterator<Item = u32>,
-{
-    let target_len = max_len.max(1);
-    let mut run = vec![first];
-    while run.len() < target_len {
-        let Some(&next_local_raw) = locals.peek() else {
-            break;
-        };
-        let next_local = LogLocalId::new(next_local_raw).expect("bitmap values must fit local-id");
-        let next_id = compose_log_id(shard, next_local);
-        let Some(next_location) = materializer.resolve_log_id(next_id).await? else {
-            let _ = locals.next();
-            continue;
-        };
-        let previous = run.last().expect("run must be non-empty").1;
-        if next_location.block_num != previous.block_num
-            || next_location.local_ordinal != previous.local_ordinal + 1
-        {
-            break;
-        }
-
-        let _ = locals.next();
-        run.push((next_id, next_location));
-    }
-    Ok(run)
-}
-
-fn remaining_needed_for_chunk(take: usize, matched_len: usize) -> usize {
-    take.saturating_sub(matched_len).max(1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ResolvedLogLocation, collect_contiguous_chunk};
-    use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
-    use std::collections::VecDeque;
-
-    use futures::executor::block_on;
-
-    struct StubResolver {
-        planned: VecDeque<(LogId, crate::Result<Option<ResolvedLogLocation>>)>,
+        clause_specs: &[Self::ClauseSpec],
+        shard: Self::Shard,
+        local_from: u32,
+        local_to: u32,
+    ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
+        prepare_shard_clauses(
+            tables,
+            clause_specs,
+            shard,
+            LogLocalId::new(local_from).expect("local range start must fit local-id"),
+            LogLocalId::new(local_to).expect("local range end must fit local-id"),
+        )
+        .await
     }
 
-    impl super::LogLocationResolver for StubResolver {
-        async fn resolve_log_id(
-            &mut self,
-            id: LogId,
-        ) -> crate::Result<Option<ResolvedLogLocation>> {
-            let (expected_id, outcome) = self.planned.pop_front().expect("planned resolution");
-            assert_eq!(id, expected_id, "unexpected resolve order");
-            outcome
-        }
-    }
-
-    #[test]
-    fn collect_contiguous_chunk_does_not_resolve_past_requested_prefix() {
-        block_on(async {
-            let shard = LogShard::new(0).expect("shard");
-            let mut locals = vec![1u32, 2u32].into_iter().peekable();
-            let first = (
-                compose_log_id(shard, LogLocalId::new(0).expect("local")),
-                ResolvedLogLocation {
-                    block_num: 7,
-                    local_ordinal: 0,
-                },
-            );
-            let second_id = compose_log_id(shard, LogLocalId::new(1).expect("local"));
-            let third_id = compose_log_id(shard, LogLocalId::new(2).expect("local"));
-            let mut resolver = StubResolver {
-                planned: VecDeque::from([
-                    (
-                        second_id,
-                        Ok(Some(ResolvedLogLocation {
-                            block_num: 7,
-                            local_ordinal: 1,
-                        })),
-                    ),
-                    (
-                        third_id,
-                        Err(crate::Error::Backend(
-                            "should not resolve third".to_string(),
-                        )),
-                    ),
-                ]),
-            };
-
-            let chunk = collect_contiguous_chunk(&mut locals, shard, first, 2, &mut resolver)
-                .await
-                .expect("collect chunk");
-
-            assert_eq!(chunk.len(), 2);
-            assert_eq!(locals.next(), Some(2));
-        });
-    }
-
-    #[test]
-    fn collect_contiguous_chunk_leaves_remaining_run_for_following_iterations() {
-        block_on(async {
-            let shard = LogShard::new(0).expect("shard");
-            let mut locals = vec![1u32, 2u32, 3u32].into_iter().peekable();
-            let first = (
-                compose_log_id(shard, LogLocalId::new(0).expect("local")),
-                ResolvedLogLocation {
-                    block_num: 7,
-                    local_ordinal: 0,
-                },
-            );
-            let second_id = compose_log_id(shard, LogLocalId::new(1).expect("local"));
-            let fourth_id = compose_log_id(shard, LogLocalId::new(3).expect("local"));
-            let mut resolver = StubResolver {
-                planned: VecDeque::from([
-                    (
-                        second_id,
-                        Ok(Some(ResolvedLogLocation {
-                            block_num: 7,
-                            local_ordinal: 1,
-                        })),
-                    ),
-                    (
-                        fourth_id,
-                        Ok(Some(ResolvedLogLocation {
-                            block_num: 7,
-                            local_ordinal: 3,
-                        })),
-                    ),
-                ]),
-            };
-
-            let first_chunk = collect_contiguous_chunk(&mut locals, shard, first, 2, &mut resolver)
-                .await
-                .expect("first chunk");
-            let next_local =
-                LogLocalId::new(locals.next().expect("remaining local")).expect("local");
-            let second_chunk = collect_contiguous_chunk(
-                &mut locals,
-                shard,
-                (
-                    compose_log_id(shard, next_local),
-                    ResolvedLogLocation {
-                        block_num: 7,
-                        local_ordinal: 2,
-                    },
-                ),
-                2,
-                &mut resolver,
-            )
-            .await
-            .expect("second chunk");
-
-            assert_eq!(first_chunk.len(), 2);
-            assert_eq!(second_chunk.len(), 2);
-            assert!(locals.next().is_none());
-        });
+    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        prepared_clause: &PreparedClause<Self::ClauseKind>,
+        local_from: u32,
+        local_to: u32,
+    ) -> Result<roaring::RoaringBitmap> {
+        load_prepared_clause_bitmap(tables, prepared_clause, local_from, local_to).await
     }
 }
