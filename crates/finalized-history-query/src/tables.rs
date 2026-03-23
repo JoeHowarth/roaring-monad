@@ -1,16 +1,37 @@
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use bytes::Bytes;
-use quick_cache::sync::Cache;
-use quick_cache::{DefaultHashBuilder, Lifecycle, OptionsBuilder, Weighter};
 
 use crate::codec::StorageCodec;
 use crate::codec::encode_u64;
 use crate::error::{Error, Result};
+use crate::kernel::blob_table::CachedBlobTable;
+pub use crate::kernel::cache::{
+    BytesCacheConfig, BytesCacheMetrics, HashMapTableBytesCache, TableCacheConfig,
+    TableCacheMetrics,
+};
+use crate::kernel::cache::{cache_for, no_cache};
+use crate::kernel::point_table::CachedPointTable;
+use crate::kernel::scannable_table::ScannableFragmentTable;
 use crate::logs::keys::read_u64_be;
-use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
+use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
+use crate::logs::table_specs::{
+    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
+    BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
+    LogDirSubBucketSpec,
+};
+use crate::logs::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
+use crate::store::traits::{
+    BlobStore, BlobTable, BlobTableId, KvTable, MetaStore, ScannableKvTable, ScannableTableId,
+    TableId,
+};
+use crate::traces::table_specs::{
+    BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
+    TraceBitmapPageMetaSpec, TraceBlockRecordSpec, TraceDirBucketSpec, TraceDirByBlockSpec,
+    TraceDirSubBucketSpec,
+};
+use crate::traces::types::{
+    BlockTraceHeader, DirBucket as TraceDirBucket, DirByBlock as TraceDirByBlock,
+    StreamBitmapMeta as TraceStreamBitmapMeta, TraceBlockRecord,
+};
 
 pub trait PointTableSpec {
     const TABLE: TableId;
@@ -22,375 +43,6 @@ pub trait ScannableTableSpec {
 
 pub trait BlobTableSpec {
     const TABLE: BlobTableId;
-}
-
-pub trait TableValueCodec: StorageCodec {}
-impl<T: StorageCodec> TableValueCodec for T {}
-use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
-use crate::logs::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
-    BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
-    LogDirSubBucketSpec,
-};
-use crate::logs::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
-use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
-use crate::traces::table_specs::{
-    BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
-    TraceBitmapPageMetaSpec, TraceBlockRecordSpec, TraceDirBucketSpec, TraceDirByBlockSpec,
-    TraceDirSubBucketSpec,
-};
-use crate::traces::types::{
-    BlockTraceHeader, DirBucket as TraceDirBucket, DirByBlock as TraceDirByBlock,
-    StreamBitmapMeta as TraceStreamBitmapMeta, TraceBlockRecord,
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableCacheConfig {
-    pub max_bytes: u64,
-}
-
-impl TableCacheConfig {
-    pub const fn disabled() -> Self {
-        Self { max_bytes: 0 }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BytesCacheConfig {
-    pub block_records: TableCacheConfig,
-    pub block_log_header: TableCacheConfig,
-    pub log_dir_buckets: TableCacheConfig,
-    pub log_dir_sub_buckets: TableCacheConfig,
-    pub point_log_payloads: TableCacheConfig,
-    pub bitmap_page_meta: TableCacheConfig,
-    pub bitmap_page_blobs: TableCacheConfig,
-}
-
-impl BytesCacheConfig {
-    pub const fn disabled() -> Self {
-        Self {
-            block_records: TableCacheConfig::disabled(),
-            block_log_header: TableCacheConfig::disabled(),
-            log_dir_buckets: TableCacheConfig::disabled(),
-            log_dir_sub_buckets: TableCacheConfig::disabled(),
-            point_log_payloads: TableCacheConfig::disabled(),
-            bitmap_page_meta: TableCacheConfig::disabled(),
-            bitmap_page_blobs: TableCacheConfig::disabled(),
-        }
-    }
-}
-
-impl Default for BytesCacheConfig {
-    fn default() -> Self {
-        Self::disabled()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TableCacheMetrics {
-    pub hits: u64,
-    pub misses: u64,
-    pub inserts: u64,
-    pub evictions: u64,
-    pub bytes_used: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct BytesCacheMetrics {
-    pub block_records: TableCacheMetrics,
-    pub block_log_header: TableCacheMetrics,
-    pub log_dir_buckets: TableCacheMetrics,
-    pub log_dir_sub_buckets: TableCacheMetrics,
-    pub point_log_payloads: TableCacheMetrics,
-    pub bitmap_page_meta: TableCacheMetrics,
-    pub bitmap_page_blobs: TableCacheMetrics,
-}
-
-#[derive(Clone, Debug)]
-struct WeightedBytes {
-    bytes: Bytes,
-    weight: u64,
-}
-
-#[derive(Debug, Default)]
-struct Metrics {
-    inserts: AtomicU64,
-    evictions: AtomicU64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct BytesWeighter;
-
-impl Weighter<Vec<u8>, WeightedBytes> for BytesWeighter {
-    fn weight(&self, _key: &Vec<u8>, value: &WeightedBytes) -> u64 {
-        value.weight
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct MetricsLifecycle {
-    metrics: Arc<Metrics>,
-}
-
-impl Lifecycle<Vec<u8>, WeightedBytes> for MetricsLifecycle {
-    type RequestState = ();
-
-    fn begin_request(&self) -> Self::RequestState {}
-
-    fn on_evict(&self, _state: &mut Self::RequestState, _key: Vec<u8>, _val: WeightedBytes) {
-        self.metrics.evictions.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-type QuickBytesCache =
-    Cache<Vec<u8>, WeightedBytes, BytesWeighter, DefaultHashBuilder, MetricsLifecycle>;
-
-#[derive(Clone, Debug)]
-pub struct HashMapTableBytesCache {
-    max_bytes: u64,
-    inner: Option<Arc<QuickBytesCache>>,
-    metrics: Arc<Metrics>,
-}
-
-impl HashMapTableBytesCache {
-    pub fn new(max_bytes: u64) -> Self {
-        let metrics = Arc::new(Metrics::default());
-        let inner = (max_bytes > 0).then(|| {
-            let mut options = OptionsBuilder::new();
-            options
-                .estimated_items_capacity(estimated_items_capacity(max_bytes))
-                .weight_capacity(max_bytes);
-            Arc::new(QuickBytesCache::with_options(
-                options.build().expect("valid quick_cache options"),
-                BytesWeighter,
-                DefaultHashBuilder::default(),
-                MetricsLifecycle {
-                    metrics: Arc::clone(&metrics),
-                },
-            ))
-        });
-        Self {
-            max_bytes,
-            inner,
-            metrics,
-        }
-    }
-
-    pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        let inner = self.inner.as_ref()?;
-        inner.get(key).map(|value| value.bytes)
-    }
-
-    pub fn put(&self, key: &[u8], value: Bytes, weight: usize) {
-        let Some(inner) = self.inner.as_ref() else {
-            return;
-        };
-        let weight = u64::try_from(weight).unwrap_or(u64::MAX);
-        if weight > self.max_bytes {
-            return;
-        }
-        inner.insert(
-            key.to_vec(),
-            WeightedBytes {
-                bytes: value,
-                weight,
-            },
-        );
-        self.metrics.inserts.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn metrics_snapshot(&self) -> TableCacheMetrics {
-        let (hits, misses, bytes_used) = match self.inner.as_ref() {
-            Some(inner) => (inner.hits(), inner.misses(), inner.weight()),
-            None => (0, 0, 0),
-        };
-        TableCacheMetrics {
-            hits,
-            misses,
-            inserts: self.metrics.inserts.load(Ordering::Relaxed),
-            evictions: self.metrics.evictions.load(Ordering::Relaxed),
-            bytes_used,
-        }
-    }
-}
-
-impl Default for HashMapTableBytesCache {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
-fn estimated_items_capacity(max_bytes: u64) -> usize {
-    const DEFAULT_ESTIMATED_ENTRY_BYTES: u64 = 256;
-    let estimate = (max_bytes / DEFAULT_ESTIMATED_ENTRY_BYTES).max(1);
-    usize::try_from(estimate).unwrap_or(usize::MAX)
-}
-
-fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
-    let mut key = b"point_log_payload/".to_vec();
-    key.extend_from_slice(&block_num.to_be_bytes());
-    key.extend_from_slice(&local_ordinal.to_be_bytes());
-    key
-}
-
-#[derive(Clone)]
-struct CachedPointTable<M: MetaStore, V> {
-    table: KvTable<M>,
-    cache: HashMapTableBytesCache,
-    _marker: PhantomData<V>,
-}
-
-impl<M: MetaStore, V> CachedPointTable<M, V> {
-    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
-        Self {
-            table,
-            cache,
-            _marker: PhantomData,
-        }
-    }
-
-    fn metrics(&self) -> TableCacheMetrics {
-        self.cache.metrics_snapshot()
-    }
-}
-
-impl<M: MetaStore, V: TableValueCodec> CachedPointTable<M, V> {
-    async fn get_decoded(&self, key: &[u8]) -> Result<Option<V>> {
-        if let Some(bytes) = self.cache.get(key) {
-            return Ok(Some(V::decode(&bytes)?));
-        }
-
-        let Some(record) = self.table.get(key).await? else {
-            return Ok(None);
-        };
-        self.cache
-            .put(key, record.value.clone(), record.value.len());
-        Ok(Some(V::decode(&record.value)?))
-    }
-
-    async fn put_encoded(&self, key: &[u8], value: &V) -> Result<()> {
-        let encoded = value.encode();
-        let _ = self
-            .table
-            .put(key, encoded.clone(), crate::store::traits::PutCond::Any)
-            .await?;
-        self.cache.put(key, encoded.clone(), encoded.len());
-        Ok(())
-    }
-}
-
-impl<M: MetaStore> CachedPointTable<M, Bytes> {
-    async fn get_bytes(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if let Some(bytes) = self.cache.get(key) {
-            return Ok(Some(bytes));
-        }
-
-        let Some(record) = self.table.get(key).await? else {
-            return Ok(None);
-        };
-        self.cache
-            .put(key, record.value.clone(), record.value.len());
-        Ok(Some(record.value))
-    }
-
-    async fn put_bytes(&self, key: &[u8], value: Bytes) -> Result<()> {
-        let _ = self
-            .table
-            .put(key, value.clone(), crate::store::traits::PutCond::Any)
-            .await?;
-        self.cache.put(key, value.clone(), value.len());
-        Ok(())
-    }
-}
-
-struct ScannableFragmentTable<M: MetaStore> {
-    table: ScannableKvTable<M>,
-}
-
-impl<M: MetaStore> ScannableFragmentTable<M> {
-    fn new(table: ScannableKvTable<M>) -> Self {
-        Self { table }
-    }
-
-    async fn load_partition_values(&self, partition: &[u8]) -> Result<Vec<Bytes>> {
-        let mut cursor = None;
-        let mut values = Vec::new();
-
-        loop {
-            let page = self
-                .table
-                .list_prefix(partition, b"", cursor.take(), 1_024)
-                .await?;
-            for clustering in page.keys {
-                let Some(record) = self.table.get(partition, &clustering).await? else {
-                    continue;
-                };
-                values.push(record.value);
-            }
-            if page.next_cursor.is_none() {
-                break;
-            }
-            cursor = page.next_cursor;
-        }
-
-        Ok(values)
-    }
-
-    async fn put_value(&self, partition: &[u8], clustering: &[u8], value: Bytes) -> Result<()> {
-        let _ = self
-            .table
-            .put(
-                partition,
-                clustering,
-                value,
-                crate::store::traits::PutCond::Any,
-            )
-            .await?;
-        Ok(())
-    }
-}
-
-struct CachedBlobTable<B: BlobStore> {
-    blob_table: BlobTable<B>,
-    cache: HashMapTableBytesCache,
-}
-
-impl<B: BlobStore> CachedBlobTable<B> {
-    fn new(blob_table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
-        Self { blob_table, cache }
-    }
-
-    async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if let Some(bytes) = self.cache.get(key) {
-            return Ok(Some(bytes));
-        }
-        let Some(bytes) = self.blob_table.get(key).await? else {
-            return Ok(None);
-        };
-        self.cache.put(key, bytes.clone(), bytes.len());
-        Ok(Some(bytes))
-    }
-
-    async fn put_by_key(&self, key: &[u8], bytes: Bytes) -> Result<()> {
-        self.blob_table.put(key, bytes.clone()).await?;
-        self.cache.put(key, bytes.clone(), bytes.len());
-        Ok(())
-    }
-}
-
-fn cached_point_table<M: MetaStore, V>(
-    table: KvTable<M>,
-    cache: HashMapTableBytesCache,
-) -> CachedPointTable<M, V> {
-    CachedPointTable::new(table, cache)
-}
-
-fn cache_for(max_bytes: u64) -> HashMapTableBytesCache {
-    HashMapTableBytesCache::new(max_bytes)
-}
-
-fn no_cache() -> HashMapTableBytesCache {
-    HashMapTableBytesCache::default()
 }
 
 pub struct Tables<M: MetaStore, B: BlobStore> {
@@ -417,147 +69,54 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
     pub fn without_cache(meta_store: M, blob_store: B) -> Self {
-        let block_records = BlockRecordTable(cached_point_table(
-            meta_store.table(BlockRecordSpec::TABLE),
-            no_cache(),
-        ));
-        let block_log_headers = BlockLogHeaderTable(cached_point_table(
-            meta_store.table(BlockLogHeaderSpec::TABLE),
-            no_cache(),
-        ));
-        let block_trace_headers = BlockTraceHeaderTable(cached_point_table(
-            meta_store.table(BlockTraceHeaderSpec::TABLE),
-            no_cache(),
-        ));
-        Self {
-            block_hash_index: BlockHashIndexTable {
-                table: meta_store.table(BlockHashIndexSpec::TABLE),
-            },
-            block_records,
-            block_log_headers: block_log_headers.clone(),
-            trace_block_records: TraceBlockRecordTable(cached_point_table(
-                meta_store.table(TraceBlockRecordSpec::TABLE),
-                no_cache(),
-            )),
-            block_trace_headers: block_trace_headers.clone(),
-            dir_buckets: DirBucketTable(cached_point_table(
-                meta_store.table(LogDirBucketSpec::TABLE),
-                no_cache(),
-            )),
-            log_dir_sub_buckets: LogDirSubBucketTable(cached_point_table(
-                meta_store.table(LogDirSubBucketSpec::TABLE),
-                no_cache(),
-            )),
-            directory_fragments: DirectoryFragmentTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(LogDirByBlockSpec::TABLE),
-                ),
-            },
-            trace_dir_buckets: TraceDirBucketTable(cached_point_table(
-                meta_store.table(TraceDirBucketSpec::TABLE),
-                no_cache(),
-            )),
-            trace_dir_sub_buckets: TraceDirSubBucketTable(cached_point_table(
-                meta_store.table(TraceDirSubBucketSpec::TABLE),
-                no_cache(),
-            )),
-            trace_directory_fragments: TraceDirectoryFragmentTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(TraceDirByBlockSpec::TABLE),
-                ),
-            },
-            point_log_payloads: PointLogPayloadTable {
-                blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
-                cache: no_cache(),
-                block_log_headers,
-            },
-            block_trace_blobs: BlockTraceBlobTable {
-                blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
-                block_trace_headers,
-            },
-            bitmap_by_block: BitmapByBlockTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(BitmapByBlockSpec::TABLE),
-                ),
-            },
-            bitmap_page_meta: BitmapPageMetaTable(cached_point_table(
-                meta_store.table(BitmapPageMetaSpec::TABLE),
-                no_cache(),
-            )),
-            bitmap_page_blobs: BitmapPageBlobTable {
-                inner: CachedBlobTable::new(
-                    blob_store.table(BitmapPageBlobSpec::TABLE),
-                    no_cache(),
-                ),
-            },
-            trace_bitmap_by_block: TraceBitmapByBlockTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
-                ),
-            },
-            trace_bitmap_page_meta: TraceBitmapPageMetaTable(cached_point_table(
-                meta_store.table(TraceBitmapPageMetaSpec::TABLE),
-                no_cache(),
-            )),
-            trace_bitmap_page_blobs: TraceBitmapPageBlobTable {
-                inner: CachedBlobTable::new(
-                    blob_store.table(TraceBitmapPageBlobSpec::TABLE),
-                    no_cache(),
-                ),
-            },
-        }
+        Self::new(meta_store, blob_store, BytesCacheConfig::disabled())
     }
 
     pub fn new(meta_store: M, blob_store: B, config: BytesCacheConfig) -> Self {
-        let block_records = BlockRecordTable(cached_point_table(
+        let block_records = BlockRecordTable::new(
             meta_store.table(BlockRecordSpec::TABLE),
             cache_for(config.block_records.max_bytes),
-        ));
-        let block_log_headers = BlockLogHeaderTable(cached_point_table(
+        );
+        let block_log_headers = BlockLogHeaderTable::new(
             meta_store.table(BlockLogHeaderSpec::TABLE),
             cache_for(config.block_log_header.max_bytes),
-        ));
-        let block_trace_headers = BlockTraceHeaderTable(cached_point_table(
-            meta_store.table(BlockTraceHeaderSpec::TABLE),
-            no_cache(),
-        ));
+        );
+        let block_trace_headers =
+            BlockTraceHeaderTable::new(meta_store.table(BlockTraceHeaderSpec::TABLE), no_cache());
+
         Self {
             block_hash_index: BlockHashIndexTable {
                 table: meta_store.table(BlockHashIndexSpec::TABLE),
             },
             block_records,
             block_log_headers: block_log_headers.clone(),
-            trace_block_records: TraceBlockRecordTable(cached_point_table(
+            trace_block_records: TraceBlockRecordTable::new(
                 meta_store.table(TraceBlockRecordSpec::TABLE),
                 no_cache(),
-            )),
+            ),
             block_trace_headers: block_trace_headers.clone(),
-            dir_buckets: DirBucketTable(cached_point_table(
+            dir_buckets: DirBucketTable::new(
                 meta_store.table(LogDirBucketSpec::TABLE),
                 cache_for(config.log_dir_buckets.max_bytes),
-            )),
-            log_dir_sub_buckets: LogDirSubBucketTable(cached_point_table(
+            ),
+            log_dir_sub_buckets: LogDirSubBucketTable::new(
                 meta_store.table(LogDirSubBucketSpec::TABLE),
                 cache_for(config.log_dir_sub_buckets.max_bytes),
-            )),
-            directory_fragments: DirectoryFragmentTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(LogDirByBlockSpec::TABLE),
-                ),
-            },
-            trace_dir_buckets: TraceDirBucketTable(cached_point_table(
+            ),
+            directory_fragments: DirectoryFragmentTable::new(
+                meta_store.scannable_table(LogDirByBlockSpec::TABLE),
+            ),
+            trace_dir_buckets: TraceDirBucketTable::new(
                 meta_store.table(TraceDirBucketSpec::TABLE),
                 no_cache(),
-            )),
-            trace_dir_sub_buckets: TraceDirSubBucketTable(cached_point_table(
+            ),
+            trace_dir_sub_buckets: TraceDirSubBucketTable::new(
                 meta_store.table(TraceDirSubBucketSpec::TABLE),
                 no_cache(),
-            )),
-            trace_directory_fragments: TraceDirectoryFragmentTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(TraceDirByBlockSpec::TABLE),
-                ),
-            },
+            ),
+            trace_directory_fragments: TraceDirectoryFragmentTable::new(
+                meta_store.scannable_table(TraceDirByBlockSpec::TABLE),
+            ),
             point_log_payloads: PointLogPayloadTable {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: cache_for(config.point_log_payloads.max_bytes),
@@ -567,36 +126,28 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
                 block_trace_headers,
             },
-            bitmap_by_block: BitmapByBlockTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(BitmapByBlockSpec::TABLE),
-                ),
-            },
-            bitmap_page_meta: BitmapPageMetaTable(cached_point_table(
+            bitmap_by_block: BitmapByBlockTable::new(
+                meta_store.scannable_table(BitmapByBlockSpec::TABLE),
+            ),
+            bitmap_page_meta: BitmapPageMetaTable::new(
                 meta_store.table(BitmapPageMetaSpec::TABLE),
                 cache_for(config.bitmap_page_meta.max_bytes),
-            )),
-            bitmap_page_blobs: BitmapPageBlobTable {
-                inner: CachedBlobTable::new(
-                    blob_store.table(BitmapPageBlobSpec::TABLE),
-                    cache_for(config.bitmap_page_blobs.max_bytes),
-                ),
-            },
-            trace_bitmap_by_block: TraceBitmapByBlockTable {
-                inner: ScannableFragmentTable::new(
-                    meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
-                ),
-            },
-            trace_bitmap_page_meta: TraceBitmapPageMetaTable(cached_point_table(
+            ),
+            bitmap_page_blobs: BitmapPageBlobTable::new(
+                blob_store.table(BitmapPageBlobSpec::TABLE),
+                cache_for(config.bitmap_page_blobs.max_bytes),
+            ),
+            trace_bitmap_by_block: TraceBitmapByBlockTable::new(
+                meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
+            ),
+            trace_bitmap_page_meta: TraceBitmapPageMetaTable::new(
                 meta_store.table(TraceBitmapPageMetaSpec::TABLE),
                 no_cache(),
-            )),
-            trace_bitmap_page_blobs: TraceBitmapPageBlobTable {
-                inner: CachedBlobTable::new(
-                    blob_store.table(TraceBitmapPageBlobSpec::TABLE),
-                    no_cache(),
-                ),
-            },
+            ),
+            trace_bitmap_page_blobs: TraceBitmapPageBlobTable::new(
+                blob_store.table(TraceBitmapPageBlobSpec::TABLE),
+                no_cache(),
+            ),
         }
     }
 
@@ -684,12 +235,32 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             log_dir_sub_buckets: self.log_dir_sub_buckets.metrics(),
             point_log_payloads: self.point_log_payloads.cache.metrics_snapshot(),
             bitmap_page_meta: self.bitmap_page_meta.metrics(),
-            bitmap_page_blobs: self.bitmap_page_blobs.inner.cache.metrics_snapshot(),
+            bitmap_page_blobs: self.bitmap_page_blobs.metrics(),
         }
     }
 }
 
 pub struct BlockRecordTable<M: MetaStore>(CachedPointTable<M, BlockRecord>);
+
+impl<M: MetaStore> BlockRecordTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, block_num: u64) -> Result<Option<BlockRecord>> {
+        self.0.get_decoded(&BlockRecordSpec::key(block_num)).await
+    }
+
+    pub async fn put(&self, block_num: u64, block_record: &BlockRecord) -> Result<()> {
+        self.0
+            .put_encoded(&BlockRecordSpec::key(block_num), block_record)
+            .await
+    }
+
+    fn metrics(&self) -> TableCacheMetrics {
+        self.0.metrics()
+    }
+}
 
 pub struct BlockHashIndexTable<M> {
     table: KvTable<M>,
@@ -718,69 +289,13 @@ impl<M: MetaStore> BlockHashIndexTable<M> {
     }
 }
 
-impl<M: MetaStore> BlockRecordTable<M> {
-    pub async fn get(&self, block_num: u64) -> Result<Option<BlockRecord>> {
-        self.0.get_decoded(&BlockRecordSpec::key(block_num)).await
-    }
-
-    pub async fn put(&self, block_num: u64, block_record: &BlockRecord) -> Result<()> {
-        self.0
-            .put_encoded(&BlockRecordSpec::key(block_num), block_record)
-            .await
-    }
-
-    fn metrics(&self) -> TableCacheMetrics {
-        self.0.metrics()
-    }
-}
-
 pub struct BlockLogHeaderTable<M: MetaStore>(CachedPointTable<M, Bytes>);
 
-pub struct TraceBlockRecordTable<M: MetaStore>(CachedPointTable<M, TraceBlockRecord>);
-
-impl<M: MetaStore> TraceBlockRecordTable<M> {
-    pub async fn get(&self, block_num: u64) -> Result<Option<TraceBlockRecord>> {
-        self.0
-            .get_decoded(&TraceBlockRecordSpec::key(block_num))
-            .await
-    }
-
-    pub async fn put(&self, block_num: u64, block_record: &TraceBlockRecord) -> Result<()> {
-        self.0
-            .put_encoded(&TraceBlockRecordSpec::key(block_num), block_record)
-            .await
-    }
-}
-
-pub struct BlockTraceHeaderTable<M: MetaStore>(CachedPointTable<M, BlockTraceHeader>);
-
-impl<M: MetaStore> Clone for BlockTraceHeaderTable<M> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<M: MetaStore> BlockTraceHeaderTable<M> {
-    pub async fn get(&self, block_num: u64) -> Result<Option<BlockTraceHeader>> {
-        self.0
-            .get_decoded(&BlockTraceHeaderSpec::key(block_num))
-            .await
-    }
-
-    pub async fn put(&self, block_num: u64, header: &BlockTraceHeader) -> Result<()> {
-        self.0
-            .put_encoded(&BlockTraceHeaderSpec::key(block_num), header)
-            .await
-    }
-}
-
-impl<M: MetaStore> Clone for BlockLogHeaderTable<M> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
 impl<M: MetaStore> BlockLogHeaderTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
     pub async fn get(&self, block_num: u64) -> Result<Option<BlockLogHeaderRef>> {
         self.0
             .get_bytes(&BlockLogHeaderSpec::key(block_num))
@@ -804,25 +319,65 @@ impl<M: MetaStore> BlockLogHeaderTable<M> {
     }
 }
 
-pub struct DirBucketTable<M: MetaStore>(CachedPointTable<M, Bytes>);
+impl<M: MetaStore> Clone for BlockLogHeaderTable<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
-pub struct TraceDirBucketTable<M: MetaStore>(CachedPointTable<M, TraceDirBucket>);
+pub struct TraceBlockRecordTable<M: MetaStore>(CachedPointTable<M, TraceBlockRecord>);
 
-impl<M: MetaStore> TraceDirBucketTable<M> {
-    pub async fn get(&self, bucket_start: u64) -> Result<Option<TraceDirBucket>> {
+impl<M: MetaStore> TraceBlockRecordTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, block_num: u64) -> Result<Option<TraceBlockRecord>> {
         self.0
-            .get_decoded(&TraceDirBucketSpec::key(bucket_start))
+            .get_decoded(&TraceBlockRecordSpec::key(block_num))
             .await
     }
 
-    pub async fn put(&self, bucket_start: u64, bucket: &TraceDirBucket) -> Result<()> {
+    pub async fn put(&self, block_num: u64, block_record: &TraceBlockRecord) -> Result<()> {
         self.0
-            .put_encoded(&TraceDirBucketSpec::key(bucket_start), bucket)
+            .put_encoded(&TraceBlockRecordSpec::key(block_num), block_record)
             .await
     }
 }
 
+pub struct BlockTraceHeaderTable<M: MetaStore>(CachedPointTable<M, BlockTraceHeader>);
+
+impl<M: MetaStore> BlockTraceHeaderTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, block_num: u64) -> Result<Option<BlockTraceHeader>> {
+        self.0
+            .get_decoded(&BlockTraceHeaderSpec::key(block_num))
+            .await
+    }
+
+    pub async fn put(&self, block_num: u64, header: &BlockTraceHeader) -> Result<()> {
+        self.0
+            .put_encoded(&BlockTraceHeaderSpec::key(block_num), header)
+            .await
+    }
+}
+
+impl<M: MetaStore> Clone for BlockTraceHeaderTable<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+pub struct DirBucketTable<M: MetaStore>(CachedPointTable<M, Bytes>);
+
 impl<M: MetaStore> DirBucketTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
     pub async fn get(&self, bucket_start: u64) -> Result<Option<DirBucketRef>> {
         self.0
             .get_bytes(&LogDirBucketSpec::key(bucket_start))
@@ -846,25 +401,33 @@ impl<M: MetaStore> DirBucketTable<M> {
     }
 }
 
-pub struct LogDirSubBucketTable<M: MetaStore>(CachedPointTable<M, Bytes>);
+pub struct TraceDirBucketTable<M: MetaStore>(CachedPointTable<M, TraceDirBucket>);
 
-pub struct TraceDirSubBucketTable<M: MetaStore>(CachedPointTable<M, TraceDirBucket>);
+impl<M: MetaStore> TraceDirBucketTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
 
-impl<M: MetaStore> TraceDirSubBucketTable<M> {
-    pub async fn get(&self, sub_bucket_start: u64) -> Result<Option<TraceDirBucket>> {
+    pub async fn get(&self, bucket_start: u64) -> Result<Option<TraceDirBucket>> {
         self.0
-            .get_decoded(&TraceDirSubBucketSpec::key(sub_bucket_start))
+            .get_decoded(&TraceDirBucketSpec::key(bucket_start))
             .await
     }
 
-    pub async fn put(&self, sub_bucket_start: u64, bucket: &TraceDirBucket) -> Result<()> {
+    pub async fn put(&self, bucket_start: u64, bucket: &TraceDirBucket) -> Result<()> {
         self.0
-            .put_encoded(&TraceDirSubBucketSpec::key(sub_bucket_start), bucket)
+            .put_encoded(&TraceDirBucketSpec::key(bucket_start), bucket)
             .await
     }
 }
 
+pub struct LogDirSubBucketTable<M: MetaStore>(CachedPointTable<M, Bytes>);
+
 impl<M: MetaStore> LogDirSubBucketTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
     pub async fn get(&self, sub_bucket_start: u64) -> Result<Option<DirBucketRef>> {
         self.0
             .get_bytes(&LogDirSubBucketSpec::key(sub_bucket_start))
@@ -888,47 +451,37 @@ impl<M: MetaStore> LogDirSubBucketTable<M> {
     }
 }
 
-pub struct DirectoryFragmentTable<M: MetaStore> {
-    inner: ScannableFragmentTable<M>,
-}
+pub struct TraceDirSubBucketTable<M: MetaStore>(CachedPointTable<M, TraceDirBucket>);
 
-pub struct TraceDirectoryFragmentTable<M: MetaStore> {
-    inner: ScannableFragmentTable<M>,
-}
-
-impl<M: MetaStore> TraceDirectoryFragmentTable<M> {
-    pub async fn load_sub_bucket_fragments(
-        &self,
-        sub_bucket_start: u64,
-    ) -> Result<Vec<TraceDirByBlock>> {
-        let partition = TraceDirByBlockSpec::partition(sub_bucket_start);
-        let mut fragments = self
-            .inner
-            .load_partition_values(&partition)
-            .await?
-            .into_iter()
-            .map(|bytes| TraceDirByBlock::decode(&bytes))
-            .collect::<Result<Vec<_>>>()?;
-
-        fragments.sort_by_key(|fragment| fragment.block_num);
-        Ok(fragments)
+impl<M: MetaStore> TraceDirSubBucketTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
     }
 
-    pub async fn put(
-        &self,
-        sub_bucket_start: u64,
-        block_num: u64,
-        fragment: &TraceDirByBlock,
-    ) -> Result<()> {
-        let partition = TraceDirByBlockSpec::partition(sub_bucket_start);
-        let clustering = TraceDirByBlockSpec::clustering(block_num);
-        self.inner
-            .put_value(&partition, &clustering, fragment.encode())
+    pub async fn get(&self, sub_bucket_start: u64) -> Result<Option<TraceDirBucket>> {
+        self.0
+            .get_decoded(&TraceDirSubBucketSpec::key(sub_bucket_start))
+            .await
+    }
+
+    pub async fn put(&self, sub_bucket_start: u64, bucket: &TraceDirBucket) -> Result<()> {
+        self.0
+            .put_encoded(&TraceDirSubBucketSpec::key(sub_bucket_start), bucket)
             .await
     }
 }
 
+pub struct DirectoryFragmentTable<M: MetaStore> {
+    inner: ScannableFragmentTable<M>,
+}
+
 impl<M: MetaStore> DirectoryFragmentTable<M> {
+    fn new(table: ScannableKvTable<M>) -> Self {
+        Self {
+            inner: ScannableFragmentTable::new(table),
+        }
+    }
+
     pub async fn load_sub_bucket_fragments(
         &self,
         sub_bucket_start: u64,
@@ -941,7 +494,6 @@ impl<M: MetaStore> DirectoryFragmentTable<M> {
             .into_iter()
             .map(|bytes| DirByBlock::decode(&bytes))
             .collect::<Result<Vec<_>>>()?;
-
         fragments.sort_by_key(|fragment| fragment.block_num);
         Ok(fragments)
     }
@@ -960,35 +512,58 @@ impl<M: MetaStore> DirectoryFragmentTable<M> {
     }
 }
 
-pub struct BitmapByBlockTable<M: MetaStore> {
+pub struct TraceDirectoryFragmentTable<M: MetaStore> {
     inner: ScannableFragmentTable<M>,
 }
 
-pub struct TraceBitmapByBlockTable<M: MetaStore> {
-    inner: ScannableFragmentTable<M>,
-}
+impl<M: MetaStore> TraceDirectoryFragmentTable<M> {
+    fn new(table: ScannableKvTable<M>) -> Self {
+        Self {
+            inner: ScannableFragmentTable::new(table),
+        }
+    }
 
-impl<M: MetaStore> TraceBitmapByBlockTable<M> {
-    pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
-        self.inner
-            .load_partition_values(&TraceBitmapByBlockSpec::partition(stream, page_start))
-            .await
+    pub async fn load_sub_bucket_fragments(
+        &self,
+        sub_bucket_start: u64,
+    ) -> Result<Vec<TraceDirByBlock>> {
+        let partition = TraceDirByBlockSpec::partition(sub_bucket_start);
+        let mut fragments = self
+            .inner
+            .load_partition_values(&partition)
+            .await?
+            .into_iter()
+            .map(|bytes| TraceDirByBlock::decode(&bytes))
+            .collect::<Result<Vec<_>>>()?;
+        fragments.sort_by_key(|fragment| fragment.block_num);
+        Ok(fragments)
     }
 
     pub async fn put(
         &self,
-        stream: &str,
-        page_start: u32,
+        sub_bucket_start: u64,
         block_num: u64,
-        bytes: Bytes,
+        fragment: &TraceDirByBlock,
     ) -> Result<()> {
-        let partition = TraceBitmapByBlockSpec::partition(stream, page_start);
-        let clustering = TraceBitmapByBlockSpec::clustering(block_num);
-        self.inner.put_value(&partition, &clustering, bytes).await
+        let partition = TraceDirByBlockSpec::partition(sub_bucket_start);
+        let clustering = TraceDirByBlockSpec::clustering(block_num);
+        self.inner
+            .put_value(&partition, &clustering, fragment.encode())
+            .await
     }
 }
 
+pub struct BitmapByBlockTable<M: MetaStore> {
+    inner: ScannableFragmentTable<M>,
+}
+
 impl<M: MetaStore> BitmapByBlockTable<M> {
+    fn new(table: ScannableKvTable<M>) -> Self {
+        Self {
+            inner: ScannableFragmentTable::new(table),
+        }
+    }
+
     pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
         self.inner
             .load_partition_values(&BitmapByBlockSpec::partition(stream, page_start))
@@ -1008,11 +583,67 @@ impl<M: MetaStore> BitmapByBlockTable<M> {
     }
 }
 
+pub struct TraceBitmapByBlockTable<M: MetaStore> {
+    inner: ScannableFragmentTable<M>,
+}
+
+impl<M: MetaStore> TraceBitmapByBlockTable<M> {
+    fn new(table: ScannableKvTable<M>) -> Self {
+        Self {
+            inner: ScannableFragmentTable::new(table),
+        }
+    }
+
+    pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
+        self.inner
+            .load_partition_values(&TraceBitmapByBlockSpec::partition(stream, page_start))
+            .await
+    }
+
+    pub async fn put(
+        &self,
+        stream: &str,
+        page_start: u32,
+        block_num: u64,
+        bytes: Bytes,
+    ) -> Result<()> {
+        let partition = TraceBitmapByBlockSpec::partition(stream, page_start);
+        let clustering = TraceBitmapByBlockSpec::clustering(block_num);
+        self.inner.put_value(&partition, &clustering, bytes).await
+    }
+}
+
 pub struct BitmapPageMetaTable<M: MetaStore>(CachedPointTable<M, StreamBitmapMeta>);
+
+impl<M: MetaStore> BitmapPageMetaTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, stream: &str, page_start: u32) -> Result<Option<StreamBitmapMeta>> {
+        self.0
+            .get_decoded(&BitmapPageMetaSpec::key(stream, page_start))
+            .await
+    }
+
+    pub async fn put(&self, stream: &str, page_start: u32, meta: &StreamBitmapMeta) -> Result<()> {
+        self.0
+            .put_encoded(&BitmapPageMetaSpec::key(stream, page_start), meta)
+            .await
+    }
+
+    fn metrics(&self) -> TableCacheMetrics {
+        self.0.metrics()
+    }
+}
 
 pub struct TraceBitmapPageMetaTable<M: MetaStore>(CachedPointTable<M, TraceStreamBitmapMeta>);
 
 impl<M: MetaStore> TraceBitmapPageMetaTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
     pub async fn get(
         &self,
         stream: &str,
@@ -1035,26 +666,36 @@ impl<M: MetaStore> TraceBitmapPageMetaTable<M> {
     }
 }
 
-impl<M: MetaStore> BitmapPageMetaTable<M> {
-    pub async fn get(&self, stream: &str, page_start: u32) -> Result<Option<StreamBitmapMeta>> {
-        self.0
-            .get_decoded(&BitmapPageMetaSpec::key(stream, page_start))
+pub struct BitmapPageBlobTable<B: BlobStore> {
+    inner: CachedBlobTable<B>,
+}
+
+impl<B: BlobStore> BitmapPageBlobTable<B> {
+    fn new(table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
+        Self {
+            inner: CachedBlobTable::new(table, cache),
+        }
+    }
+
+    pub async fn get_for_page(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
+        self.inner
+            .get_by_key(&BitmapPageBlobSpec::key(stream, page_start))
             .await
     }
 
-    pub async fn put(&self, stream: &str, page_start: u32, meta: &StreamBitmapMeta) -> Result<()> {
-        self.0
-            .put_encoded(&BitmapPageMetaSpec::key(stream, page_start), meta)
+    pub async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        self.inner.get_by_key(key).await
+    }
+
+    pub async fn put(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
+        self.inner
+            .put_by_key(&BitmapPageBlobSpec::key(stream, page_start), bytes)
             .await
     }
 
     fn metrics(&self) -> TableCacheMetrics {
-        self.0.metrics()
+        self.inner.cache().metrics_snapshot()
     }
-}
-
-pub struct BitmapPageBlobTable<B: BlobStore> {
-    inner: CachedBlobTable<B>,
 }
 
 pub struct TraceBitmapPageBlobTable<B: BlobStore> {
@@ -1062,6 +703,12 @@ pub struct TraceBitmapPageBlobTable<B: BlobStore> {
 }
 
 impl<B: BlobStore> TraceBitmapPageBlobTable<B> {
+    fn new(table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
+        Self {
+            inner: CachedBlobTable::new(table, cache),
+        }
+    }
+
     pub async fn get_for_page(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
         self.inner
             .get_by_key(&TraceBitmapPageBlobSpec::key(stream, page_start))
@@ -1103,24 +750,6 @@ impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
                 .await?;
         }
         self.block_trace_headers.put(block_num, header).await
-    }
-}
-
-impl<B: BlobStore> BitmapPageBlobTable<B> {
-    pub async fn get_for_page(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
-        self.inner
-            .get_by_key(&BitmapPageBlobSpec::key(stream, page_start))
-            .await
-    }
-
-    pub async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        self.inner.get_by_key(key).await
-    }
-
-    pub async fn put(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
-        self.inner
-            .put_by_key(&BitmapPageBlobSpec::key(stream, page_start), bytes)
-            .await
     }
 }
 
@@ -1234,6 +863,13 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
 
         Ok(())
     }
+}
+
+fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
+    let mut key = b"point_log_payload/".to_vec();
+    key.extend_from_slice(&block_num.to_be_bytes());
+    key.extend_from_slice(&local_ordinal.to_be_bytes());
+    key
 }
 
 fn point_log_payload_key(block_num: u64, local_ordinal: usize) -> Result<Vec<u8>> {
