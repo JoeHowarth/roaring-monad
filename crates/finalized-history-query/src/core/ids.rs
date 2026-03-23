@@ -237,11 +237,35 @@ impl PrimaryIdRange {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceIdRange {
+    pub start: TraceId,
+    pub end_inclusive: TraceId,
+}
+
+impl TraceIdRange {
+    pub fn new(start: TraceId, end_inclusive: TraceId) -> Option<Self> {
+        (start <= end_inclusive).then_some(Self {
+            start,
+            end_inclusive,
+        })
+    }
+
+    pub fn contains(&self, id: TraceId) -> bool {
+        self.start <= id && id <= self.end_inclusive
+    }
+
+    pub fn resume_strictly_after(&self, id: TraceId) -> Option<Self> {
+        let next_start = id.get().checked_add(1).map(TraceId::new)?;
+        Self::new(next_start, self.end_inclusive)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId, TraceLocalId, TraceShard,
-        compose_log_id, compose_trace_id,
+        compose_log_id, compose_trace_id, LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId,
+        TraceLocalId, TraceShard,
     };
     use crate::logs::keys::MAX_LOCAL_ID;
 
@@ -303,5 +327,20 @@ mod tests {
             let (shard, local) = value.split();
             assert_eq!(compose_trace_id(shard, local), value);
         }
+    }
+
+    #[test]
+    fn trace_id_range_uses_typed_trace_ids() {
+        let range = TraceIdRange::new(TraceId::new(10), TraceId::new(12)).expect("valid range");
+        assert!(range.contains(TraceId::new(10)));
+        assert!(range.contains(TraceId::new(12)));
+        assert!(!range.contains(TraceId::new(13)));
+        assert_eq!(
+            range.resume_strictly_after(TraceId::new(10)),
+            Some(TraceIdRange {
+                start: TraceId::new(11),
+                end_inclusive: TraceId::new(12),
+            })
+        );
     }
 }
