@@ -16,6 +16,8 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
+use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
+use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 use helpers::*;
@@ -49,6 +51,20 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         )
         .await
         .expect("seed block meta");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(1),
+            TraceBlockRecord {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_trace_id: 0,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(
@@ -96,6 +112,20 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         )
         .await
         .expect("seed block meta");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(1),
+            TraceBlockRecord {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_trace_id: 0,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         let block = mk_block(
@@ -163,6 +193,20 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         )
         .await
         .expect("seed block meta");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(1),
+            TraceBlockRecord {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_trace_id: 0,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(

@@ -32,15 +32,11 @@ impl TracesFamily {
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
     ) -> Result<TraceStartupState> {
-        let next_trace_id = state::derive_next_trace_id(runtime.tables(), indexed_finalized_head)
-            .await
-            .or_else(|err| {
-                if matches!(err, Error::NotFound) {
-                    Ok(0)
-                } else {
-                    Err(err)
-                }
-            })?;
+        let next_trace_id = if indexed_finalized_head == 0 {
+            0
+        } else {
+            state::derive_next_trace_id(runtime.tables(), indexed_finalized_head).await?
+        };
         Ok(TraceSequencingState {
             next_trace_id: TraceId::new(next_trace_id),
         })

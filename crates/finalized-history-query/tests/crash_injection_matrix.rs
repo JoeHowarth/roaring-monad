@@ -34,6 +34,8 @@ use finalized_history_query::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
     TableId,
 };
+use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
+use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 #[derive(Clone, Copy)]
@@ -637,6 +639,20 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         )
         .await
         .expect("seed block 1 meta");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(1),
+            TraceBlockRecord {
+                block_hash: [1; 32],
+                parent_hash: [0; 32],
+                first_trace_id: 0,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed block 1 trace meta");
 
         let crashing_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 1);

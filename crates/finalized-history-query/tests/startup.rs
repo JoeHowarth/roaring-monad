@@ -149,6 +149,20 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         )
         .await
         .expect("seed block meta");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(3),
+            TraceBlockRecord {
+                block_hash: [3; 32],
+                parent_hash: [2; 32],
+                first_trace_id: 0,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
         let plan = svc.startup().await.expect("reader-only startup");
@@ -348,7 +362,7 @@ fn startup_recovers_trace_state_from_published_head_only() {
 }
 
 #[test]
-fn startup_allows_missing_trace_records_for_published_logs_only_history() {
+fn startup_rejects_missing_trace_records_for_nonzero_published_head() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -380,11 +394,10 @@ fn startup_allows_missing_trace_records_for_published_logs_only_history() {
             blob,
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+        let err = startup_plan(&runtime, &publication_store, &Families::default(), 0)
             .await
-            .expect("startup plan");
+            .expect_err("startup should fail closed when published trace head metadata is missing");
 
-        assert_eq!(plan.head_state.indexed_finalized_head, 3);
-        assert_eq!(plan.trace_state.next_trace_id.get(), 0);
+        assert!(matches!(err, finalized_history_query::Error::NotFound));
     });
 }
