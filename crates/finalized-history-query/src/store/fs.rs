@@ -477,15 +477,30 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Backend("fs write path missing parent".to_string()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("fs-write"),
+        std::process::id()
+    ));
+
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
-        .open(path)
+        .open(&tmp_path)
         .map_err(|e| Error::Backend(format!("fs write open: {e}")))?;
     set_no_cache(&file)?;
     file.write_all(bytes)
         .map_err(|e| Error::Backend(format!("fs write: {e}")))?;
+    file.sync_all()
+        .map_err(|e| Error::Backend(format!("fs sync: {e}")))?;
+    drop(file);
+    fs::rename(&tmp_path, path).map_err(|e| Error::Backend(format!("fs rename: {e}")))?;
     Ok(())
 }
 
