@@ -193,7 +193,7 @@ mod tests {
         BlobStore, BlobTableId, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
         TableId,
     };
-    use crate::streams::{BitmapBlob, encode_bitmap_blob};
+    use crate::streams::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
     use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
@@ -543,6 +543,53 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(meta_gets.load(Ordering::Relaxed), 1);
             assert_eq!(blob_gets.load(Ordering::Relaxed), 2);
+        });
+    }
+
+    #[test]
+    fn load_page_fragments_preserves_full_partition_coverage() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let stream = "addr/test/00000000";
+            let page_start = 0u32;
+
+            for (block_num, local) in [(9u64, 9u32), (7u64, 7u32), (8u64, 8u32)] {
+                let mut bitmap = RoaringBitmap::new();
+                bitmap.insert(local);
+                let blob = BitmapBlob {
+                    min_local: local,
+                    max_local: local,
+                    count: 1,
+                    crc32: 0,
+                    bitmap,
+                };
+                meta.scan_put(
+                    BITMAP_BY_BLOCK_TABLE,
+                    &BitmapByBlockSpec::partition(stream, page_start),
+                    &BitmapByBlockSpec::clustering(block_num),
+                    encode_bitmap_blob(&blob).expect("encode fragment bitmap blob"),
+                    PutCond::Any,
+                )
+                .await
+                .expect("write page fragment");
+            }
+
+            let tables = Tables::without_cache(meta, blob);
+            let fragments = tables
+                .bitmap_by_block()
+                .load_page_fragments(stream, page_start)
+                .await
+                .expect("load page fragments");
+
+            let decoded = fragments
+                .into_iter()
+                .map(|bytes| decode_bitmap_blob(&bytes).expect("decode bitmap fragment"))
+                .collect::<Vec<_>>();
+            assert_eq!(decoded.len(), 3);
+            for local in [7u32, 8u32, 9u32] {
+                assert!(decoded.iter().any(|blob| blob.bitmap.contains(local)));
+            }
         });
     }
 }

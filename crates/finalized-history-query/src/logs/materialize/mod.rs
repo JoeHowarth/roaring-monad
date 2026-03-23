@@ -409,4 +409,56 @@ mod tests {
             assert_eq!(metrics.inserts, 3);
         });
     }
+
+    #[test]
+    fn directory_fragment_loading_returns_block_sorted_fragments() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let sub_bucket_start = LOG_DIRECTORY_SUB_BUCKET_SIZE;
+
+            for fragment in [
+                DirByBlock {
+                    block_num: 703,
+                    first_log_id: sub_bucket_start + 7,
+                    end_log_id_exclusive: sub_bucket_start + 9,
+                },
+                DirByBlock {
+                    block_num: 701,
+                    first_log_id: sub_bucket_start,
+                    end_log_id_exclusive: sub_bucket_start + 3,
+                },
+                DirByBlock {
+                    block_num: 702,
+                    first_log_id: sub_bucket_start + 3,
+                    end_log_id_exclusive: sub_bucket_start + 7,
+                },
+            ] {
+                meta.scan_put(
+                    crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE,
+                    &LogDirByBlockSpec::partition(sub_bucket_start),
+                    &LogDirByBlockSpec::clustering(fragment.block_num),
+                    fragment.encode(),
+                    PutCond::Any,
+                )
+                .await
+                .expect("write directory fragment");
+            }
+
+            let tables = Tables::without_cache(meta, blob);
+            let fragments = tables
+                .directory_fragments()
+                .load_sub_bucket_fragments(sub_bucket_start)
+                .await
+                .expect("load directory fragments");
+
+            assert_eq!(
+                fragments
+                    .iter()
+                    .map(|fragment| fragment.block_num)
+                    .collect::<Vec<_>>(),
+                vec![701, 702, 703]
+            );
+        });
+    }
 }

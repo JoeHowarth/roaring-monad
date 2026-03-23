@@ -161,3 +161,28 @@ impl<T: PublicationStore> PublicationStore for Arc<T> {
         self.as_ref().compare_and_set(expected, next).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PublicationState, SessionId};
+    use crate::codec::StorageCodec;
+
+    #[test]
+    fn publication_state_storage_codec_roundtrips_through_trait_api() {
+        let state = PublicationState {
+            owner_id: 17,
+            session_id: sample_session_id(),
+            indexed_finalized_head: 91,
+            lease_valid_through_block: 123,
+        };
+
+        let encoded = state.encode();
+        let decoded = PublicationState::decode(&encoded).expect("decode publication state");
+
+        assert_eq!(decoded, state);
+    }
+
+    fn sample_session_id() -> SessionId {
+        *b"session-id-00001"
+    }
+}
