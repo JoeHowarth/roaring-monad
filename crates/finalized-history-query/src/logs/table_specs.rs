@@ -1,8 +1,9 @@
 use crate::core::ids::{LogId, LogShard, compose_log_id};
+use crate::core::layout::{LOCAL_ID_BITS, MAX_LOCAL_ID};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::logs::keys::{
-    LOCAL_ID_BITS, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID,
-    STREAM_PAGE_LOCAL_ID_SPAN, hex_digit, u64_be,
+    LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, hex_digit,
+    u64_be,
 };
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 

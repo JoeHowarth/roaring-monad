@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use bytes::Bytes;
-
 use alloy_rlp::Header;
 
 use crate::core::ids::TraceId;
@@ -13,7 +11,6 @@ use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
 use crate::traces::table_specs::{TraceDirBucketSpec, TraceDirSubBucketSpec};
 use crate::traces::types::{DirBucket, Trace};
-use crate::traces::view::CallFrameView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedTraceLocation {
@@ -25,7 +22,6 @@ pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
     directory_fragment_cache: HashMap<u64, Vec<crate::traces::types::DirByBlock>>,
     block_ref_cache: HashMap<u64, BlockRef>,
-    block_blob_cache: HashMap<u64, Bytes>,
 }
 
 impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
@@ -34,7 +30,6 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
             tables,
             directory_fragment_cache: HashMap::new(),
             block_ref_cache: HashMap::new(),
-            block_blob_cache: HashMap::new(),
         }
     }
 
@@ -138,70 +133,15 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         block_num: u64,
         local_ordinal: usize,
     ) -> Result<Option<Trace>> {
-        let Some(header) = self.tables.block_trace_headers().get(block_num).await? else {
-            return Ok(None);
-        };
-        let blob = self.load_block_blob(block_num).await?;
-        let Some(blob) = blob else {
-            return Ok(None);
-        };
-        let start = header.trace_start(local_ordinal)?;
-        let start =
-            usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
-        if start >= blob.len() {
-            return Err(Error::Decode("trace start offset past blob end"));
-        }
-        let frame_len = rlp_element_len(&blob[start..])?;
-        let end = start + frame_len;
-        if end > blob.len() {
-            return Err(Error::Decode("trace frame extends past blob end"));
-        }
-        let frame = blob.slice(start..end);
-        let view = CallFrameView::new(frame.as_ref())?;
-        let tx_idx = header
-            .tx_idx_for_trace(local_ordinal)
-            .ok_or(Error::Decode("missing tx_idx for trace"))?;
-        let trace_idx = header
-            .trace_idx_in_tx(local_ordinal)
-            .ok_or(Error::Decode("missing trace_idx for trace"))?;
-        let block_record = self.tables.trace_block_records().get(block_num).await?;
-        let block_hash = block_record
-            .as_ref()
-            .map(|record| record.block_hash)
-            .unwrap_or([0; 32]);
-        Ok(Some(Trace {
-            block_num,
-            block_hash,
-            tx_idx,
-            trace_idx,
-            typ: view.typ()?,
-            flags: view.flags()?,
-            from: *view.from_addr()?,
-            to: view.to_addr()?.copied(),
-            value: view.value_bytes()?.to_vec(),
-            gas: view.gas()?,
-            gas_used: view.gas_used()?,
-            input: view.input()?.to_vec(),
-            output: view.output()?.to_vec(),
-            status: view.status()?,
-            depth: view.depth()?,
-        }))
-    }
-
-    async fn load_block_blob(&mut self, block_num: u64) -> Result<Option<Bytes>> {
-        if let Some(bytes) = self.block_blob_cache.get(&block_num).cloned() {
-            return Ok(Some(bytes));
-        }
-        let Some(bytes) = self.tables.block_trace_blobs().get(block_num).await? else {
-            return Ok(None);
-        };
-        self.block_blob_cache.insert(block_num, bytes.clone());
-        Ok(Some(bytes))
+        self.tables
+            .trace_payloads()
+            .load_trace_at(block_num, local_ordinal)
+            .await
     }
 }
 
 /// Compute the total encoded length of the RLP element starting at `buf`.
-fn rlp_element_len(buf: &[u8]) -> Result<usize> {
+pub(crate) fn rlp_element_len(buf: &[u8]) -> Result<usize> {
     let mut remaining = buf;
     let original_len = remaining.len();
     let header =

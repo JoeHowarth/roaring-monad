@@ -1,5 +1,6 @@
 use bytes::Bytes;
 
+use crate::core::layout::read_u64_be;
 use crate::error::{Error, Result};
 use crate::kernel::blob_table::CachedBlobTable;
 pub use crate::kernel::cache::{
@@ -11,7 +12,6 @@ use crate::kernel::codec::{StorageCodec, encode_u64};
 use crate::kernel::point_table::CachedPointTable;
 use crate::kernel::scannable_table::ScannableFragmentTable;
 use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::logs::keys::read_u64_be;
 use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::logs::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
@@ -50,6 +50,8 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     trace_bitmap_by_block: TraceBitmapByBlockTable<M>,
     trace_bitmap_page_meta: TraceBitmapPageMetaTable<M>,
     trace_bitmap_page_blobs: TraceBitmapPageBlobTable<B>,
+    open_bitmap_pages: OpenBitmapPageTable<M>,
+    trace_payloads: TracePayloadTable<M, B>,
 }
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
@@ -109,7 +111,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
-                block_trace_headers,
+                block_trace_headers: block_trace_headers.clone(),
             },
             bitmap_by_block: BitmapByBlockTable::new(
                 meta_store.scannable_table(BitmapByBlockSpec::TABLE),
@@ -133,6 +135,17 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 blob_store.table(TraceBitmapPageBlobSpec::TABLE),
                 no_cache(),
             ),
+            open_bitmap_pages: OpenBitmapPageTable::new(
+                meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
+            ),
+            trace_payloads: TracePayloadTable {
+                blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
+                block_trace_headers,
+                trace_block_records: TraceBlockRecordTable::new(
+                    meta_store.table(TraceBlockRecordSpec::TABLE),
+                    no_cache(),
+                ),
+            },
         }
     }
 
@@ -210,6 +223,14 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
 
     pub fn trace_bitmap_page_blobs(&self) -> &TraceBitmapPageBlobTable<B> {
         &self.trace_bitmap_page_blobs
+    }
+
+    pub fn open_bitmap_pages(&self) -> &OpenBitmapPageTable<M> {
+        &self.open_bitmap_pages
+    }
+
+    pub fn trace_payloads(&self) -> &TracePayloadTable<M, B> {
+        &self.trace_payloads
     }
 
     pub fn metrics_snapshot(&self) -> BytesCacheMetrics {
@@ -708,6 +729,161 @@ impl<B: BlobStore> TraceBitmapPageBlobTable<B> {
         self.inner
             .put_by_key(&TraceBitmapPageBlobSpec::key(stream, page_start), bytes)
             .await
+    }
+}
+
+pub struct OpenBitmapPageTable<M: MetaStore> {
+    table: ScannableKvTable<M>,
+}
+
+impl<M: MetaStore> OpenBitmapPageTable<M> {
+    fn new(table: ScannableKvTable<M>) -> Self {
+        Self { table }
+    }
+
+    pub async fn mark_if_absent(
+        &self,
+        page: &crate::ingest::open_pages::OpenBitmapPage,
+    ) -> Result<()> {
+        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(page.shard);
+        let clustering = crate::logs::table_specs::OpenBitmapPageSpec::clustering(
+            page.page_start_local,
+            &page.stream_id,
+        );
+        let _ = self
+            .table
+            .put(
+                &partition,
+                &clustering,
+                Bytes::new(),
+                crate::store::traits::PutCond::IfAbsent,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, page: &crate::ingest::open_pages::OpenBitmapPage) -> Result<()> {
+        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(page.shard);
+        let clustering = crate::logs::table_specs::OpenBitmapPageSpec::clustering(
+            page.page_start_local,
+            &page.stream_id,
+        );
+        self.table
+            .delete(&partition, &clustering, crate::store::traits::DelCond::Any)
+            .await
+    }
+
+    pub async fn list_for_shard(
+        &self,
+        shard: crate::core::ids::LogShard,
+    ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
+        self.list_in_partition(shard, b"").await
+    }
+
+    pub async fn list_for_shard_page(
+        &self,
+        shard: crate::core::ids::LogShard,
+        page_start_local: u32,
+    ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
+        self.list_in_partition(
+            shard,
+            &crate::logs::table_specs::OpenBitmapPageSpec::page_prefix(page_start_local),
+        )
+        .await
+    }
+
+    async fn list_in_partition(
+        &self,
+        shard: crate::core::ids::LogShard,
+        prefix: &[u8],
+    ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
+        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(shard);
+        let mut cursor = None;
+        let mut out = Vec::new();
+        loop {
+            let page = self
+                .table
+                .list_prefix(&partition, prefix, cursor.take(), 1_024)
+                .await?;
+            for clustering in page.keys {
+                out.push(crate::ingest::open_pages::decode_open_bitmap_page_key(
+                    &partition,
+                    &clustering,
+                )?);
+            }
+            if page.next_cursor.is_none() {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
+        Ok(out)
+    }
+}
+
+pub struct TracePayloadTable<M: MetaStore, B: BlobStore> {
+    blob_table: BlobTable<B>,
+    block_trace_headers: BlockTraceHeaderTable<M>,
+    trace_block_records: TraceBlockRecordTable<M>,
+}
+
+impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
+    pub async fn load_trace_at(
+        &self,
+        block_num: u64,
+        local_ordinal: usize,
+    ) -> Result<Option<crate::traces::types::Trace>> {
+        let Some(header) = self.block_trace_headers.get(block_num).await? else {
+            return Ok(None);
+        };
+        let Some(blob) = self
+            .blob_table
+            .get(&BlockTraceBlobSpec::key(block_num))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let start = header.trace_start(local_ordinal)?;
+        let start =
+            usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
+        if start >= blob.len() {
+            return Err(Error::Decode("trace start offset past blob end"));
+        }
+        let frame_len = crate::traces::materialize::rlp_element_len(&blob[start..])?;
+        let end = start + frame_len;
+        if end > blob.len() {
+            return Err(Error::Decode("trace frame extends past blob end"));
+        }
+        let frame = blob.slice(start..end);
+        let view = crate::traces::view::CallFrameView::new(frame.as_ref())?;
+        let tx_idx = header
+            .tx_idx_for_trace(local_ordinal)
+            .ok_or(Error::Decode("missing tx_idx for trace"))?;
+        let trace_idx = header
+            .trace_idx_in_tx(local_ordinal)
+            .ok_or(Error::Decode("missing trace_idx for trace"))?;
+        let block_hash = self
+            .trace_block_records
+            .get(block_num)
+            .await?
+            .map(|record| record.block_hash)
+            .unwrap_or([0; 32]);
+        Ok(Some(crate::traces::types::Trace {
+            block_num,
+            block_hash,
+            tx_idx,
+            trace_idx,
+            typ: view.typ()?,
+            flags: view.flags()?,
+            from: *view.from_addr()?,
+            to: view.to_addr()?.copied(),
+            value: view.value_bytes()?.to_vec(),
+            gas: view.gas()?,
+            gas_used: view.gas_used()?,
+            input: view.input()?.to_vec(),
+            output: view.output()?.to_vec(),
+            status: view.status()?,
+            depth: view.depth()?,
+        }))
     }
 }
 

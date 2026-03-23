@@ -1,9 +1,9 @@
-use crate::core::execution::PrimaryMaterializer;
 use crate::core::ids::LogId;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
+use crate::logs::query::execution::PrimaryMaterializer;
 use crate::logs::state::load_log_block_record;
 use crate::store::traits::{BlobStore, MetaStore};
 

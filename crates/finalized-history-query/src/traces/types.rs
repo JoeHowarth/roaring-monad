@@ -1,5 +1,6 @@
 use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
+use crate::core::state::BlockRecordLike;
 use crate::error::{Error, Result};
 use crate::family::Hash32;
 
@@ -109,5 +110,15 @@ impl From<&TraceBlockRecord> for TraceBlockWindow {
             first_trace_id: TraceId::new(value.first_trace_id),
             count: value.count,
         }
+    }
+}
+
+impl BlockRecordLike for TraceBlockRecord {
+    fn block_hash(&self) -> [u8; 32] {
+        self.block_hash
+    }
+
+    fn parent_hash(&self) -> [u8; 32] {
+        self.parent_hash
     }
 }

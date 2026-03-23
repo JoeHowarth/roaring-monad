@@ -1,9 +1,9 @@
 use roaring::RoaringBitmap;
 
 use super::clause::is_too_broad;
+use super::execution::{MatchedPrimary, PrimaryMaterializer};
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::execution::{MatchedPrimary, PrimaryMaterializer};
 use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{ResolvedBlockRange, resolve_block_range};

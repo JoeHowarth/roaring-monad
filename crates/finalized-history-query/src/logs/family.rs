@@ -75,13 +75,13 @@ impl LogsFamily {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id))
         {
-            mark_open_bitmap_page_if_absent(runtime.meta_store(), page).await?;
+            mark_open_bitmap_page_if_absent(runtime.tables(), page).await?;
         }
 
         compact_newly_sealed_directory(runtime.tables(), from_next_log_id, next_log_id).await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
-            runtime.meta_store(),
+            runtime.tables(),
             &opened_during,
             from_next_log_id,
             next_log_id,
@@ -90,7 +90,7 @@ impl LogsFamily {
         {
             let _ = compact_stream_page(runtime.tables(), &page.stream_id, page.page_start_local)
                 .await?;
-            delete_open_bitmap_page(runtime.meta_store(), &page).await?;
+            delete_open_bitmap_page(runtime.tables(), &page).await?;
         }
 
         state.next_log_id = LogId::new(next_log_id);

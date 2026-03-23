@@ -1,3 +1,4 @@
+pub use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID, read_u64_be};
 use crate::store::traits::{ScannableTableId, TableId};
 
 pub const BLOCK_RECORD_TABLE: TableId = TableId::new("block_record");
@@ -12,21 +13,9 @@ pub const OPEN_BITMAP_PAGE_TABLE: ScannableTableId = ScannableTableId::new("open
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
-pub const LOCAL_ID_BITS: u32 = 24;
-pub const LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
-pub const MAX_LOCAL_ID: u32 = LOCAL_ID_MASK as u32;
 
 pub fn u64_be(v: u64) -> [u8; 8] {
     v.to_be_bytes()
-}
-
-pub fn read_u64_be(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() != 8 {
-        return None;
-    }
-    let mut out = [0u8; 8];
-    out.copy_from_slice(bytes);
-    Some(u64::from_be_bytes(out))
 }
 
 pub fn block_hash_index_suffix(hash: &[u8; 32]) -> Vec<u8> {

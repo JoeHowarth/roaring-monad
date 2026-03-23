@@ -1,4 +1,5 @@
 use crate::core::ids::LogId;
+use crate::core::state::BlockRecordLike;
 use crate::family::Hash32;
 
 pub type Address20 = [u8; 20];
@@ -66,5 +67,15 @@ impl From<&BlockRecord> for LogBlockWindow {
             first_log_id: LogId::new(value.first_log_id),
             count: value.count,
         }
+    }
+}
+
+impl BlockRecordLike for BlockRecord {
+    fn block_hash(&self) -> [u8; 32] {
+        self.block_hash
+    }
+
+    fn parent_hash(&self) -> [u8; 32] {
+        self.parent_hash
     }
 }

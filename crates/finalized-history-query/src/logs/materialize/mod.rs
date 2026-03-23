@@ -43,10 +43,10 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::core::execution::PrimaryMaterializer;
     use crate::core::ids::LogId;
     use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
+    use crate::logs::query::execution::PrimaryMaterializer;
     use crate::logs::table_specs::{
         BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,

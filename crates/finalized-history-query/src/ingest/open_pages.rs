@@ -1,12 +1,12 @@
-use bytes::Bytes;
 use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
+use crate::core::layout::read_u64_be;
 use crate::error::{Error, Result};
-use crate::kernel::table_specs::ScannableTableSpec;
-use crate::logs::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
-use crate::logs::table_specs::{self, OpenBitmapPageSpec};
-use crate::store::traits::{DelCond, MetaStore, PutCond};
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::table_specs::{self};
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {
@@ -56,91 +56,40 @@ impl OpenBitmapPage {
     }
 }
 
-pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
-    meta_store: &M,
+pub async fn mark_open_bitmap_page_if_absent<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    let partition = OpenBitmapPageSpec::partition(page.shard);
-    let clustering = OpenBitmapPageSpec::clustering(page.page_start_local, &page.stream_id);
-    let _ = meta_store
-        .scan_put(
-            OpenBitmapPageSpec::TABLE,
-            &partition,
-            &clustering,
-            Bytes::new(),
-            PutCond::IfAbsent,
-        )
-        .await?;
-    Ok(())
+    tables.open_bitmap_pages().mark_if_absent(page).await
 }
 
-pub async fn delete_open_bitmap_page<M: MetaStore>(
-    meta_store: &M,
+pub async fn delete_open_bitmap_page<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    let partition = OpenBitmapPageSpec::partition(page.shard);
-    let clustering = OpenBitmapPageSpec::clustering(page.page_start_local, &page.stream_id);
-    meta_store
-        .scan_delete(
-            OpenBitmapPageSpec::TABLE,
-            &partition,
-            &clustering,
-            DelCond::Any,
-        )
-        .await
+    tables.open_bitmap_pages().delete(page).await
 }
 
-pub async fn list_open_bitmap_pages_for_shard<M: MetaStore>(
-    meta_store: &M,
+pub async fn list_open_bitmap_pages_for_shard<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     shard: LogShard,
 ) -> Result<Vec<OpenBitmapPage>> {
-    list_open_bitmap_pages_in_partition(meta_store, shard, b"").await
+    tables.open_bitmap_pages().list_for_shard(shard).await
 }
 
-pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
-    meta_store: &M,
+pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     shard: LogShard,
     page_start_local: u32,
 ) -> Result<Vec<OpenBitmapPage>> {
-    list_open_bitmap_pages_in_partition(
-        meta_store,
-        shard,
-        &OpenBitmapPageSpec::page_prefix(page_start_local),
-    )
-    .await
+    tables
+        .open_bitmap_pages()
+        .list_for_shard_page(shard, page_start_local)
+        .await
 }
 
-async fn list_open_bitmap_pages_in_partition<M: MetaStore>(
-    meta_store: &M,
-    shard: LogShard,
-    prefix: &[u8],
-) -> Result<Vec<OpenBitmapPage>> {
-    let partition = OpenBitmapPageSpec::partition(shard);
-    let mut cursor = None;
-    let mut out = Vec::new();
-    loop {
-        let page = meta_store
-            .scan_list(
-                OpenBitmapPageSpec::TABLE,
-                &partition,
-                prefix,
-                cursor.take(),
-                1_024,
-            )
-            .await?;
-        for clustering in page.keys {
-            out.push(decode_open_bitmap_page_key(&partition, &clustering)?);
-        }
-        if page.next_cursor.is_none() {
-            break;
-        }
-        cursor = page.next_cursor;
-    }
-    Ok(out)
-}
-
-pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
-    meta_store: &M,
+pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
     opened_during: &[OpenBitmapPage],
     from_next_log_id: u64,
     to_next_log_id: u64,
@@ -165,14 +114,13 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
             let mut page_start = from.page_start_local;
             while page_start < to.page_start_local {
                 sealed.extend(
-                    list_open_bitmap_pages_for_shard_page(meta_store, from.shard, page_start)
-                        .await?,
+                    list_open_bitmap_pages_for_shard_page(tables, from.shard, page_start).await?,
                 );
                 page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
             }
         } else {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(meta_store, from.shard)
+                list_open_bitmap_pages_for_shard(tables, from.shard)
                     .await?
                     .into_iter()
                     .filter(|page| {
@@ -183,7 +131,7 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         }
     } else {
         sealed.extend(
-            list_open_bitmap_pages_for_shard(meta_store, from.shard)
+            list_open_bitmap_pages_for_shard(tables, from.shard)
                 .await?
                 .into_iter()
                 .filter(|page| page.page_start_local >= from.page_start_local),
@@ -193,13 +141,13 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         while shard_raw < to.shard.get() {
             let shard =
                 LogShard::new(shard_raw).map_err(|_| Error::Decode("invalid shard range"))?;
-            sealed.extend(list_open_bitmap_pages_for_shard(meta_store, shard).await?);
+            sealed.extend(list_open_bitmap_pages_for_shard(tables, shard).await?);
             shard_raw = shard_raw.saturating_add(1);
         }
 
         if to.page_start_local > 0 {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(meta_store, to.shard)
+                list_open_bitmap_pages_for_shard(tables, to.shard)
                     .await?
                     .into_iter()
                     .filter(|page| page.page_start_local < to.page_start_local),
@@ -213,7 +161,10 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         .collect())
 }
 
-fn decode_open_bitmap_page_key(partition: &[u8], clustering: &[u8]) -> Result<OpenBitmapPage> {
+pub(crate) fn decode_open_bitmap_page_key(
+    partition: &[u8],
+    clustering: &[u8],
+) -> Result<OpenBitmapPage> {
     if partition.len() != 8 {
         return Err(Error::Decode("invalid open_bitmap_page partition"));
     }

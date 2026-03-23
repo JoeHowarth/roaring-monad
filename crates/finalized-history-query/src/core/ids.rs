@@ -1,4 +1,4 @@
-use crate::logs::keys::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
+use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
 
 const MAX_LOG_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
 const MAX_TRACE_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
@@ -267,7 +267,7 @@ mod tests {
         LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId,
         TraceShard, compose_log_id, compose_trace_id,
     };
-    use crate::logs::keys::MAX_LOCAL_ID;
+    use crate::core::layout::MAX_LOCAL_ID;
 
     #[test]
     fn log_id_roundtrips_at_boundaries() {

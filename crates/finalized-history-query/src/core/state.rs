@@ -1,8 +1,12 @@
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::logs::types::BlockRecord;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
+
+pub trait BlockRecordLike {
+    fn block_hash(&self) -> [u8; 32];
+    fn parent_hash(&self) -> [u8; 32];
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIdentity {
@@ -21,12 +25,12 @@ impl BlockIdentity {
     }
 }
 
-impl From<(u64, &BlockRecord)> for BlockIdentity {
-    fn from((number, meta): (u64, &BlockRecord)) -> Self {
+impl<T: BlockRecordLike> From<(u64, &T)> for BlockIdentity {
+    fn from((number, meta): (u64, &T)) -> Self {
         Self {
             number,
-            hash: meta.block_hash,
-            parent_hash: meta.parent_hash,
+            hash: meta.block_hash(),
+            parent_hash: meta.parent_hash(),
         }
     }
 }

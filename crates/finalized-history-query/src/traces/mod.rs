@@ -2,7 +2,7 @@ pub mod codec;
 pub mod filter;
 pub mod ingest;
 pub mod keys;
-mod materialize;
+pub(crate) mod materialize;
 pub mod query;
 pub mod state;
 pub mod table_specs;
