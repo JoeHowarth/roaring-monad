@@ -94,7 +94,7 @@ random access into the blob.
 The header stores:
 
 - an encoding version for the trace blob layout
-- a `BucketedOffsets` structure for byte offsets into the blob (see below)
+- a `BucketedOffsets` structure for byte offsets into the blob (see above)
 - `tx_starts: Vec<u32>` — one entry per transaction, giving the flat trace
   index of the first trace in that transaction
 
@@ -102,9 +102,12 @@ The byte range for trace `i` is `[offsets.get(i), offsets.get(i + 1))`, with
 the final trace ending at `blob_len`. This keeps the header compact while still
 allowing O(1) navigation to any individual call frame's RLP bytes.
 
-To recover `tx_idx` for flat trace `i`, binary search `tx_starts` for the
-largest entry `<= i`. This is O(log T) where T is the transaction count in the
-block.
+Transactions with zero traces are represented by repeated entries in
+`tx_starts`.
+
+To recover `tx_idx` for flat trace `i`, find the first `tx_starts` entry `> i`
+and subtract one from that position. This is O(log T) where T is the
+transaction count in the block.
 
 Empty blocks (zero traces) get an empty header and no blob entry, matching the
 logs family convention.
@@ -165,6 +168,9 @@ bitmap per shard tracks all trace IDs with non-zero value. It is sparse (most
 calls do not transfer value) and cheap to maintain.
 
 ## isTopLevel
+
+The external filter field is `isTopLevel`. Inside the query engine it maps to
+an `is_top_level` predicate.
 
 `isTopLevel` filtering uses `depth == 0` from the call frame. This is handled
 as a post-filter at materialization time rather than a dedicated bitmap stream.

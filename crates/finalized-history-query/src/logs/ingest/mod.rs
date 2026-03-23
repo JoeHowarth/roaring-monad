@@ -25,10 +25,9 @@ mod tests {
         persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
     };
     use crate::logs::keys::{
-        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE,
-        BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE,
-        LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
-        STREAM_PAGE_LOCAL_ID_SPAN, block_hash_index_suffix,
+        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE,
+        LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
+        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
     };
     use crate::logs::table_specs::{
         self, BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
@@ -64,7 +63,7 @@ mod tests {
             parent_hash: [seed.wrapping_add(1); 32],
             logs,
             txs: Vec::new(),
-            traces: Vec::new(),
+            trace_rlp: Vec::new(),
         }
     }
 
@@ -256,13 +255,13 @@ mod tests {
     }
 
     #[test]
-    fn persist_log_block_record_writes_block_record_and_hash_index() {
+    fn persist_log_block_record_writes_block_record() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
 
-            persist_log_block_record(&tables, &meta, &block, 33)
+            persist_log_block_record(&tables, &block, 33)
                 .await
                 .expect("persist block metadata");
 
@@ -271,15 +270,6 @@ mod tests {
                     .await
                     .expect("block meta")
                     .is_some()
-            );
-            assert!(
-                meta.get(
-                    BLOCK_HASH_INDEX_TABLE,
-                    &block_hash_index_suffix(&block.block_hash)
-                )
-                .await
-                .expect("hash index")
-                .is_some()
             );
         });
     }

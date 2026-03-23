@@ -26,5 +26,4 @@ pub use ingest::authority::{
 };
 pub use logs::filter::LogFilter;
 pub use logs::types::Log;
-pub use traces::Trace;
 pub use txs::Tx;

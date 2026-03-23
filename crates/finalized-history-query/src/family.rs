@@ -1,10 +1,14 @@
+use crate::codec::encode_u64;
 use crate::config::Config;
 use crate::error::Result;
 use crate::logs::family::LogsFamily;
+use crate::logs::table_specs::BlockHashIndexSpec;
 use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
+use crate::store::traits::PutCond;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::{Trace, TraceStartupState, TracesFamily};
+use crate::tables::PointTableSpec;
+use crate::traces::{TraceStartupState, TracesFamily};
 use crate::txs::{Tx, TxStartupState, TxsFamily};
 
 pub type Hash32 = [u8; 32];
@@ -16,7 +20,7 @@ pub struct FinalizedBlock {
     pub parent_hash: Hash32,
     pub logs: Vec<Log>,
     pub txs: Vec<Tx>,
-    pub traces: Vec<Trace>,
+    pub trace_rlp: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +89,16 @@ impl Families {
         M: MetaStore,
         B: BlobStore,
     {
+        let _ = runtime
+            .meta_store()
+            .put(
+                BlockHashIndexSpec::TABLE,
+                &BlockHashIndexSpec::key(&block.block_hash),
+                encode_u64(block.block_num),
+                PutCond::Any,
+            )
+            .await?;
+
         Ok(FamilyBlockWrites {
             logs: self
                 .logs

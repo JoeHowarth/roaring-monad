@@ -1,6 +1,7 @@
 use crate::logs::keys::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
 
 const MAX_LOG_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
+const MAX_TRACE_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LogId(u64);
@@ -107,6 +108,111 @@ pub const fn compose_log_id(shard: LogShard, local: LogLocalId) -> LogId {
     LogId::new((shard.get() << LOCAL_ID_BITS) | (local.get() as u64))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TraceId(u64);
+
+impl TraceId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    pub const fn shard(self) -> TraceShard {
+        TraceShard::new_masked(self.0 >> LOCAL_ID_BITS)
+    }
+
+    pub const fn local(self) -> TraceLocalId {
+        TraceLocalId::new_masked((self.0 & LOCAL_ID_MASK) as u32)
+    }
+
+    pub const fn split(self) -> (TraceShard, TraceLocalId) {
+        (self.shard(), self.local())
+    }
+}
+
+impl From<u64> for TraceId {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<TraceId> for u64 {
+    fn from(value: TraceId) -> Self {
+        value.get()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TraceShard(u64);
+
+impl TraceShard {
+    pub fn new(raw: u64) -> Result<Self, InvalidTraceShard> {
+        if raw <= MAX_TRACE_SHARD {
+            Ok(Self(raw))
+        } else {
+            Err(InvalidTraceShard { raw })
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) const fn new_masked(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTraceShard {
+    raw: u64,
+}
+
+impl InvalidTraceShard {
+    pub const fn raw(self) -> u64 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTraceLocalId {
+    raw: u32,
+}
+
+impl InvalidTraceLocalId {
+    pub const fn raw(self) -> u32 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TraceLocalId(u32);
+
+impl TraceLocalId {
+    pub fn new(raw: u32) -> Result<Self, InvalidTraceLocalId> {
+        if raw <= MAX_LOCAL_ID {
+            Ok(Self(raw))
+        } else {
+            Err(InvalidTraceLocalId { raw })
+        }
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    pub(crate) const fn new_masked(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+pub const fn compose_trace_id(shard: TraceShard, local: TraceLocalId) -> TraceId {
+    TraceId::new((shard.get() << LOCAL_ID_BITS) | (local.get() as u64))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrimaryIdRange {
     pub start: LogId,
@@ -133,7 +239,10 @@ impl PrimaryIdRange {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id};
+    use super::{
+        LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId, TraceLocalId, TraceShard,
+        compose_log_id, compose_trace_id,
+    };
     use crate::logs::keys::MAX_LOCAL_ID;
 
     #[test]
@@ -175,5 +284,24 @@ mod tests {
         let range =
             PrimaryIdRange::new(LogId::new(u64::MAX), LogId::new(u64::MAX)).expect("valid range");
         assert_eq!(range.resume_strictly_after(LogId::new(u64::MAX)), None);
+    }
+
+    #[test]
+    fn trace_id_roundtrips_at_boundaries() {
+        let values = [
+            TraceId::new(0),
+            TraceId::new(1),
+            TraceId::new(u64::from(MAX_LOCAL_ID)),
+            TraceId::new(u64::from(MAX_LOCAL_ID) + 1),
+            compose_trace_id(
+                TraceShard::new(u64::from(u32::MAX) + 1).unwrap(),
+                TraceLocalId::new(7).unwrap(),
+            ),
+        ];
+
+        for value in values {
+            let (shard, local) = value.split();
+            assert_eq!(compose_trace_id(shard, local), value);
+        }
     }
 }

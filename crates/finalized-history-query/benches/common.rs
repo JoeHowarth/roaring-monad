@@ -281,7 +281,7 @@ pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Finali
         parent_hash,
         logs,
         txs: Vec::new(),
-        traces: Vec::new(),
+        trace_rlp: Vec::new(),
     }
 }
 

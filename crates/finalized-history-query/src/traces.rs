@@ -4,12 +4,6 @@ use crate::family::FinalizedBlock;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct Trace {
-    pub tx_idx: u32,
-    pub trace_idx: u32,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TraceStartupState;
 
@@ -32,7 +26,7 @@ impl TracesFamily {
         _state: &mut TraceStartupState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
-        if !block.traces.is_empty() {
+        if !block.trace_rlp.is_empty() {
             return Err(Error::Unsupported("trace ingest not implemented"));
         }
         Ok(0)

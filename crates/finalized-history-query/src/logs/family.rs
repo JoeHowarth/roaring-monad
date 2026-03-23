@@ -48,13 +48,7 @@ impl LogsFamily {
             from_next_log_id,
         )
         .await?;
-        persist_log_block_record(
-            runtime.tables(),
-            runtime.meta_store(),
-            block,
-            from_next_log_id,
-        )
-        .await?;
+        persist_log_block_record(runtime.tables(), block, from_next_log_id).await?;
         persist_log_dir_by_block(
             runtime.tables(),
             block.block_num,

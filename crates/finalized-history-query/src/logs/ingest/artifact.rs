@@ -1,14 +1,12 @@
 use bytes::Bytes;
 
-use crate::codec::encode_u64;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
-use crate::logs::table_specs::{BlockHashIndexSpec, LogDirSubBucketSpec};
+use crate::logs::table_specs::LogDirSubBucketSpec;
 use crate::logs::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
-use crate::store::traits::{BlobStore, MetaStore, PutCond};
-use crate::tables::PointTableSpec;
+use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
@@ -27,7 +25,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
 
 pub async fn persist_log_block_record<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
-    meta_store: &M,
     block: &FinalizedBlock,
     first_log_id: u64,
 ) -> Result<()> {
@@ -41,18 +38,7 @@ pub async fn persist_log_block_record<M: MetaStore, B: BlobStore>(
     tables
         .block_records()
         .put(block.block_num, &block_record)
-        .await?;
-
-    let _ = meta_store
-        .put(
-            BlockHashIndexSpec::TABLE,
-            &BlockHashIndexSpec::key(&block.block_hash),
-            encode_u64(block.block_num),
-            PutCond::Any,
-        )
-        .await?;
-
-    Ok(())
+        .await
 }
 
 pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(

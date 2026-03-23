@@ -23,6 +23,7 @@ serde.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 quick_cache.workspace = true
+alloy-rlp.workspace = true
 tokio = { workspace = true, optional = true }
 scylla = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
