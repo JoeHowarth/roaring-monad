@@ -9,6 +9,7 @@ use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
+use crate::query::normalized::{effective_limit, normalize_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -55,9 +56,6 @@ impl TracesQueryEngine {
         request: QueryTracesRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Trace>> {
-        if request.limit == 0 {
-            return Err(Error::InvalidParams("limit must be at least 1"));
-        }
         if !request.filter.has_indexed_clause() {
             return Err(Error::InvalidParams(
                 "query must include at least one indexed trace predicate",
@@ -69,16 +67,7 @@ impl TracesQueryEngine {
                 max: self.max_or_terms,
             });
         }
-
-        let effective_limit = match budget.max_results {
-            Some(0) => {
-                return Err(Error::InvalidParams(
-                    "budget.max_results must be at least 1 when set",
-                ));
-            }
-            Some(max_results) => request.limit.min(max_results),
-            None => request.limit,
-        };
+        let effective_limit = effective_limit(request.limit, budget)?;
 
         let (from_block, to_block) = resolve_request_block_bounds(tables, &request).await?;
         let block_range = resolve_block_range(
@@ -93,32 +82,31 @@ impl TracesQueryEngine {
             return Ok(self.empty_page(&block_range));
         }
 
-        let Some(mut trace_window) = resolve_trace_window(tables, &block_range).await? else {
+        let Some(trace_window) = resolve_trace_window(tables, &block_range).await? else {
             return Ok(self.empty_page(&block_range));
         };
 
-        if let Some(resume_trace_id) = request.resume_trace_id.map(TraceId::new) {
-            if !trace_window.contains(resume_trace_id) {
-                return Err(Error::InvalidParams(
-                    "resume_trace_id outside resolved block window",
-                ));
-            }
-            let Some(resumed_window) = trace_window.resume_strictly_after(resume_trace_id) else {
-                return Ok(self.empty_page(&block_range));
-            };
-            trace_window = resumed_window;
-        }
+        let Some(normalized) = normalize_query(
+            &block_range,
+            trace_window,
+            request.resume_trace_id.map(TraceId::new),
+            effective_limit,
+            "resume_trace_id outside resolved block window",
+        )?
+        else {
+            return Ok(self.empty_page(&block_range));
+        };
 
         let matched = self
             .execute_indexed_query(
                 tables,
                 &request.filter,
-                (trace_window.start, trace_window.end_inclusive),
-                effective_limit.saturating_add(1),
+                (normalized.id_range.start, normalized.id_range.end_inclusive),
+                normalized.take,
             )
             .await?;
 
-        Ok(self.build_page(block_range, effective_limit, matched))
+        Ok(self.build_page(normalized.block_range, normalized.effective_limit, matched))
     }
 
     fn empty_page(&self, block_range: &ResolvedBlockRange) -> QueryPage<Trace> {

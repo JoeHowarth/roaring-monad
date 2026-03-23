@@ -3,6 +3,7 @@ use crate::core::offsets::BucketedOffsets;
 use crate::core::state::BlockRecordLike;
 use crate::error::{Error, Result};
 use crate::family::Hash32;
+use crate::query::types::BlockWindow;
 
 pub type Address20 = [u8; 20];
 pub type Selector4 = [u8; 4];
@@ -110,6 +111,16 @@ impl From<&TraceBlockRecord> for TraceBlockWindow {
             first_trace_id: TraceId::new(value.first_trace_id),
             count: value.count,
         }
+    }
+}
+
+impl BlockWindow<TraceId> for TraceBlockWindow {
+    fn first_id(self) -> TraceId {
+        self.first_trace_id
+    }
+
+    fn count(self) -> u32 {
+        self.count
     }
 }
 

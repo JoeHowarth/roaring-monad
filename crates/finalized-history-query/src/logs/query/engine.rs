@@ -14,6 +14,7 @@ use crate::logs::materialize::{LogMaterializer, ResolvedLogLocation};
 use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
+use crate::query::normalized::{effective_limit, normalize_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -51,24 +52,12 @@ impl LogsQueryEngine {
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
-        if request.limit == 0 {
-            return Err(Error::InvalidParams("limit must be at least 1"));
-        }
         if !request.filter.has_indexed_clause() {
             return Err(Error::InvalidParams(
                 "query must include at least one indexed address or topic clause",
             ));
         }
-
-        let effective_limit = match budget.max_results {
-            Some(0) => {
-                return Err(Error::InvalidParams(
-                    "budget.max_results must be at least 1 when set",
-                ));
-            }
-            Some(max_results) => request.limit.min(max_results),
-            None => request.limit,
-        };
+        let effective_limit = effective_limit(request.limit, budget)?;
 
         let block_range = resolve_block_range(
             tables,
@@ -82,22 +71,9 @@ impl LogsQueryEngine {
             return Ok(self.empty_page(&block_range));
         }
 
-        let Some(mut log_window) = resolve_log_window(tables, &block_range).await? else {
+        let Some(log_window) = resolve_log_window(tables, &block_range).await? else {
             return Ok(self.empty_page(&block_range));
         };
-
-        if let Some(resume_log_id) = request.resume_log_id.map(LogId::new) {
-            if !log_window.contains(resume_log_id) {
-                return Err(Error::InvalidParams(
-                    "resume_log_id outside resolved block window",
-                ));
-            }
-
-            let Some(resumed_window) = log_window.resume_strictly_after(resume_log_id) else {
-                return Ok(self.empty_page(&block_range));
-            };
-            log_window = resumed_window;
-        }
 
         if is_too_broad(&request.filter, self.max_or_terms) {
             let actual = request.filter.max_or_terms();
@@ -107,17 +83,26 @@ impl LogsQueryEngine {
             });
         }
 
-        let take = effective_limit.saturating_add(1);
+        let Some(normalized) = normalize_query(
+            &block_range,
+            log_window,
+            request.resume_log_id.map(LogId::new),
+            effective_limit,
+            "resume_log_id outside resolved block window",
+        )?
+        else {
+            return Ok(self.empty_page(&block_range));
+        };
         let matched = self
             .execute_indexed_query(
                 tables,
                 &request.filter,
-                (log_window.start, log_window.end_inclusive),
-                take,
+                (normalized.id_range.start, normalized.id_range.end_inclusive),
+                normalized.take,
             )
             .await?;
 
-        Ok(self.build_page(block_range, effective_limit, matched))
+        Ok(self.build_page(normalized.block_range, normalized.effective_limit, matched))
     }
 
     fn empty_page(&self, block_range: &ResolvedBlockRange) -> QueryPage<Log> {

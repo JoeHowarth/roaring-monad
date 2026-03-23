@@ -3,6 +3,7 @@ use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
 use crate::logs::types::BlockRecord;
 use crate::logs::types::LogBlockWindow;
+use crate::query::window::{PrimaryWindowSource, resolve_primary_window};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -27,33 +28,23 @@ pub async fn resolve_log_window<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_range: &ResolvedBlockRange,
 ) -> Result<Option<PrimaryIdRange>> {
-    if block_range.is_empty() {
-        return Ok(None);
+    resolve_primary_window(tables, block_range, &LogWindowSource).await
+}
+
+struct LogWindowSource;
+
+impl PrimaryWindowSource for LogWindowSource {
+    type Id = LogId;
+    type Range = PrimaryIdRange;
+    type Window = LogBlockWindow;
+
+    async fn load_block_window<M: MetaStore, B: BlobStore>(
+        &self,
+        tables: &Tables<M, B>,
+        block_num: u64,
+    ) -> Result<Option<Self::Window>> {
+        load_log_block_window(tables, block_num).await
     }
-
-    let Some(from_block_window) = load_log_block_window(tables, block_range.from_block).await?
-    else {
-        return Ok(None);
-    };
-    let Some(to_block_window) = load_log_block_window(tables, block_range.to_block).await? else {
-        return Ok(None);
-    };
-
-    let start = from_block_window.first_log_id;
-    let end_exclusive = LogId::new(
-        to_block_window
-            .first_log_id
-            .get()
-            .saturating_add(to_block_window.count as u64),
-    );
-    if start >= end_exclusive {
-        return Ok(None);
-    }
-
-    Ok(PrimaryIdRange::new(
-        start,
-        LogId::new(end_exclusive.get().saturating_sub(1)),
-    ))
 }
 
 #[cfg(test)]
@@ -168,6 +159,24 @@ mod tests {
                 .expect("should return window");
             assert_eq!(window.start, LogId::new(50));
             assert_eq!(window.end_inclusive, LogId::new(55));
+        });
+    }
+
+    #[test]
+    fn resolve_log_window_skips_zero_count_boundary_blocks() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            seed_block(&meta, 5, 50, 0).await;
+            seed_block(&meta, 6, 50, 2).await;
+            seed_block(&meta, 7, 52, 0).await;
+            let tables = Tables::without_cache(meta, InMemoryBlobStore::default());
+            let range = non_empty_range(5, 7);
+            let window = resolve_log_window(&tables, &range)
+                .await
+                .unwrap()
+                .expect("should return window");
+            assert_eq!(window.start, LogId::new(50));
+            assert_eq!(window.end_inclusive, LogId::new(51));
         });
     }
 }

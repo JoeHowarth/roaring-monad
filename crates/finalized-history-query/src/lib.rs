@@ -6,6 +6,7 @@ pub mod family;
 pub mod ingest;
 pub mod kernel;
 pub mod logs;
+pub(crate) mod query;
 pub mod runtime;
 pub mod startup;
 pub mod store;

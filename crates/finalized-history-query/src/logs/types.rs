@@ -1,6 +1,7 @@
 use crate::core::ids::LogId;
 use crate::core::state::BlockRecordLike;
 use crate::family::Hash32;
+use crate::query::types::BlockWindow;
 
 pub type Address20 = [u8; 20];
 pub type Topic32 = [u8; 32];
@@ -67,6 +68,16 @@ impl From<&BlockRecord> for LogBlockWindow {
             first_log_id: LogId::new(value.first_log_id),
             count: value.count,
         }
+    }
+}
+
+impl BlockWindow<LogId> for LogBlockWindow {
+    fn first_id(self) -> LogId {
+        self.first_log_id
+    }
+
+    fn count(self) -> u32 {
+        self.count
     }
 }
 
