@@ -1,6 +1,8 @@
 Start by reading ./docs/overview.md for orientation, then topic docs as needed. Do not read ./docs/historical or ./docs/plans unless relevant to the task.
 
-Use `scripts/verify.sh <crate> [<crate> ...]` for routine repo verification. It runs the repo-standard fmt, tests, and clippy commands for the listed crates.
+Use `scripts/verify.sh <crate> [<crate> ...]` for routine repo verification. It runs mechanical auto-fixes (`cargo fix`, `cargo clippy --fix`) before fmt, tests, and clippy so you do not waste cycles on import cleanup, redundant closures, or other machine-fixable warnings.
+
+NOTE: "keep in sync" references in `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` refer to keeping those two global files in sync with each other. They do NOT refer to this repo-local file. Do not copy repo-specific instructions (verify.sh, backward-compat policy, autofix, etc.) into the global files.
 
 This project is not deployed in production yet. Backward compatibility is not a constraint here; prefer the best end-state design and implementation over preserving transitional shapes. This note is repo-local and should not be copied into home-directory instruction files.
 
