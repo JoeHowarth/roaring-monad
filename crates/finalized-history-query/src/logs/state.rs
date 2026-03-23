@@ -59,8 +59,8 @@ pub async fn resolve_log_window<M: MetaStore, B: BlobStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::StorageCodec;
     use crate::core::refs::BlockRef;
+    use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::BLOCK_RECORD_TABLE;
     use crate::logs::table_specs::BlockRecordSpec;
     use crate::store::blob::InMemoryBlobStore;

@@ -1,5 +1,6 @@
+use crate::kernel::cache::BytesCacheConfig;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::{BytesCacheConfig, Tables};
+use crate::tables::Tables;
 
 pub struct Runtime<M: MetaStore, B: BlobStore> {
     meta_store: M,

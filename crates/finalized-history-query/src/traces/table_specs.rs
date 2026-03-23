@@ -1,6 +1,6 @@
 use crate::core::ids::{TraceId, TraceShard, compose_trace_id};
+pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
-pub use crate::tables::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
     TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_BLOCK_RECORD_TABLE,

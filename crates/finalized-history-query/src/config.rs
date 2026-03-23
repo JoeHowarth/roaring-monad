@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::tables::BytesCacheConfig;
+use crate::kernel::cache::BytesCacheConfig;
 
 #[derive(Clone)]
 pub struct Config {

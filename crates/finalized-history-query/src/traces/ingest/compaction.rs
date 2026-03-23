@@ -81,11 +81,10 @@ pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
 }
 
 fn is_page_sealed(page_start_local: u32, from_next_trace_id: u64, next_trace_id: u64) -> bool {
-    use crate::logs::keys::LOCAL_ID_MASK;
-    use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+    use crate::traces::keys::{TRACE_LOCAL_ID_MASK, TRACE_STREAM_PAGE_LOCAL_ID_SPAN};
     let page_end_local = page_start_local.saturating_add(TRACE_STREAM_PAGE_LOCAL_ID_SPAN);
-    let from_local = (from_next_trace_id & LOCAL_ID_MASK) as u32;
-    let to_local = (next_trace_id & LOCAL_ID_MASK) as u32;
+    let from_local = (from_next_trace_id & TRACE_LOCAL_ID_MASK) as u32;
+    let to_local = (next_trace_id & TRACE_LOCAL_ID_MASK) as u32;
     // Page is sealed if next_trace_id moved past the page boundary.
     // This can happen either within the same shard (to_local >= page_end)
     // or by crossing a shard boundary (to_local < from_local).

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::codec::StorageCodec;
 use crate::error::Result;
+use crate::kernel::codec::StorageCodec;
 use crate::store::traits::{KvTable, MetaStore, PutCond, TableId};
 
 pub type SessionId = [u8; 16];
@@ -165,7 +165,7 @@ impl<T: PublicationStore> PublicationStore for Arc<T> {
 #[cfg(test)]
 mod tests {
     use super::{PublicationState, SessionId};
-    use crate::codec::StorageCodec;
+    use crate::kernel::codec::StorageCodec;
 
     #[test]
     fn publication_state_storage_codec_roundtrips_through_trait_api() {

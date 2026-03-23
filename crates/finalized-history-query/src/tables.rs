@@ -1,7 +1,5 @@
 use bytes::Bytes;
 
-use crate::codec::StorageCodec;
-use crate::codec::encode_u64;
 use crate::error::{Error, Result};
 use crate::kernel::blob_table::CachedBlobTable;
 pub use crate::kernel::cache::{
@@ -9,8 +7,10 @@ pub use crate::kernel::cache::{
     TableCacheMetrics,
 };
 use crate::kernel::cache::{cache_for, no_cache};
+use crate::kernel::codec::{StorageCodec, encode_u64};
 use crate::kernel::point_table::CachedPointTable;
 use crate::kernel::scannable_table::ScannableFragmentTable;
+use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::logs::keys::read_u64_be;
 use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::logs::table_specs::{
@@ -19,10 +19,7 @@ use crate::logs::table_specs::{
     LogDirSubBucketSpec,
 };
 use crate::logs::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
-use crate::store::traits::{
-    BlobStore, BlobTable, BlobTableId, KvTable, MetaStore, ScannableKvTable, ScannableTableId,
-    TableId,
-};
+use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
 use crate::traces::table_specs::{
     BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
     TraceBitmapPageMetaSpec, TraceBlockRecordSpec, TraceDirBucketSpec, TraceDirByBlockSpec,
@@ -32,18 +29,6 @@ use crate::traces::types::{
     BlockTraceHeader, DirBucket as TraceDirBucket, DirByBlock as TraceDirByBlock,
     StreamBitmapMeta as TraceStreamBitmapMeta, TraceBlockRecord,
 };
-
-pub trait PointTableSpec {
-    const TABLE: TableId;
-}
-
-pub trait ScannableTableSpec {
-    const TABLE: ScannableTableId;
-}
-
-pub trait BlobTableSpec {
-    const TABLE: BlobTableId;
-}
 
 pub struct Tables<M: MetaStore, B: BlobStore> {
     block_hash_index: BlockHashIndexTable<M>,

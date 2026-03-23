@@ -2,6 +2,10 @@
 
 This document describes the immutable artifact-table and bytes-cache design.
 
+The shared cache implementation, cache metrics types, and generic cache-backed
+table helpers live under `src/kernel/*`. `src/tables.rs` assembles those shared
+primitives into the crate's typed family-facing storage surface.
+
 ## Design Principle
 
 Query, startup, and ingest share one long-lived `Runtime<M, B>` that owns typed

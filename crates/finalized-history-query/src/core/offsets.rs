@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
-use crate::codec::StorageCodec;
 use crate::error::{Error, Result};
+use crate::kernel::codec::StorageCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct BucketedOffsets {
@@ -235,7 +235,7 @@ pub fn byte_offset_in(root: &[u8], slice: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::StorageCodec;
+    use crate::kernel::codec::StorageCodec;
 
     use super::BucketedOffsets;
 

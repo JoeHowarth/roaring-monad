@@ -16,10 +16,10 @@ pub use stream::{
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::StorageCodec;
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::family::FinalizedBlock;
+    use crate::kernel::codec::StorageCodec;
     use crate::logs::codec::validate_log;
     use crate::logs::ingest::{
         compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,

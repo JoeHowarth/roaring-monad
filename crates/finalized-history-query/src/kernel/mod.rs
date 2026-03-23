@@ -3,3 +3,4 @@ pub mod cache;
 pub mod codec;
 pub mod point_table;
 pub mod scannable_table;
+pub mod table_specs;

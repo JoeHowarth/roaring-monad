@@ -1,12 +1,13 @@
 use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
-use crate::logs::keys::MAX_LOCAL_ID;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
-use crate::traces::keys::{TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id};
+use crate::traces::keys::{
+    MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id,
+};
 use crate::traces::table_specs;
 
 use super::stream_bitmap::{load_trace_bitmap_page_meta, overlaps};
@@ -38,7 +39,7 @@ pub(crate) fn is_too_broad(filter: &TraceFilter, max_or_terms: usize) -> bool {
 }
 
 pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-    local_from == 0 && local_to == MAX_LOCAL_ID
+    local_from == 0 && local_to == MAX_TRACE_LOCAL_ID
 }
 
 pub(in crate::traces) fn build_clause_specs(filter: &TraceFilter) -> Vec<IndexedClauseSpec> {

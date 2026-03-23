@@ -181,7 +181,7 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::codec::StorageCodec;
+    use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::{BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE};
     use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,

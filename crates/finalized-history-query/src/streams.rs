@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 use bytes::Bytes;
 use roaring::RoaringBitmap;
 
-use crate::codec::StorageCodec;
-use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
+use crate::kernel::codec::StorageCodec;
+use crate::kernel::codec::fixed_codec;
 
 const BITMAP_BLOB_HEADER_LEN: usize = 1 + 4 * 4;
 

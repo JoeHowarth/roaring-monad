@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 
 use crate::core::ids::{LogId, LogShard};
 use crate::error::{Error, Result};
+use crate::kernel::table_specs::ScannableTableSpec;
 use crate::logs::keys::{STREAM_PAGE_LOCAL_ID_SPAN, read_u64_be};
 use crate::logs::table_specs::{self, OpenBitmapPageSpec};
 use crate::store::traits::{DelCond, MetaStore, PutCond};
-use crate::tables::ScannableTableSpec;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {

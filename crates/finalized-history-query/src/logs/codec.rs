@@ -1,8 +1,8 @@
 use bytes::Bytes;
 
-use crate::codec::StorageCodec;
-use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
+use crate::kernel::codec::StorageCodec;
+use crate::kernel::codec::fixed_codec;
 use crate::logs::types::{
     BlockLogHeader, BlockRecord, DirBucket, DirByBlock, Log, StreamBitmapMeta, Topic32,
 };

@@ -47,9 +47,10 @@ The crate is organized in three layers.
 - `src/ingest/authority.rs`
 - `src/ingest/authority/*`
 - `src/ingest/engine.rs`
+- `src/kernel/*`
 - `src/runtime.rs`
 - `src/streams/*`
-- `src/tables/*`
+- `src/tables.rs`
 
 ### Family adapters
 
@@ -328,52 +329,55 @@ The crate intentionally does not implement:
 
 ### Pass 2: Shared substrate
 
-4. `src/tables.rs` — typed immutable-artifact tables, per-table bytes caches, and cache config/metrics
-5. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
-6. `src/core/page.rs` — pagination/result vocabulary
-7. `src/core/refs.rs` — shared `BlockRef` type
-8. `src/core/state.rs` — shared state projections
-9. `src/core/range.rs` — block-range validation and clipping
-10. `src/core/execution.rs` — matched-primary vocabulary
-11. `src/domain/keys.rs` — shared publication-state key layout
-12. `src/domain/types.rs` — shared publication/session state
-13. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
+4. `src/kernel/cache.rs` — per-table bytes-cache config, metrics, and cache internals
+5. `src/kernel/point_table.rs` — shared cache-backed point-table reads/writes
+6. `src/kernel/scannable_table.rs` — shared scannable partition loading
+7. `src/kernel/blob_table.rs` — shared cache-backed blob access
+8. `src/tables.rs` — typed immutable-artifact table assembly and family-facing wrappers
+9. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
+10. `src/core/page.rs` — pagination/result vocabulary
+11. `src/core/refs.rs` — shared `BlockRef` type
+12. `src/core/state.rs` — shared state projections
+13. `src/core/range.rs` — block-range validation and clipping
+14. `src/core/execution.rs` — matched-primary vocabulary
+15. `src/domain/keys.rs` — shared publication-state key layout
+16. `src/domain/types.rs` — shared publication/session state
+17. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
 
-14. `src/logs/types.rs` — logs-owned schema and startup projections
-15. `src/logs/keys.rs` — logs-family key layout and ID constants
-16. `src/logs/table_specs.rs` — logs-family table specs and key helpers
-17. `src/logs/codec.rs` — log, directory bucket, block log header, and block record encodings
-18. `src/logs/log_ref.rs` — zero-copy log and bucket views
-19. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
-20. `src/logs/filter.rs` — log matching semantics, indexed clauses
-21. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
-22. `src/logs/window.rs` — block range to primary-ID range bridge
-23. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
-24. `src/logs/query/` — main query engine
-25. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
+18. `src/logs/types.rs` — logs-owned schema and startup projections
+19. `src/logs/keys.rs` — logs-family key layout and ID constants
+20. `src/logs/table_specs.rs` — logs-family table specs and key helpers
+21. `src/logs/codec.rs` — log, directory bucket, block log header, and block record encodings
+22. `src/logs/log_ref.rs` — zero-copy log and bucket views
+23. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
+24. `src/logs/filter.rs` — log matching semantics, indexed clauses
+25. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
+26. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
+27. `src/logs/query/` — main query engine
+28. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
 ### Pass 4: Storage and codecs
 
-26. `src/codec/finalized_state.rs` — shared `PublicationState` and helper encoding
-27. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
+29. `src/kernel/codec.rs` — shared storage codec trait and fixed-layout codec macro
+30. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 
 ### Pass 5: Ingest orchestration
 
-28. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
-29. `src/ingest/authority.rs` — `WriteAuthority` contract
-30. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-31. `src/startup.rs` — concrete logs startup view built on the family boundary
+31. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
+32. `src/ingest/authority.rs` — `WriteAuthority` contract
+33. `src/ingest/authority/lease/` — lease-backed multi-writer authority
+34. `src/startup.rs` — startup view built on the family boundary
 
 ### Pass 6: End-to-end behavior
 
-32. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-33. `tests/startup.rs` — startup, session reuse, roles
-34. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-35. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-36. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-37. `tests/crash_injection_matrix.rs` — crash-retry behavior
-38. `tests/differential_and_gc.rs` — differential correctness, recovery
+35. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
+36. `tests/startup.rs` — startup, session reuse, roles
+37. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+38. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+39. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+40. `tests/crash_injection_matrix.rs` — crash-retry behavior
+41. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

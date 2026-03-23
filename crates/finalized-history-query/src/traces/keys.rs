@@ -1,8 +1,8 @@
-use crate::logs::keys::{
-    LOCAL_ID_BITS, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID,
-    STREAM_PAGE_LOCAL_ID_SPAN, hex_digit, u64_be,
-};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
+
+const LOCAL_ID_BITS: u32 = 24;
+pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
+pub const MAX_TRACE_LOCAL_ID: u32 = TRACE_LOCAL_ID_MASK as u32;
 
 pub const TRACE_BLOCK_RECORD_TABLE: TableId = TableId::new("trace_block_record");
 pub const BLOCK_TRACE_HEADER_TABLE: TableId = TableId::new("block_trace_header");
@@ -18,12 +18,12 @@ pub const TRACE_OPEN_BITMAP_PAGE_TABLE: ScannableTableId =
 pub const BLOCK_TRACE_BLOB_TABLE: BlobTableId = BlobTableId::new("block_trace_blob");
 pub const TRACE_BITMAP_PAGE_BLOB_TABLE: BlobTableId = BlobTableId::new("trace_bitmap_page_blob");
 
-pub const TRACE_DIRECTORY_BUCKET_SIZE: u64 = LOG_DIRECTORY_BUCKET_SIZE;
-pub const TRACE_DIRECTORY_SUB_BUCKET_SIZE: u64 = LOG_DIRECTORY_SUB_BUCKET_SIZE;
-pub const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = STREAM_PAGE_LOCAL_ID_SPAN;
+pub const TRACE_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
+pub const TRACE_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
+pub const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 pub fn u64_be_trace(v: u64) -> [u8; 8] {
-    u64_be(v)
+    v.to_be_bytes()
 }
 
 pub fn stream_id(index_kind: &str, value: &[u8], shard: crate::core::ids::TraceShard) -> String {
@@ -81,7 +81,16 @@ pub fn trace_local_range_for_shard(
     let local_to = if shard == to_shard {
         to_inclusive.local()
     } else {
-        crate::core::ids::TraceLocalId::new(MAX_LOCAL_ID).expect("MAX_LOCAL_ID is valid")
+        crate::core::ids::TraceLocalId::new(MAX_TRACE_LOCAL_ID)
+            .expect("MAX_TRACE_LOCAL_ID is valid")
     };
     (local_from, local_to)
+}
+
+fn hex_digit(v: u8) -> char {
+    match v {
+        0..=9 => (b'0' + v) as char,
+        10..=15 => (b'a' + (v - 10)) as char,
+        _ => '0',
+    }
 }

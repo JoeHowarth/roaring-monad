@@ -1,8 +1,8 @@
 use bytes::Bytes;
 
-use crate::codec::StorageCodec;
-use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
+use crate::kernel::codec::StorageCodec;
+use crate::kernel::codec::fixed_codec;
 use crate::traces::types::{
     BlockTraceHeader, DirBucket, DirByBlock, StreamBitmapMeta, TraceBlockRecord,
 };
