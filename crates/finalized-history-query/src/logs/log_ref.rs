@@ -352,6 +352,7 @@ impl LogView for Log {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::StorageCodec;
 
     fn test_log() -> Log {
         Log {

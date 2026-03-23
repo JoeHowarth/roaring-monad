@@ -16,6 +16,7 @@ pub use stream::{
 
 #[cfg(test)]
 mod tests {
+    use crate::codec::StorageCodec;
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::family::FinalizedBlock;

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::codec::StorageCodec;
 use crate::error::Result;
 use crate::store::traits::{KvTable, MetaStore, PutCond, TableId};
 

@@ -1,5 +1,6 @@
 use bytes::Bytes;
 
+use crate::codec::StorageCodec;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;

@@ -8,6 +8,7 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
+use finalized_history_query::codec::StorageCodec;
 use finalized_history_query::config::Config;
 use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::core::ids::{

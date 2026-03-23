@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use bytes::Bytes;
 use roaring::RoaringBitmap;
 
+use crate::codec::StorageCodec;
 use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
 

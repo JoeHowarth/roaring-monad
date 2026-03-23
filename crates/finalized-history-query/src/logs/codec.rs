@@ -1,5 +1,6 @@
 use bytes::Bytes;
 
+use crate::codec::StorageCodec;
 use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
 use crate::logs::types::{
@@ -10,8 +11,8 @@ pub fn validate_log(log: &Log) -> bool {
     log.topics.len() <= 4
 }
 
-impl Log {
-    pub fn encode(&self) -> Bytes {
+impl StorageCodec for Log {
+    fn encode(&self) -> Bytes {
         let topic_count = self.topics.len() as u8;
         let mut out = Vec::with_capacity(80 + topic_count as usize * 32 + self.data.len());
         out.extend_from_slice(&self.address);
@@ -28,7 +29,7 @@ impl Log {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 20 + 1 + 4 + 8 + 4 + 4 + 32 {
             return Err(Error::Decode("log too short"));
         }
@@ -96,8 +97,8 @@ impl Log {
     }
 }
 
-impl DirBucket {
-    pub fn encode(&self) -> Bytes {
+impl StorageCodec for DirBucket {
+    fn encode(&self) -> Bytes {
         assert!(u32::try_from(self.first_log_ids.len()).is_ok());
         let mut out = Vec::with_capacity(1 + 8 + 4 + self.first_log_ids.len() * 8);
         out.push(1);
@@ -109,7 +110,7 @@ impl DirBucket {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 + 8 + 4 + 8 {
             return Err(Error::Decode("log directory bucket too short"));
         }
@@ -150,8 +151,8 @@ impl DirBucket {
     }
 }
 
-impl BlockLogHeader {
-    pub fn encode(&self) -> Bytes {
+impl StorageCodec for BlockLogHeader {
+    fn encode(&self) -> Bytes {
         assert!(u32::try_from(self.offsets.len()).is_ok());
         let mut out = Vec::with_capacity(1 + 4 + self.offsets.len() * 4);
         out.push(1);
@@ -162,7 +163,7 @@ impl BlockLogHeader {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 + 4 + 4 {
             return Err(Error::Decode("block log header too short"));
         }

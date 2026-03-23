@@ -1,3 +1,8 @@
+pub trait StorageCodec: Sized {
+    fn encode(&self) -> bytes::Bytes;
+    fn decode(bytes: &[u8]) -> crate::error::Result<Self>;
+}
+
 macro_rules! fixed_codec_field_len {
     (u64) => {
         8usize
@@ -54,8 +59,8 @@ macro_rules! fixed_codec {
             }
         }
     ) => {
-        impl $ty {
-            pub fn encode(&self) -> bytes::Bytes {
+        impl $crate::codec::StorageCodec for $ty {
+            fn encode(&self) -> bytes::Bytes {
                 const ENCODE_LEN: usize = 1usize $(+ $crate::codec::fixed_codec_field_len!($field_ty))+;
                 let mut out = Vec::with_capacity(ENCODE_LEN);
                 out.push($version);
@@ -63,7 +68,7 @@ macro_rules! fixed_codec {
                 bytes::Bytes::from(out)
             }
 
-            pub fn decode(bytes: &[u8]) -> crate::error::Result<Self> {
+            fn decode(bytes: &[u8]) -> crate::error::Result<Self> {
                 const DECODE_LEN: usize = 1usize $(+ $crate::codec::fixed_codec_field_len!($field_ty))+;
                 if bytes.len() != DECODE_LEN {
                     return Err(crate::error::Error::Decode($length_error));
@@ -94,15 +99,15 @@ macro_rules! fixed_codec {
             }
         }
     ) => {
-        impl $ty {
-            pub fn encode(&self) -> bytes::Bytes {
+        impl $crate::codec::StorageCodec for $ty {
+            fn encode(&self) -> bytes::Bytes {
                 const ENCODE_LEN: usize = 0usize $(+ $crate::codec::fixed_codec_field_len!($field_ty))+;
                 let mut out = Vec::with_capacity(ENCODE_LEN);
                 $($crate::codec::fixed_codec_encode_field!(out, self.$field, $field_ty);)+
                 bytes::Bytes::from(out)
             }
 
-            pub fn decode(bytes: &[u8]) -> crate::error::Result<Self> {
+            fn decode(bytes: &[u8]) -> crate::error::Result<Self> {
                 const DECODE_LEN: usize = 0usize $(+ $crate::codec::fixed_codec_field_len!($field_ty))+;
                 if bytes.len() != DECODE_LEN {
                     return Err(crate::error::Error::Decode($length_error));

@@ -1,13 +1,14 @@
 use bytes::Bytes;
 
+use crate::codec::StorageCodec;
 use crate::codec::fixed_codec;
 use crate::error::{Error, Result};
 use crate::traces::types::{
     BlockTraceHeader, DirBucket, DirByBlock, StreamBitmapMeta, TraceBlockRecord,
 };
 
-impl DirBucket {
-    pub fn encode(&self) -> Bytes {
+impl StorageCodec for DirBucket {
+    fn encode(&self) -> Bytes {
         assert!(u32::try_from(self.first_trace_ids.len()).is_ok());
         let mut out = Vec::with_capacity(1 + 8 + 4 + self.first_trace_ids.len() * 8);
         out.push(1);
@@ -19,7 +20,7 @@ impl DirBucket {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 + 8 + 4 + 8 {
             return Err(Error::Decode("trace directory bucket too short"));
         }
@@ -60,8 +61,8 @@ impl DirBucket {
     }
 }
 
-impl BlockTraceHeader {
-    pub fn encode(&self) -> Bytes {
+impl StorageCodec for BlockTraceHeader {
+    fn encode(&self) -> Bytes {
         assert!(u32::try_from(self.tx_starts.len()).is_ok());
         let offsets = self.offsets.encode();
         assert!(u32::try_from(offsets.len()).is_ok());
@@ -78,7 +79,7 @@ impl BlockTraceHeader {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 + 4 + 4 + 1 + 4 {
             return Err(Error::Decode("block trace header too short"));
         }

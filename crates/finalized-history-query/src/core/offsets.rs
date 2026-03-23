@@ -1,5 +1,6 @@
 use bytes::Bytes;
 
+use crate::codec::StorageCodec;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -53,7 +54,7 @@ impl BucketedOffsets {
         Some((u64::from(self.bucket_high_bits[bucket_index]) << 32) | u64::from(low_bits))
     }
 
-    pub fn encode(&self) -> Bytes {
+    fn encode_impl(&self) -> Bytes {
         assert!(u32::try_from(self.bucket_high_bits.len()).is_ok());
         let total_entries = self.buckets.iter().map(Vec::len).sum::<usize>();
         assert!(u32::try_from(total_entries).is_ok());
@@ -77,7 +78,7 @@ impl BucketedOffsets {
         Bytes::from(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    fn decode_impl(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 + 4 {
             return Err(Error::Decode("bucketed offsets too short"));
         }
@@ -208,6 +209,16 @@ impl BucketedOffsets {
     }
 }
 
+impl StorageCodec for BucketedOffsets {
+    fn encode(&self) -> Bytes {
+        self.encode_impl()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        Self::decode_impl(bytes)
+    }
+}
+
 /// Compute the byte offset of `slice` within `root`.
 ///
 /// Both must point into the same allocation (e.g. `slice` was obtained by
@@ -224,6 +235,8 @@ pub fn byte_offset_in(root: &[u8], slice: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::codec::StorageCodec;
+
     use super::BucketedOffsets;
 
     #[test]
