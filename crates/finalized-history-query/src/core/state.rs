@@ -1,10 +1,7 @@
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::logs::keys::read_u64_be;
-use crate::logs::table_specs::BlockHashIndexSpec;
 use crate::logs::types::BlockRecord;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::PointTableSpec;
 use crate::tables::Tables;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,17 +62,5 @@ pub async fn load_block_num_by_hash<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_hash: &[u8; 32],
 ) -> Result<Option<u64>> {
-    let Some(record) = tables
-        .meta_store_ref()
-        .get(
-            BlockHashIndexSpec::TABLE,
-            &BlockHashIndexSpec::key(block_hash),
-        )
-        .await?
-    else {
-        return Ok(None);
-    };
-    read_u64_be(&record.value)
-        .ok_or(Error::Decode("invalid block_hash_index value"))
-        .map(Some)
+    tables.block_hash_index().get(block_hash).await
 }

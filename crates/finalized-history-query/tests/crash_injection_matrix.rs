@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use alloy_rlp::Encodable;
 use bytes::Bytes;
 use finalized_history_query::Clause;
 use finalized_history_query::FinalizedBlock;
@@ -276,6 +277,83 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedB
     }
 }
 
+fn encode_trace_field<T: alloy_rlp::Encodable>(value: T) -> Vec<u8> {
+    let mut out = Vec::new();
+    value.encode(&mut out);
+    out
+}
+
+fn encode_trace_bytes(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    value.encode(&mut out);
+    out
+}
+
+fn encode_trace_frame(from: [u8; 20], to: Option<[u8; 20]>, value: &[u8], input: &[u8]) -> Vec<u8> {
+    let fields = vec![
+        encode_trace_field(0u8),
+        encode_trace_field(0u64),
+        encode_trace_bytes(&from),
+        encode_trace_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+        encode_trace_bytes(value),
+        encode_trace_field(100u64),
+        encode_trace_field(90u64),
+        encode_trace_bytes(input),
+        encode_trace_bytes(&[]),
+        encode_trace_field(1u8),
+        encode_trace_field(0u64),
+    ];
+    let mut out = Vec::new();
+    alloy_rlp::Header {
+        list: true,
+        payload_length: fields.iter().map(Vec::len).sum(),
+    }
+    .encode(&mut out);
+    for field in fields {
+        out.extend_from_slice(&field);
+    }
+    out
+}
+
+fn encode_trace_block(txs: Vec<Vec<Vec<u8>>>) -> Vec<u8> {
+    let txs = txs
+        .into_iter()
+        .map(|frames| {
+            let mut tx = Vec::new();
+            alloy_rlp::Header {
+                list: true,
+                payload_length: frames.iter().map(Vec::len).sum(),
+            }
+            .encode(&mut tx);
+            for frame in frames {
+                tx.extend_from_slice(&frame);
+            }
+            tx
+        })
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    alloy_rlp::Header {
+        list: true,
+        payload_length: txs.iter().map(Vec::len).sum(),
+    }
+    .encode(&mut out);
+    for tx in txs {
+        out.extend_from_slice(&tx);
+    }
+    out
+}
+
+fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>) -> FinalizedBlock {
+    FinalizedBlock {
+        block_num,
+        block_hash: [block_num as u8; 32],
+        parent_hash,
+        logs: Vec::new(),
+        txs: Vec::new(),
+        trace_rlp,
+    }
+}
+
 fn mk_service(
     meta: Arc<InMemoryMetaStore>,
     blob: Arc<InMemoryBlobStore>,
@@ -452,6 +530,75 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
             .expect("retry ingest");
         let items = query_range(&svc, 1, 1).await;
         assert_eq!(items.len(), 2);
+    });
+}
+
+#[test]
+fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry() {
+    block_on(async {
+        let injector = Arc::new(FaultInjector::default());
+        let meta = Arc::new(InMemoryMetaStore::default());
+        let blob = Arc::new(InMemoryBlobStore::default());
+        let svc = mk_service(meta.clone(), blob.clone(), injector.clone());
+        let block = mk_trace_block(
+            1,
+            [0; 32],
+            encode_trace_block(vec![vec![
+                encode_trace_frame([7; 20], Some([8; 20]), &[1], &[0xaa, 0, 0, 1]),
+                encode_trace_frame([7; 20], Some([9; 20]), &[2], &[0xbb, 0, 0, 2]),
+            ]]),
+        );
+
+        let publication_state_key = FaultyMetaStore::publication_state_logical_key();
+        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
+        let err = svc
+            .ingest_finalized_block(block.clone())
+            .await
+            .expect_err("publication CAS should fail for trace ingest");
+        assert!(matches!(err, Error::Backend(_)));
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
+
+        let writer_runtime = finalized_history_query::runtime::Runtime::new(
+            svc.meta_store().clone(),
+            svc.blob_store().clone(),
+            finalized_history_query::tables::BytesCacheConfig::default(),
+        );
+        let plan = startup_plan(
+            &writer_runtime,
+            &MetaPublicationStore::new(meta.clone()),
+            &Families::default(),
+            0,
+        )
+        .await
+        .expect("startup after failed trace publication");
+        assert_eq!(plan.head_state.indexed_finalized_head, 0);
+        assert_eq!(plan.trace_state.next_trace_id.get(), 0);
+
+        injector.clear();
+        svc.ingest_finalized_block(block)
+            .await
+            .expect("retry trace ingest");
+
+        let query = svc
+            .query_traces(
+                finalized_history_query::QueryTracesRequest {
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    from_block_hash: None,
+                    to_block_hash: None,
+                    order: QueryOrder::Ascending,
+                    resume_trace_id: None,
+                    limit: 10,
+                    filter: finalized_history_query::TraceFilter {
+                        from: Some(Clause::One([7; 20])),
+                        ..Default::default()
+                    },
+                },
+                ExecutionBudget::default(),
+            )
+            .await
+            .expect("query traces after retry");
+        assert_eq!(query.items.len(), 2);
     });
 }
 

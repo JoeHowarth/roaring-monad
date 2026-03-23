@@ -55,6 +55,17 @@ pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Finali
     }
 }
 
+pub fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>) -> FinalizedBlock {
+    FinalizedBlock {
+        block_num,
+        block_hash: [block_num as u8; 32],
+        parent_hash,
+        logs: Vec::new(),
+        txs: Vec::new(),
+        trace_rlp,
+    }
+}
+
 pub fn indexed_address_filter(address: u8) -> LogFilter {
     LogFilter {
         address: Some(Clause::One([address; 20])),

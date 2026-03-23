@@ -6,23 +6,23 @@ Topic-based docs live alongside this file. Historical design docs and migration 
 
 ## Scope
 
-The crate implements finalized history queries for the logs family and a shared ingest substrate for the logs, txs, and traces families.
+The crate implements finalized history queries for the logs and traces families, plus a shared ingest substrate for the logs, txs, and traces families.
 
 The main path:
 
 1. a shared finalized block envelope is ingested
 2. the ingest coordinator validates finalized block continuity once for the whole batch
 3. family-specific ingest handlers process their slice of the block in logs, txs, then traces order
-4. logs receive monotonic finalized `log_id`
-5. immutable log-directory fragments and immutable stream-page fragments are written
+4. logs receive monotonic finalized `log_id`; traces receive monotonic finalized `TraceId`
+5. immutable family-owned directory fragments and immutable stream-page fragments are written
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
-7. `query_logs` resolves a finalized block window
-8. the logs family maps that block window to a log-ID window
+7. `query_logs` and `query_traces` resolve finalized block windows
+8. each family maps that block window to its primary-ID window
 9. query, startup, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 11. ingest writes seed those same typed caches immediately
 12. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
-13. the query returns `QueryPage<Log>` with exact resume metadata
+13. the query returns `QueryPage<T>` with exact resume metadata keyed by the family primary ID
 
 ## Crate Layout
 
@@ -68,8 +68,10 @@ For details on each subsystem, see: [storage-model.md](storage-model.md), [write
 The public query surface is transport-free:
 
 - `QueryLogsRequest`
+- `QueryTracesRequest`
 - `ExecutionBudget`
 - `QueryPage<Log>`
+- `QueryPage<Trace>`
 - `QueryPageMeta`
 - `FinalizedHistoryService`
 
@@ -106,14 +108,29 @@ The logs layer owns:
 - stream fanout for address/topic indexes
 - logs-specific sequencing state (`next_log_id`) and per-block ingest behavior
 
-### Txs and traces families
+### Traces family
 
-The txs and traces layers already participate in the shared family boundary:
+The traces layer owns:
+
+- traces-owned schema, codecs, keys, and table specs
+- raw per-block `trace_rlp` blob storage plus compact per-block trace headers
+- trace block metadata reads and writes
+- trace block-window to trace-ID-window mapping
+- zero-copy `CallFrameView` access over stored RLP bytes
+- trace exact-match materialization from stored bytes
+- immutable trace directory fragment writes and summary compaction
+- immutable trace stream fragment writes and page compaction
+- stream fanout for `from`, `to`, `selector`, and `has_value`
+- traces-specific sequencing state (`next_trace_id`) and per-block ingest behavior
+- public service-level `query_traces` execution over trace-owned indexes
+
+### Txs family
+
+The txs layer already participates in the shared family boundary:
 
 - `src/txs/*`
-- `src/traces/*`
 
-Today they provide startup-state scaffolds and concrete family slots in the shared ingest coordinator. Non-empty tx or trace payloads are rejected until those families grow real storage, codecs, and ingest behavior.
+Today txs still provide startup-state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
 
 ## Main Types
 
@@ -131,6 +148,17 @@ class QueryLogsRequest:
     filter: LogFilter
 
 
+class QueryTracesRequest:
+    from_block: int | None
+    to_block: int | None
+    from_block_hash: bytes32 | None
+    to_block_hash: bytes32 | None
+    order: QueryOrder
+    resume_trace_id: int | None
+    limit: int
+    filter: TraceFilter
+
+
 class ExecutionBudget:
     max_results: int | None
 
@@ -146,7 +174,7 @@ class QueryPageMeta:
     resolved_to_block: BlockRef
     cursor_block: BlockRef
     has_more: bool
-    next_resume_log_id: int | None
+    next_resume_id: int | None
 
 
 class QueryPage[T]:
@@ -160,8 +188,21 @@ class Tx:
 
 
 class Trace:
+    block_num: int
+    block_hash: bytes32
     tx_idx: int
     trace_idx: int
+    typ: int
+    flags: int
+    from: bytes20
+    to: bytes20 | None
+    value: bytes
+    gas: int
+    gas_used: int
+    input: bytes
+    output: bytes
+    status: int
+    depth: int
 
 
 class FinalizedBlock:
@@ -170,7 +211,7 @@ class FinalizedBlock:
     parent_hash: bytes32
     logs: list[Log]
     txs: list[Tx]
-    traces: list[Trace]
+    trace_rlp: bytes
 
 
 class FinalizedHeadState:
@@ -217,6 +258,18 @@ Shared metadata:
 - `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, first_log_id, count }`
 - `block_hash_index` table, key `<block_hash>` -> `block_num`
 - `block_log_header` table, key `<block_num>` -> `BlockLogHeader { offsets }`
+- `trace_block_record` table, key `<block_num>` -> `TraceBlockRecord { block_hash, parent_hash, first_trace_id, count }`
+- `block_trace_header` table, key `<block_num>` -> `BlockTraceHeader { encoding_version, offsets, tx_starts }`
+
+Trace metadata and blobs:
+
+- `block_trace_blob` blob table, key `<block_num>` -> raw per-block `trace_rlp`
+- `trace_dir_bucket` table, key `<trace_bucket_start>` -> compact canonical directory summary
+- `trace_dir_sub_bucket` table, key `<trace_sub_bucket_start>` -> compact canonical sub-bucket summary
+- `trace_dir_by_block` scannable table, partition `<trace_sub_bucket_start>`, clustering `<block_num>` -> immutable frontier fragment
+- `trace_bitmap_by_block` scannable table, partition `<stream_id>/<page_start>`, clustering `<block_num>` -> immutable bitmap fragment
+- `trace_bitmap_page_meta` table, key `<stream_id>/<page_start>` -> compacted page metadata
+- `trace_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` -> compacted page bitmap
 
 Directory metadata:
 

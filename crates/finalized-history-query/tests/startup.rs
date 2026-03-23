@@ -19,6 +19,8 @@ use finalized_history_query::store::publication::{
     PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
 };
 use finalized_history_query::store::traits::{MetaStore, PutCond};
+use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
+use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 use helpers::*;
@@ -271,5 +273,118 @@ fn service_can_publish_a_contiguous_batch() {
 
         assert_eq!(outcome.indexed_finalized_head, 2);
         assert_eq!(head_state.indexed_finalized_head, 2);
+    });
+}
+
+#[test]
+fn startup_recovers_trace_state_from_published_head_only() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta.clone()));
+        assert!(matches!(
+            publication_store
+                .create_if_absent(&seeded_publication_state(3, [3u8; 16], 2))
+                .await
+                .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+
+        meta.put(
+            BLOCK_RECORD_TABLE,
+            &BlockRecordSpec::key(2),
+            BlockRecord {
+                block_hash: [2; 32],
+                parent_hash: [1; 32],
+                first_log_id: 12,
+                count: 0,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed published block record");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(2),
+            TraceBlockRecord {
+                block_hash: [2; 32],
+                parent_hash: [1; 32],
+                first_trace_id: 40,
+                count: 3,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed published trace block record");
+        meta.put(
+            TRACE_BLOCK_RECORD_TABLE,
+            &u64::to_be_bytes(3),
+            TraceBlockRecord {
+                block_hash: [3; 32],
+                parent_hash: [2; 32],
+                first_trace_id: 999,
+                count: 7,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed unpublished trace block record");
+
+        let runtime = finalized_history_query::runtime::Runtime::new(
+            meta,
+            blob,
+            finalized_history_query::tables::BytesCacheConfig::default(),
+        );
+        let plan = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+            .await
+            .expect("startup plan");
+
+        assert_eq!(plan.head_state.indexed_finalized_head, 2);
+        assert_eq!(plan.trace_state.next_trace_id.get(), 43);
+    });
+}
+
+#[test]
+fn startup_allows_missing_trace_records_for_published_logs_only_history() {
+    block_on(async {
+        let meta = InMemoryMetaStore::default();
+        let blob = InMemoryBlobStore::default();
+        let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta.clone()));
+        assert!(matches!(
+            publication_store
+                .create_if_absent(&seeded_publication_state(7, [7u8; 16], 3))
+                .await
+                .expect("seed publication state"),
+            finalized_history_query::store::publication::CasOutcome::Applied(_)
+        ));
+        meta.put(
+            BLOCK_RECORD_TABLE,
+            &BlockRecordSpec::key(3),
+            BlockRecord {
+                block_hash: [3; 32],
+                parent_hash: [2; 32],
+                first_log_id: 8,
+                count: 2,
+            }
+            .encode(),
+            PutCond::Any,
+        )
+        .await
+        .expect("seed published block record");
+
+        let runtime = finalized_history_query::runtime::Runtime::new(
+            meta,
+            blob,
+            finalized_history_query::tables::BytesCacheConfig::default(),
+        );
+        let plan = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+            .await
+            .expect("startup plan");
+
+        assert_eq!(plan.head_state.indexed_finalized_head, 3);
+        assert_eq!(plan.trace_state.next_trace_id.get(), 0);
     });
 }

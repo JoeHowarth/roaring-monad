@@ -5,7 +5,9 @@ use bytes::Bytes;
 use quick_cache::sync::Cache;
 use quick_cache::{DefaultHashBuilder, Lifecycle, OptionsBuilder, Weighter};
 
+use crate::codec::encode_u64;
 use crate::error::{Error, Result};
+use crate::logs::keys::read_u64_be;
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub trait PointTableSpec {
@@ -21,8 +23,9 @@ pub trait BlobTableSpec {
 }
 use crate::logs::log_ref::{BlockLogHeaderRef, DirBucketRef, LogRef};
 use crate::logs::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockLogBlobSpec,
-    BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
+    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
+    BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
+    LogDirSubBucketSpec,
 };
 use crate::logs::types::{BlockRecord, DirByBlock, StreamBitmapMeta};
 use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
@@ -226,8 +229,7 @@ fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
 }
 
 pub struct Tables<M: MetaStore, B: BlobStore> {
-    meta_store: M,
-    blob_store: B,
+    block_hash_index: BlockHashIndexTable<M>,
     block_records: BlockRecordTable<M>,
     block_log_headers: BlockLogHeaderTable<M>,
     trace_block_records: TraceBlockRecordTable<M>,
@@ -250,8 +252,6 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
     pub fn without_cache(meta_store: M, blob_store: B) -> Self {
-        let meta_store_clone = meta_store.clone();
-        let blob_store_clone = blob_store.clone();
         let block_records = BlockRecordTable {
             table: meta_store.table(BlockRecordSpec::TABLE),
             cache: HashMapTableBytesCache::default(),
@@ -265,8 +265,9 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             cache: HashMapTableBytesCache::default(),
         };
         Self {
-            meta_store: meta_store_clone,
-            blob_store: blob_store_clone,
+            block_hash_index: BlockHashIndexTable {
+                table: meta_store.table(BlockHashIndexSpec::TABLE),
+            },
             block_records,
             block_log_headers: block_log_headers.clone(),
             trace_block_records: TraceBlockRecordTable {
@@ -331,8 +332,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
     }
 
     pub fn new(meta_store: M, blob_store: B, config: BytesCacheConfig) -> Self {
-        let meta_store_clone = meta_store.clone();
-        let blob_store_clone = blob_store.clone();
         let block_records = BlockRecordTable {
             table: meta_store.table(BlockRecordSpec::TABLE),
             cache: HashMapTableBytesCache::new(config.block_records.max_bytes),
@@ -346,8 +345,9 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             cache: HashMapTableBytesCache::default(),
         };
         Self {
-            meta_store: meta_store_clone,
-            blob_store: blob_store_clone,
+            block_hash_index: BlockHashIndexTable {
+                table: meta_store.table(BlockHashIndexSpec::TABLE),
+            },
             block_records,
             block_log_headers: block_log_headers.clone(),
             trace_block_records: TraceBlockRecordTable {
@@ -415,12 +415,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
         &self.block_records
     }
 
-    pub fn meta_store_ref(&self) -> &M {
-        &self.meta_store
-    }
-
-    pub fn blob_store_ref(&self) -> &B {
-        &self.blob_store
+    pub fn block_hash_index(&self) -> &BlockHashIndexTable<M> {
+        &self.block_hash_index
     }
 
     pub fn block_log_headers(&self) -> &BlockLogHeaderTable<M> {
@@ -507,6 +503,33 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
 pub struct BlockRecordTable<M> {
     table: KvTable<M>,
     cache: HashMapTableBytesCache,
+}
+
+pub struct BlockHashIndexTable<M> {
+    table: KvTable<M>,
+}
+
+impl<M: MetaStore> BlockHashIndexTable<M> {
+    pub async fn get(&self, block_hash: &[u8; 32]) -> Result<Option<u64>> {
+        let Some(record) = self.table.get(&BlockHashIndexSpec::key(block_hash)).await? else {
+            return Ok(None);
+        };
+        read_u64_be(&record.value)
+            .ok_or(Error::Decode("invalid block_hash_index value"))
+            .map(Some)
+    }
+
+    pub async fn put(&self, block_hash: &[u8; 32], block_num: u64) -> Result<()> {
+        let _ = self
+            .table
+            .put(
+                &BlockHashIndexSpec::key(block_hash),
+                encode_u64(block_num),
+                crate::store::traits::PutCond::Any,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl<M: MetaStore> BlockRecordTable<M> {

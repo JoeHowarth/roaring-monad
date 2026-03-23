@@ -9,23 +9,12 @@ use futures::executor::block_on;
 
 use helpers::*;
 
-#[test]
-fn ingest_and_query_traces_with_resume_and_post_filters() {
-    block_on(async {
-        let svc = FinalizedHistoryService::new_reader_writer(
-            lease_writer_config(),
-            InMemoryMetaStore::default(),
-            InMemoryBlobStore::default(),
+fn complex_trace_blocks() -> Vec<finalized_history_query::FinalizedBlock> {
+    vec![
+        mk_trace_block(
             1,
-        );
-
-        let block1 = finalized_history_query::FinalizedBlock {
-            block_num: 1,
-            block_hash: [1; 32],
-            parent_hash: [0; 32],
-            logs: Vec::new(),
-            txs: Vec::new(),
-            trace_rlp: encode_trace_block(vec![vec![
+            [0; 32],
+            encode_trace_block(vec![vec![
                 encode_trace_frame(
                     0,
                     0,
@@ -42,47 +31,108 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
                 encode_trace_frame(
                     0,
                     0,
-                    [7; 20],
-                    Some([8; 20]),
+                    [8; 20],
+                    Some([9; 20]),
                     &[],
                     100,
                     80,
-                    &[0xaa, 0xbb, 0xcc, 0xdd, 2],
+                    &[0x10, 0x20, 0x30, 0x40, 2],
                     &[],
                     1,
                     1,
                 ),
             ]]),
-        };
-        let block2 = finalized_history_query::FinalizedBlock {
-            block_num: 2,
-            block_hash: [2; 32],
-            parent_hash: [1; 32],
-            logs: Vec::new(),
-            txs: Vec::new(),
-            trace_rlp: encode_trace_block(vec![vec![encode_trace_frame(
+        ),
+        mk_trace_block(
+            2,
+            [1; 32],
+            encode_trace_block(vec![vec![
+                encode_trace_frame(
+                    0,
+                    0,
+                    [7; 20],
+                    Some([8; 20]),
+                    &[5],
+                    120,
+                    110,
+                    &[0xaa, 0xbb, 0xcc, 0xdd, 3],
+                    &[],
+                    1,
+                    0,
+                ),
+                encode_trace_frame(
+                    3,
+                    0,
+                    [5; 20],
+                    None,
+                    &[9],
+                    150,
+                    130,
+                    &[0x99, 0x88],
+                    &[],
+                    1,
+                    0,
+                ),
+            ]]),
+        ),
+        mk_trace_block(
+            3,
+            [2; 32],
+            encode_trace_block(vec![vec![encode_trace_frame(
                 0,
                 0,
-                [7; 20],
-                Some([9; 20]),
-                &[5],
+                [4; 20],
+                Some([6; 20]),
+                &[1],
+                130,
                 120,
-                110,
-                &[0xaa, 0xbb, 0xcc, 0xdd, 3],
+                &[0xde, 0xad, 0xbe, 0xef, 0],
                 &[],
-                1,
+                0,
                 0,
             )]]),
-        };
+        ),
+    ]
+}
 
-        svc.ingest_finalized_blocks(vec![block1, block2])
-            .await
-            .expect("ingest traces");
+fn shifted_complex_trace_blocks(start_block: u64) -> Vec<finalized_history_query::FinalizedBlock> {
+    complex_trace_blocks()
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut block)| {
+            let block_num = start_block + index as u64;
+            block.block_num = block_num;
+            block.block_hash = [block_num as u8; 32];
+            block.parent_hash = if index == 0 {
+                [start_block.saturating_sub(1) as u8; 32]
+            } else {
+                [(block_num - 1) as u8; 32]
+            };
+            block
+        })
+        .collect()
+}
+
+#[test]
+fn ingest_and_query_traces_with_resume_and_post_filters() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        for block in complex_trace_blocks() {
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("ingest traces");
+        }
 
         let first = query_trace_page(
             &svc,
             1,
-            2,
+            3,
             TraceFilter {
                 from: Some(Clause::One([7; 20])),
                 selector: Some(Clause::One([0xaa, 0xbb, 0xcc, 0xdd])),
@@ -105,7 +155,7 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
         let second = query_trace_page(
             &svc,
             1,
-            2,
+            3,
             TraceFilter {
                 from: Some(Clause::One([7; 20])),
                 selector: Some(Clause::One([0xaa, 0xbb, 0xcc, 0xdd])),
@@ -121,7 +171,120 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
         assert_eq!(second.items.len(), 1);
         assert!(!second.meta.has_more);
         assert_eq!(second.items[0].block_num, 2);
-        assert_eq!(second.items[0].to, Some([9; 20]));
+        assert_eq!(second.items[0].to, Some([8; 20]));
+    });
+}
+
+#[test]
+fn query_traces_supports_to_only_selector_only_and_has_value_only_filters() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        for block in complex_trace_blocks() {
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("ingest traces");
+        }
+
+        let to_only = query_trace_page(
+            &svc,
+            1,
+            3,
+            TraceFilter {
+                to: Some(Clause::One([9; 20])),
+                ..Default::default()
+            },
+            10,
+            None,
+        )
+        .await
+        .expect("to-only query");
+        assert_eq!(to_only.items.len(), 2);
+        assert_eq!(to_only.items[0].block_num, 1);
+        assert_eq!(to_only.items[1].block_num, 1);
+
+        let selector_only = query_trace_page(
+            &svc,
+            1,
+            3,
+            TraceFilter {
+                selector: Some(Clause::One([0xaa, 0xbb, 0xcc, 0xdd])),
+                ..Default::default()
+            },
+            10,
+            None,
+        )
+        .await
+        .expect("selector-only query");
+        assert_eq!(selector_only.items.len(), 2);
+        assert_eq!(selector_only.items[0].block_num, 1);
+        assert_eq!(selector_only.items[1].block_num, 2);
+
+        let has_value_only = query_trace_page(
+            &svc,
+            1,
+            3,
+            TraceFilter {
+                has_value: Some(true),
+                ..Default::default()
+            },
+            10,
+            None,
+        )
+        .await
+        .expect("has-value-only query");
+        assert_eq!(has_value_only.items.len(), 4);
+        assert_eq!(has_value_only.items[0].block_num, 1);
+        assert_eq!(has_value_only.items[1].block_num, 2);
+        assert_eq!(has_value_only.items[2].block_num, 2);
+        assert_eq!(has_value_only.items[3].block_num, 3);
+    });
+}
+
+#[test]
+fn query_traces_supports_compound_filters_and_blocks_without_traces() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        svc.ingest_finalized_block(mk_trace_block(1, [0; 32], Vec::new()))
+            .await
+            .expect("ingest empty trace block");
+        for block in shifted_complex_trace_blocks(2) {
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("ingest traces");
+        }
+
+        let page = query_trace_page(
+            &svc,
+            1,
+            4,
+            TraceFilter {
+                from: Some(Clause::One([7; 20])),
+                to: Some(Clause::One([8; 20])),
+                has_value: Some(true),
+                ..Default::default()
+            },
+            10,
+            None,
+        )
+        .await
+        .expect("compound trace query");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].block_num, 3);
+        assert_eq!(page.items[0].from, [7; 20]);
+        assert_eq!(page.items[0].to, Some([8; 20]));
     });
 }
 
@@ -134,13 +297,10 @@ fn query_traces_rejects_is_top_level_only_filter() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.ingest_finalized_block(finalized_history_query::FinalizedBlock {
-            block_num: 1,
-            block_hash: [1; 32],
-            parent_hash: [0; 32],
-            logs: Vec::new(),
-            txs: Vec::new(),
-            trace_rlp: encode_trace_block(vec![vec![encode_trace_frame(
+        svc.ingest_finalized_block(mk_trace_block(
+            1,
+            [0; 32],
+            encode_trace_block(vec![vec![encode_trace_frame(
                 0,
                 0,
                 [7; 20],
@@ -153,7 +313,7 @@ fn query_traces_rejects_is_top_level_only_filter() {
                 1,
                 0,
             )]]),
-        })
+        ))
         .await
         .expect("ingest trace block");
 
@@ -189,13 +349,10 @@ fn query_traces_resolves_block_hash_bounds() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.ingest_finalized_block(finalized_history_query::FinalizedBlock {
-            block_num: 1,
-            block_hash: [1; 32],
-            parent_hash: [0; 32],
-            logs: Vec::new(),
-            txs: Vec::new(),
-            trace_rlp: encode_trace_block(vec![vec![encode_trace_frame(
+        svc.ingest_finalized_block(mk_trace_block(
+            1,
+            [0; 32],
+            encode_trace_block(vec![vec![encode_trace_frame(
                 0,
                 0,
                 [5; 20],
@@ -208,7 +365,7 @@ fn query_traces_resolves_block_hash_bounds() {
                 1,
                 0,
             )]]),
-        })
+        ))
         .await
         .expect("ingest trace block");
 
@@ -237,5 +394,38 @@ fn query_traces_resolves_block_hash_bounds() {
         assert_eq!(page.items[0].block_num, 1);
         assert_eq!(page.meta.resolved_from_block.hash, [1; 32]);
         assert_eq!(page.meta.resolved_to_block.hash, [1; 32]);
+    });
+}
+
+#[test]
+fn query_traces_rejects_resume_trace_id_outside_window() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        for block in complex_trace_blocks() {
+            svc.ingest_finalized_block(block)
+                .await
+                .expect("ingest traces");
+        }
+
+        let err = query_trace_page(
+            &svc,
+            1,
+            3,
+            TraceFilter {
+                from: Some(Clause::One([7; 20])),
+                ..Default::default()
+            },
+            10,
+            Some(999_999),
+        )
+        .await
+        .expect_err("resume trace id outside window");
+        assert!(matches!(err, Error::InvalidParams(_)));
     });
 }

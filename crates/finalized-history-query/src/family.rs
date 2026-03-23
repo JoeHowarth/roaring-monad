@@ -1,13 +1,9 @@
-use crate::codec::encode_u64;
 use crate::config::Config;
 use crate::error::Result;
 use crate::logs::family::LogsFamily;
-use crate::logs::table_specs::BlockHashIndexSpec;
 use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
-use crate::store::traits::PutCond;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::PointTableSpec;
 use crate::traces::{TraceStartupState, TracesFamily};
 use crate::txs::{Tx, TxStartupState, TxsFamily};
 
@@ -89,14 +85,10 @@ impl Families {
         M: MetaStore,
         B: BlobStore,
     {
-        let _ = runtime
-            .meta_store()
-            .put(
-                BlockHashIndexSpec::TABLE,
-                &BlockHashIndexSpec::key(&block.block_hash),
-                encode_u64(block.block_num),
-                PutCond::Any,
-            )
+        runtime
+            .tables()
+            .block_hash_index()
+            .put(&block.block_hash, block.block_num)
             .await?;
 
         Ok(FamilyBlockWrites {
