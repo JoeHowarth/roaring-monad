@@ -1,7 +1,7 @@
 mod common;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use finalized_history_query::core::execution::execute_candidates;
+use finalized_history_query::logs::query::execution::execute_candidates;
 use futures::executor::block_on;
 
 use crate::common::{

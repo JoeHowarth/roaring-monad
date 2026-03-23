@@ -1,7 +1,7 @@
 mod common;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use finalized_history_query::core::execution::PrimaryMaterializer;
+use finalized_history_query::logs::query::execution::PrimaryMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use futures::executor::block_on;

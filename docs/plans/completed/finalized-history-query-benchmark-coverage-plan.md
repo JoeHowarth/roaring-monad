@@ -93,7 +93,7 @@ Decision:
 Concrete choices:
 
 - `execution_bench.rs`
-  - benchmark `core::execution::execute_candidates(...)`
+  - benchmark `logs::query::execution::execute_candidates(...)`
   - use a synthetic `PrimaryMaterializer` stub from `benches/common.rs`
 - `materialize_bench.rs`
   - benchmark single-log materialization through `PrimaryMaterializer::load_by_id(...)` on `LogMaterializer`

@@ -1,6 +1,6 @@
 mod clause;
 mod engine;
-pub(crate) mod execution;
+pub mod execution;
 mod stream_bitmap;
 
 pub use engine::LogsQueryEngine;

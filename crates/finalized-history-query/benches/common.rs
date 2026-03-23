@@ -9,7 +9,6 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::core::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::core::ids::{
     LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id,
 };
@@ -21,6 +20,7 @@ use finalized_history_query::logs::keys::{
     MAX_LOCAL_ID,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
+use finalized_history_query::logs::query::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::logs::table_specs::{
     self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
 };
