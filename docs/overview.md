@@ -38,7 +38,7 @@ The crate is organized in three layers.
 ### Method boundary
 
 - `src/api.rs`
-- `src/block.rs`
+- `src/family.rs`
 
 ### Shared finalized-history substrate
 
@@ -291,7 +291,7 @@ Payload blobs:
 
 Numeric key components use big-endian encoded u64. `block_hash_index` uses the raw 32-byte hash as its suffix key. Blob-table suffix keys follow the same conventions.
 
-Today only the logs family persists finalized-history artifacts. The shared ingest coordinator already reserves concrete family slots for txs and traces, but those families do not yet write storage artifacts.
+Today the logs and traces families persist finalized-history artifacts. The shared ingest coordinator also carries the txs family slot, but tx payload ingest still rejects non-empty tx batches until that family grows real storage and query support.
 
 ## Top-Level Service Boundary
 
@@ -315,7 +315,7 @@ The crate intentionally does not implement:
 
 - descending traversal
 - `block_hash` query mode on the transport-free query surface
-- non-log families
+- tx artifact storage and query support
 - relation hydration helpers
 - canonical block / transaction / trace artifact stores
 
@@ -339,9 +339,9 @@ The crate intentionally does not implement:
 11. `src/core/refs.rs` — shared `BlockRef` type
 12. `src/core/state.rs` — shared state projections
 13. `src/core/range.rs` — block-range validation and clipping
-14. `src/core/execution.rs` — matched-primary vocabulary
-15. `src/domain/keys.rs` — shared publication-state key layout
-16. `src/domain/types.rs` — shared publication/session state
+14. `src/logs/query/execution.rs` — matched-primary vocabulary and log execution seam
+15. `src/core/layout.rs` — shared finalized-history ID layout constants
+16. `src/store/publication.rs` — shared publication/session state and storage key
 17. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
@@ -358,26 +358,40 @@ The crate intentionally does not implement:
 27. `src/logs/query/` — main query engine
 28. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
-### Pass 4: Storage and codecs
+### Pass 4: Traces family
 
-29. `src/kernel/codec.rs` — shared storage codec trait and fixed-layout codec macro
-30. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
+29. `src/traces/types.rs` — traces-owned schema and startup projections
+30. `src/traces/keys.rs` — traces-family key layout and stream key helpers
+31. `src/traces/table_specs.rs` — traces-family table specs
+32. `src/traces/codec.rs` — trace block header and block record encodings
+33. `src/traces/view.rs` — zero-copy `CallFrameView` access over stored RLP bytes
+34. `src/traces/materialize.rs` — `trace_id -> block_num -> trace bytes` resolution
+35. `src/traces/filter.rs` — trace matching semantics and indexed clauses
+36. `src/traces/query/` — trace query engine
+37. `src/traces/ingest/` — trace-family ingest: artifacts, fragments, compaction
 
-### Pass 5: Ingest orchestration
+### Pass 5: Storage and codecs
 
-31. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
-32. `src/ingest/authority.rs` — `WriteAuthority` contract
-33. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-34. `src/startup.rs` — startup view built on the family boundary
+38. `src/kernel/codec.rs` — shared storage codec trait and fixed-layout codec macro
+39. `src/kernel/sharded_streams.rs` — shared sharded stream/page helpers used by logs and traces
+40. `src/kernel/compaction.rs` — shared sealed-boundary compaction helpers
+41. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 
-### Pass 6: End-to-end behavior
+### Pass 6: Ingest orchestration
 
-35. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-36. `tests/startup.rs` — startup, session reuse, roles
-37. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-38. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-39. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-40. `tests/crash_injection_matrix.rs` — crash-retry behavior
-41. `tests/differential_and_gc.rs` — differential correctness, recovery
+42. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
+43. `src/ingest/authority.rs` — `WriteAuthority` contract
+44. `src/ingest/authority/lease/` — lease-backed multi-writer authority
+45. `src/startup.rs` — startup view built on the family boundary
+
+### Pass 7: End-to-end behavior
+
+46. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
+47. `tests/startup.rs` — startup, session reuse, roles
+48. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
+49. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
+50. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
+51. `tests/crash_injection_matrix.rs` — crash-retry behavior
+52. `tests/differential_and_gc.rs` — differential correctness, recovery
 
 All paths are relative to `crates/finalized-history-query/`.

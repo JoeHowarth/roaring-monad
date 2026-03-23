@@ -26,7 +26,7 @@ The current family set is:
 
 - logs: fully implemented and persists artifacts
 - txs: startup-state scaffold plus ingest slot, currently rejects non-empty tx payloads
-- traces: startup-state scaffold plus ingest slot, currently rejects non-empty trace payloads
+- traces: fully implemented and persists trace artifacts plus trace indexes
 
 ## Artifact Write Order
 
@@ -34,7 +34,7 @@ For each block in the batch:
 
 1. **Logs family ingest** — logs artifacts are written through the shared runtime
 2. **Txs family ingest** — reserved slot in the coordinator; currently accepts only empty tx payloads
-3. **Traces family ingest** — reserved slot in the coordinator; currently accepts only empty trace payloads
+3. **Traces family ingest** — trace artifacts, directory fragments, and stream fragments are written through the shared runtime
 
 Within the logs family step, artifact writes remain:
 
@@ -45,6 +45,14 @@ Within the logs family step, artifact writes remain:
 5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
 6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
 
+Within the traces family step, artifact writes are:
+
+1. **Trace blob** — `block_trace_blob` blob table, key `<block_num>`: raw per-block `trace_rlp`
+2. **Block trace header** — `block_trace_header` table, key `<block_num>`: compact trace header with offsets and tx starts
+3. **Trace block meta** — `trace_block_record` table, key `<block_num>`: `{ block_hash, parent_hash, first_trace_id, count }`
+4. **Directory fragments** — one `trace_dir_by_block` row per covered sub-bucket, keyed by partition `<trace_sub_bucket_start>` and clustering `<block_num>`
+5. **Stream fragments** — `trace_bitmap_by_block` rows per stream per page touched
+
 All family artifacts for the block batch must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary. Writes flow through the service-owned typed `Tables` runtime so ingest also warms the same per-table caches that queries read.
 
 ## Directory Compaction
@@ -53,17 +61,21 @@ After all blocks in the batch are persisted, sealed directory boundaries are com
 
 - **Sub-bucket compaction**: when `next_log_id` crosses a sub-bucket boundary (10,000 `log_id` range), the sealed sub-bucket's fragments are compacted into `log_dir_sub_bucket`, key `<sub_bucket_start>`
 - **Bucket compaction**: when `next_log_id` crosses a 1M-bucket boundary, the sealed sub-buckets are optionally compacted into `log_dir_bucket`, key `<bucket_start>`
+- **Trace sub-bucket compaction**: when `next_trace_id` crosses a trace sub-bucket boundary, the sealed trace fragments are compacted into `trace_dir_sub_bucket`, key `<trace_sub_bucket_start>`
+- **Trace bucket compaction**: when `next_trace_id` crosses a trace bucket boundary, the sealed trace sub-buckets are optionally compacted into `trace_dir_bucket`, key `<trace_bucket_start>`
 
 See [storage-model.md](storage-model.md) for directory layout details.
 
 ## Stream Page Compaction
 
-When `next_log_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
+When `next_log_id` or `next_trace_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
 
 1. load all `bitmap_by_block` entries for the page
 2. merge the roaring bitmaps
 3. write compacted `bitmap_page_meta` and `bitmap_page_blob`
 4. delete the `open_bitmap_page` marker for the sealed page
+
+The traces family follows the same pattern with `trace_bitmap_by_block`, `trace_bitmap_page_meta`, and `trace_bitmap_page_blob`.
 
 ## Open-Page Markers
 
@@ -82,8 +94,9 @@ When a stream fragment is written to a page for the first time in a batch, an op
 - `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
 - `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing
 - `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
-- `traces/family.rs`: trace-family scaffold that currently rejects non-empty trace payloads
-- `logs/ingest.rs`: owns directory/stream fragment publication plus eager compaction
+- `traces/mod.rs`: trace-family startup recovery and per-block ingest sequencing
+- `logs/ingest/`: owns log directory/stream fragment publication plus eager compaction
+- `traces/ingest/`: owns trace directory/stream fragment publication plus eager compaction
 - `publication_state.indexed_finalized_head` is published last
 
 See [write-authority.md](write-authority.md) for the lease and publication model.

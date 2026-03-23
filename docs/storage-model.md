@@ -1,12 +1,12 @@
 # Storage Model
 
-This document describes the published artifact model and the block-keyed log-payload layout.
+This document describes the published artifact model plus the logs and traces storage layouts.
 
 ## Design Principles
 
-- `log_id` is the primary query and pagination identity
-- log payload bytes are stored in block-keyed objects
-- no per-log locator records — directory buckets handle `log_id -> block_num` resolution
+- family primary IDs (`log_id`, `trace_id`) are the query and pagination identities
+- family payload bytes are stored in block-keyed objects
+- no per-item locator records — directory buckets handle primary-ID to block resolution
 - published data-path artifacts are immutable by convention
 - summaries never replace source fragments — they are acceleration artifacts
 
@@ -24,16 +24,15 @@ This means cached artifacts are safe to reuse indefinitely until eviction, with 
 
 All artifacts for a block must be durable before `publication_state.indexed_finalized_head` is advanced. This ensures readers never observe a head that references artifacts that don't yet exist.
 
-The artifact write order for a block:
+The artifact write order for a block preserves family-local durability before shared publication:
 
-1. log blob (`block_log_blob` blob table, key `<block_num>`)
-2. block log header (`block_log_header` table, key `<block_num>`)
-3. block meta (`block_record` table, key `<block_num>`)
-4. block hash lookup (`block_hash_index` table, key `<block_hash>`)
-5. directory fragments (`log_dir_by_block` table rows)
-6. stream fragments (`bitmap_by_block` table rows)
-7. compaction (directory sub-buckets, stream pages)
-8. head advance via CAS on `publication_state`
+1. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_trace_blob` / `block_trace_header`)
+2. family block metadata (`block_record`, `trace_block_record`)
+3. shared block hash lookup (`block_hash_index`)
+4. family directory fragments (`log_dir_by_block`, `trace_dir_by_block`)
+5. family stream fragments (`bitmap_by_block`, `trace_bitmap_by_block`)
+6. family compaction (directory summaries, stream pages)
+7. head advance via CAS on `publication_state`
 
 Writers use unconditional writes for normal artifacts. Correctness
 depends on the publication boundary and on rewrites remaining
@@ -45,7 +44,7 @@ Compacted summaries (directory sub-buckets, directory buckets, stream pages) are
 
 Source fragments are retained alongside summaries. This means recovery can always reconstruct state from fragments if a summary is missing or corrupt.
 
-## Directory Layout
+## Logs Directory Layout
 
 Directory buckets map global `log_id` space to block numbers.
 
@@ -102,7 +101,7 @@ When ingest writes block `N` with `first_log_id = X`:
 3. once `next_log_id` crosses a sub-bucket end, compact its retained fragments into `log_dir_sub_bucket`, key `<sub_bucket_start>`
 4. once `next_log_id` crosses a 1M-bucket end, optionally compact the sealed sub-buckets into `log_dir_bucket`, key `<bucket_start>`
 
-## Stream Layout
+## Logs Stream Layout
 
 Stream indexes use roaring bitmaps to map stream identifiers (address/topic) to `log_local_id` sets within a shard.
 
@@ -131,7 +130,7 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
 - startup repair: to clean up stale markers left by interrupted ingest
 
-## Block Headers
+## Logs Block Headers
 
 Each block gets a small header record in the `block_log_header` table keyed by `<block_num>`.
 
@@ -151,7 +150,7 @@ This means:
 
 Empty blocks do not need `block_log_header` or `block_log_blob` entries. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockRecord`.
 
-## Block Log Objects
+## Logs Block Payload Objects
 
 Each block gets one payload blob in the `block_log_blob` blob table keyed by `<block_num>`.
 
@@ -159,7 +158,7 @@ Reads use byte slices via `read_range(key, start, end_exclusive)` rather than fe
 
 For backends that do not support range reads natively, the blob-store adapter polyfills `read_range(...)` by loading the whole object and slicing locally.
 
-## Lookup Flow
+## Logs Lookup Flow
 
 Given a candidate `log_id`:
 
@@ -204,6 +203,43 @@ Resolve `log_id = 120000006`:
 
 The duplicate `120000003` entries matter here. The lookup must choose the last index where `first_log_ids[i] <= 120000006`, not an arbitrary duplicate position.
 
+## Traces Storage Layout
+
+Traces use the same artifact pattern as logs, but the family owns its own ID space, directory tables, stream tables, and payload/header codecs.
+
+### Trace Directory Layout
+
+Three tiers of trace directory objects exist:
+
+| Tier | Storage layout | Scope | Written by |
+|------|----------------|-------|------------|
+| Fragment | `trace_dir_by_block` table, partition `<trace_sub_bucket_start>`, clustering `<block_num>` | One block's contribution to one sub-bucket | Ingest, per block |
+| Sub-bucket | `trace_dir_sub_bucket` table, key `<trace_sub_bucket_start>` | Fixed trace-ID range | Compaction when sub-bucket seals |
+| Bucket | `trace_dir_bucket` table, key `<trace_bucket_start>` | Larger aligned trace-ID range | Optional compaction when bucket seals |
+
+Queries prefer the most compacted trace directory tier available and fall back to fragments for the frontier.
+
+### Trace Stream Layout
+
+Trace stream indexes mirror the logs shape with family-owned tables:
+
+| Tier | Storage layout | Scope | Written by |
+|------|----------------|-------|------------|
+| By-block | `trace_bitmap_by_block` table, partition `<stream_id>/<page_start>`, clustering `<block_num>` | One block's bitmap contribution to one page | Ingest |
+| Page meta | `trace_bitmap_page_meta` table, key `<stream_id>/<page_start>` | Compacted page bitmap meta | Compaction |
+| Page blob | `trace_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` | Compacted roaring bitmap | Compaction |
+
+Trace stream pages use the same shared sharded-page mechanics as logs, but with traces-owned stream IDs and filters.
+
+### Trace Block Headers and Payloads
+
+Each block with traces persists:
+
+- `block_trace_header`, keyed by `<block_num>`, containing trace offsets and transaction starts for the block
+- `block_trace_blob`, keyed by `<block_num>`, containing the raw per-block `trace_rlp`
+
+Materialization resolves `trace_id -> block_num` through the trace directory, then slices the block trace payload with the trace header.
+
 ## Efficiency
 
 Good cases:
@@ -235,3 +271,5 @@ block_record table, key <block_num> -> BlockRecord { block_hash, parent_hash, fi
 ```
 
 This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate — `BlockRecord` is the authoritative per-block record for finalized-state reads; directory buckets are lookup accelerators for `log_id -> block_num`.
+
+Traces mirror this with `trace_block_record`, which is the authoritative per-block sequencing record for `trace_id` ranges while trace directory artifacts remain lookup accelerators.
