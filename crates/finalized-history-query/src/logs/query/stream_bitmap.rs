@@ -4,10 +4,10 @@ use roaring::RoaringBitmap;
 
 use super::clause::is_full_shard_range;
 use crate::error::Result;
+use crate::kernel::sharded_streams::{merge_bitmap_bytes_into, overlaps};
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
 use super::clause::PreparedShardClause;
@@ -94,26 +94,13 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
         .load_page_fragments(stream, page_start)
         .await?
     {
-        let bitmap_blob = decode_bitmap_blob(&bytes)?;
-        if !overlaps(
-            bitmap_blob.min_local,
-            bitmap_blob.max_local,
+        let _ = merge_bitmap_bytes_into(
+            &bytes,
+            out,
             local_from,
             local_to,
-        ) {
-            continue;
-        }
-        if is_full_shard_range(local_from, local_to)
-            || (bitmap_blob.min_local >= local_from && bitmap_blob.max_local <= local_to)
-        {
-            *out |= &bitmap_blob.bitmap;
-            continue;
-        }
-        for value in bitmap_blob.bitmap {
-            if value >= local_from && value <= local_to {
-                out.insert(value);
-            }
-        }
+            is_full_shard_range(local_from, local_to),
+        )?;
     }
     Ok(())
 }
@@ -148,29 +135,13 @@ async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore>(
     let Some(bytes) = load_bitmap_page_blob(tables, stream, page_start).await? else {
         return Ok(false);
     };
-    let bitmap_blob = decode_bitmap_blob(&bytes)?;
-    if is_full_shard_range(local_from, local_to)
-        || (bitmap_blob.min_local >= local_from && bitmap_blob.max_local <= local_to)
-    {
-        *out |= &bitmap_blob.bitmap;
-        return Ok(true);
-    }
-
-    for value in bitmap_blob.bitmap {
-        if value >= local_from && value <= local_to {
-            out.insert(value);
-        }
-    }
-    Ok(true)
-}
-
-pub(in crate::logs) fn overlaps(
-    min_local: u32,
-    max_local: u32,
-    local_from: u32,
-    local_to: u32,
-) -> bool {
-    min_local <= local_to && max_local >= local_from
+    merge_bitmap_bytes_into(
+        &bytes,
+        out,
+        local_from,
+        local_to,
+        is_full_shard_range(local_from, local_to),
+    )
 }
 
 #[cfg(test)]

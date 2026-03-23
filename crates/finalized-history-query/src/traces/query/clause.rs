@@ -1,6 +1,7 @@
 use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
+use crate::kernel::sharded_streams::overlaps;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
@@ -10,7 +11,7 @@ use crate::traces::keys::{
 };
 use crate::traces::table_specs;
 
-use super::stream_bitmap::{load_trace_bitmap_page_meta, overlaps};
+use super::stream_bitmap::load_trace_bitmap_page_meta;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::traces) enum ClauseKind {

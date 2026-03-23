@@ -2,6 +2,7 @@ use crate::core::clause::Clause;
 use crate::core::ids::{LogLocalId, LogShard};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::error::Result;
+use crate::kernel::sharded_streams::overlaps;
 use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
@@ -9,7 +10,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
-use super::stream_bitmap::{load_bitmap_page_meta, overlaps};
+use super::stream_bitmap::load_bitmap_page_meta;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::logs) enum ClauseKind {

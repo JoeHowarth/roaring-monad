@@ -5,6 +5,8 @@ use roaring::RoaringBitmap;
 use crate::core::ids::LogId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
+use crate::kernel::sharded_streams::{compacted_bitmap_blob, group_stream_values_into_pages};
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -57,23 +59,14 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 ) -> Result<Vec<(String, u32)>> {
     let mut touched_pages = BTreeSet::<(String, u32)>::new();
 
-    for (stream, values) in collect_stream_appends(block, first_log_id) {
-        let mut pages = BTreeMap::<u32, RoaringBitmap>::new();
-        for value in values {
-            let page_start = table_specs::stream_page_start_local(value);
-            pages.entry(page_start).or_default().insert(value);
-        }
-
+    let grouped_values = collect_stream_appends(block, first_log_id)
+        .into_iter()
+        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
+    for (stream, pages) in group_stream_values_into_pages(grouped_values, STREAM_PAGE_LOCAL_ID_SPAN)
+    {
         for (page_start, bitmap) in pages {
-            let count = bitmap.len() as u32;
-            let min_local = bitmap.min().unwrap_or(page_start);
-            let max_local = bitmap.max().unwrap_or(page_start);
-            let bitmap_blob = BitmapBlob {
-                min_local,
-                max_local,
-                count,
-                crc32: 0,
-                bitmap,
+            let Some((_count, bitmap_blob)) = compacted_bitmap_blob(bitmap, page_start) else {
+                continue;
             };
 
             tables

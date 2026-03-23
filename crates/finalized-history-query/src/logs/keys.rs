@@ -22,14 +22,6 @@ pub fn block_hash_index_suffix(hash: &[u8; 32]) -> Vec<u8> {
     hash.to_vec()
 }
 
-pub(crate) fn hex_digit(v: u8) -> char {
-    match v {
-        0..=9 => (b'0' + v) as char,
-        10..=15 => (b'a' + (v - 10)) as char,
-        _ => '0',
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

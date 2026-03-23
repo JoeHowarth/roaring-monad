@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
-
-use crate::core::ids::LogId;
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::kernel::compaction::{
+    compact_directory_bucket_from_sub_buckets, compact_directory_sub_bucket_from_fragments,
+    sealed_ranges,
+};
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
 use crate::logs::types::DirBucket;
@@ -47,11 +48,11 @@ pub fn newly_sealed_directory_sub_bucket_starts(
     from_next_log_id: u64,
     to_next_log_id: u64,
 ) -> Vec<u64> {
-    sealed_directory_ranges(
+    sealed_ranges(
         from_next_log_id,
         to_next_log_id,
         LOG_DIRECTORY_SUB_BUCKET_SIZE,
-        |id| LogDirSubBucketSpec::sub_bucket_start(id.get()),
+        LogDirSubBucketSpec::sub_bucket_start,
     )
 }
 
@@ -59,37 +60,12 @@ pub fn newly_sealed_directory_bucket_starts(
     from_next_log_id: u64,
     to_next_log_id: u64,
 ) -> Vec<u64> {
-    sealed_directory_ranges(
+    sealed_ranges(
         from_next_log_id,
         to_next_log_id,
         crate::logs::keys::LOG_DIRECTORY_BUCKET_SIZE,
-        |id| LogDirBucketSpec::bucket_start(id.get()),
+        LogDirBucketSpec::bucket_start,
     )
-}
-
-fn sealed_directory_ranges(
-    from_next_log_id: u64,
-    to_next_log_id: u64,
-    span: u64,
-    align: impl Fn(LogId) -> u64,
-) -> Vec<u64> {
-    if to_next_log_id <= from_next_log_id {
-        return Vec::new();
-    }
-
-    let mut current = align(LogId::new(from_next_log_id));
-    let mut out = Vec::new();
-    loop {
-        let end = current.saturating_add(span);
-        if end > to_next_log_id {
-            break;
-        }
-        if end > from_next_log_id {
-            out.push(current);
-        }
-        current = current.saturating_add(span);
-    }
-    out
 }
 
 async fn compact_directory_sub_bucket<M: MetaStore, B: BlobStore>(
@@ -104,18 +80,17 @@ async fn compact_directory_sub_bucket<M: MetaStore, B: BlobStore>(
         return Ok(());
     }
 
-    let mut first_log_ids = Vec::with_capacity(fragments.len() + 1);
-    for fragment in &fragments {
-        first_log_ids.push(fragment.first_log_id);
-    }
-    let sentinel = fragments
-        .last()
-        .map(|fragment| fragment.end_log_id_exclusive)
-        .unwrap_or(sub_bucket_start);
-    first_log_ids.push(sentinel);
+    let Some((start_block, first_log_ids)) = compact_directory_sub_bucket_from_fragments(
+        &fragments,
+        |fragment| fragment.block_num,
+        |fragment| fragment.first_log_id,
+        |fragment| fragment.end_log_id_exclusive,
+    ) else {
+        return Ok(());
+    };
 
     let bucket = DirBucket {
-        start_block: fragments[0].block_num,
+        start_block,
         first_log_ids,
     };
     tables
@@ -131,51 +106,29 @@ async fn compact_directory_bucket<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let bucket_end = bucket_start.saturating_add(crate::logs::keys::LOG_DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
-    let mut boundaries = BTreeMap::<u64, u64>::new();
-    let mut sentinel = None::<u64>;
+    let mut sub_buckets = Vec::new();
 
     while sub_bucket_start < bucket_end {
         let Some(sub_bucket) = tables.log_dir_sub_buckets().get(sub_bucket_start).await? else {
             sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
             continue;
         };
-        for index in 0..sub_bucket.count().saturating_sub(1) {
-            let block_num = sub_bucket.start_block() + index as u64;
-            let first_log_id = sub_bucket.first_log_id(index);
-            match boundaries.entry(block_num) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(first_log_id);
-                }
-                std::collections::btree_map::Entry::Occupied(entry) => {
-                    if *entry.get() != first_log_id {
-                        return Err(Error::Decode(
-                            "inconsistent directory bucket boundary across sub-buckets",
-                        ));
-                    }
-                }
-            }
-        }
-        let last = sub_bucket.first_log_id(sub_bucket.count().saturating_sub(1));
-        sentinel = Some(match sentinel {
-            Some(current) => current.max(last),
-            None => last,
-        });
+        sub_buckets.push(sub_bucket);
         sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
-    let Some(sentinel) = sentinel else {
+    let Some((start_block, first_log_ids)) = compact_directory_bucket_from_sub_buckets(
+        &sub_buckets,
+        |sub_bucket| sub_bucket.start_block(),
+        |sub_bucket| sub_bucket.count(),
+        |sub_bucket, index| sub_bucket.first_log_id(index),
+        "directory sub-bucket missing sentinel",
+        "inconsistent directory bucket boundary across sub-buckets",
+        "missing directory bucket start block",
+    )?
+    else {
         return Ok(());
     };
-    if boundaries.is_empty() {
-        return Ok(());
-    }
-
-    let start_block = *boundaries
-        .keys()
-        .next()
-        .ok_or(Error::Decode("missing directory bucket start block"))?;
-    let mut first_log_ids = boundaries.into_values().collect::<Vec<_>>();
-    first_log_ids.push(sentinel);
 
     tables
         .dir_buckets()

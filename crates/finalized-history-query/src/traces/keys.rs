@@ -1,6 +1,7 @@
+use crate::core::layout::LOCAL_ID_BITS;
+use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
-const LOCAL_ID_BITS: u32 = 24;
 pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
 pub const MAX_TRACE_LOCAL_ID: u32 = TRACE_LOCAL_ID_MASK as u32;
 
@@ -27,22 +28,7 @@ pub fn u64_be_trace(v: u64) -> [u8; 8] {
 }
 
 pub fn stream_id(index_kind: &str, value: &[u8], shard: crate::core::ids::TraceShard) -> String {
-    let shard_hex_width = ((64 - LOCAL_ID_BITS) as usize).div_ceil(4);
-    let mut out =
-        String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + shard_hex_width);
-    out.push_str(index_kind);
-    out.push('/');
-    for byte in value {
-        out.push(hex_digit((byte >> 4) & 0xf));
-        out.push(hex_digit(byte & 0xf));
-    }
-    out.push('/');
-    out.push_str(&format!(
-        "{:0width$x}",
-        shard.get(),
-        width = shard_hex_width
-    ));
-    out
+    sharded_stream_id(index_kind, value, shard.get(), LOCAL_ID_BITS)
 }
 
 pub fn has_value_stream_id(shard: crate::core::ids::TraceShard) -> String {
@@ -60,7 +46,7 @@ pub fn trace_sub_bucket_start(global_trace_id: impl Into<crate::core::ids::Trace
 }
 
 pub fn trace_stream_page_start_local(local_id: u32) -> u32 {
-    (local_id / TRACE_STREAM_PAGE_LOCAL_ID_SPAN) * TRACE_STREAM_PAGE_LOCAL_ID_SPAN
+    page_start_local(local_id, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
 }
 
 pub fn trace_local_range_for_shard(
@@ -85,12 +71,4 @@ pub fn trace_local_range_for_shard(
             .expect("MAX_TRACE_LOCAL_ID is valid")
     };
     (local_from, local_to)
-}
-
-fn hex_digit(v: u8) -> char {
-    match v {
-        0..=9 => (b'0' + v) as char,
-        10..=15 => (b'a' + (v - 10)) as char,
-        _ => '0',
-    }
 }

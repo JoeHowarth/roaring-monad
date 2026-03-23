@@ -1,9 +1,9 @@
 use crate::core::ids::{LogId, LogShard, compose_log_id};
 use crate::core::layout::{LOCAL_ID_BITS, MAX_LOCAL_ID};
+use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::logs::keys::{
-    LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, hex_digit,
-    u64_be,
+    LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, u64_be,
 };
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
@@ -171,7 +171,7 @@ pub fn compose_global_log_id(
 }
 
 pub fn stream_page_start_local(local_id: u32) -> u32 {
-    (local_id / STREAM_PAGE_LOCAL_ID_SPAN) * STREAM_PAGE_LOCAL_ID_SPAN
+    page_start_local(local_id, STREAM_PAGE_LOCAL_ID_SPAN)
 }
 
 pub fn local_range_for_shard(
@@ -195,20 +195,5 @@ pub fn local_range_for_shard(
 }
 
 pub fn stream_id(index_kind: &str, value: &[u8], shard: LogShard) -> String {
-    let shard_hex_width = ((64 - LOCAL_ID_BITS) as usize).div_ceil(4);
-    let mut out =
-        String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + shard_hex_width);
-    out.push_str(index_kind);
-    out.push('/');
-    for byte in value {
-        out.push(hex_digit((byte >> 4) & 0xf));
-        out.push(hex_digit(byte & 0xf));
-    }
-    out.push('/');
-    out.push_str(&format!(
-        "{:0width$x}",
-        shard.get(),
-        width = shard_hex_width
-    ));
-    out
+    sharded_stream_id(index_kind, value, shard.get(), LOCAL_ID_BITS)
 }
