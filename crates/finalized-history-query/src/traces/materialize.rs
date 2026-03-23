@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 
+use alloy_rlp::Header;
+
 use crate::core::ids::TraceId;
 use crate::core::range::load_block_ref;
 use crate::core::refs::BlockRef;
@@ -63,54 +65,7 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
     }
 
     pub(crate) fn exact_match_trace(&self, item: &Trace, filter: &TraceFilter) -> bool {
-        // The owned `Trace` already reflects the frame, so rebuild a narrow filter check over owned fields.
-        if let Some(expected) = filter.is_top_level
-            && (item.depth == 0) != expected
-        {
-            return false;
-        }
-        if let Some(expected) = filter.has_value {
-            let has_value = item.value.iter().any(|byte| *byte != 0);
-            if has_value != expected {
-                return false;
-            }
-        }
-        if let Some(clause) = &filter.from {
-            match clause {
-                crate::Clause::Any => {}
-                crate::Clause::One(value) if &item.from == value => {}
-                crate::Clause::Or(values) if values.iter().any(|value| value == &item.from) => {}
-                _ => return false,
-            }
-        }
-        if let Some(clause) = &filter.to {
-            match clause {
-                crate::Clause::Any => {}
-                crate::Clause::One(value) if item.to.as_ref() == Some(value) => {}
-                crate::Clause::Or(values)
-                    if item
-                        .to
-                        .as_ref()
-                        .map(|actual| values.iter().any(|value| value == actual))
-                        .unwrap_or(false) => {}
-                _ => return false,
-            }
-        }
-        if let Some(clause) = &filter.selector {
-            let selector = (item.input.len() >= 4)
-                .then(|| <[u8; 4]>::try_from(&item.input[..4]).expect("4-byte selector slice"));
-            match clause {
-                crate::Clause::Any => {}
-                crate::Clause::One(value) if selector.as_ref() == Some(value) => {}
-                crate::Clause::Or(values)
-                    if selector
-                        .as_ref()
-                        .map(|actual| values.iter().any(|value| value == actual))
-                        .unwrap_or(false) => {}
-                _ => return false,
-            }
-        }
-        true
+        filter.matches_trace(item)
     }
 
     pub(crate) async fn resolve_trace_id(
@@ -190,12 +145,16 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         let Some(blob) = blob else {
             return Ok(None);
         };
-        let (start, end) = header.trace_range(local_ordinal, blob.len())?;
+        let start = header.trace_start(local_ordinal)?;
         let start =
             usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
-        let end = usize::try_from(end).map_err(|_| Error::Decode("trace blob range overflow"))?;
-        if end > blob.len() || start > end {
-            return Err(Error::Decode("invalid trace blob range"));
+        if start >= blob.len() {
+            return Err(Error::Decode("trace start offset past blob end"));
+        }
+        let frame_len = rlp_element_len(&blob[start..])?;
+        let end = start + frame_len;
+        if end > blob.len() {
+            return Err(Error::Decode("trace frame extends past blob end"));
         }
         let frame = blob.slice(start..end);
         let view = CallFrameView::new(frame.as_ref())?;
@@ -239,6 +198,16 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         self.block_blob_cache.insert(block_num, bytes.clone());
         Ok(Some(bytes))
     }
+}
+
+/// Compute the total encoded length of the RLP element starting at `buf`.
+fn rlp_element_len(buf: &[u8]) -> Result<usize> {
+    let mut remaining = buf;
+    let original_len = remaining.len();
+    let header =
+        Header::decode(&mut remaining).map_err(|_| Error::Decode("invalid trace frame header"))?;
+    let header_len = original_len - remaining.len();
+    Ok(header_len + header.payload_length)
 }
 
 fn containing_bucket_entry(bucket: &DirBucket, id: TraceId) -> Option<usize> {

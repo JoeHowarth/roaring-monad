@@ -7,47 +7,89 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 use crate::tables::Tables;
 use crate::traces::keys::{TRACE_DIRECTORY_BUCKET_SIZE, TRACE_DIRECTORY_SUB_BUCKET_SIZE};
-use crate::traces::table_specs::{TraceDirBucketSpec, TraceDirSubBucketSpec};
 use crate::traces::types::{DirBucket, StreamBitmapMeta};
 
-pub async fn compact_trace_directory_for_range<M: MetaStore, B: BlobStore>(
+pub async fn compact_newly_sealed_trace_directory<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
-    first_trace_id: u64,
-    count: u32,
+    from_next_trace_id: u64,
+    next_trace_id: u64,
 ) -> Result<()> {
-    if count == 0 {
+    if next_trace_id <= from_next_trace_id {
         return Ok(());
     }
 
-    let end_trace_id_exclusive = first_trace_id.saturating_add(u64::from(count));
-    let first_sub_bucket = TraceDirSubBucketSpec::sub_bucket_start(first_trace_id);
-    let last_sub_bucket =
-        TraceDirSubBucketSpec::sub_bucket_start(end_trace_id_exclusive.saturating_sub(1));
-    let mut sub_bucket_start = first_sub_bucket;
-    while sub_bucket_start <= last_sub_bucket {
+    for sub_bucket_start in newly_sealed_sub_bucket_starts(from_next_trace_id, next_trace_id) {
         compact_trace_directory_sub_bucket(tables, sub_bucket_start).await?;
-        sub_bucket_start = sub_bucket_start.saturating_add(TRACE_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
-    let first_bucket = TraceDirBucketSpec::bucket_start(first_trace_id);
-    let last_bucket = TraceDirBucketSpec::bucket_start(end_trace_id_exclusive.saturating_sub(1));
-    let mut bucket_start = first_bucket;
-    while bucket_start <= last_bucket {
+    for bucket_start in newly_sealed_bucket_starts(from_next_trace_id, next_trace_id) {
         compact_trace_directory_bucket(tables, bucket_start).await?;
-        bucket_start = bucket_start.saturating_add(TRACE_DIRECTORY_BUCKET_SIZE);
     }
 
     Ok(())
 }
 
-pub async fn compact_trace_stream_pages<M: MetaStore, B: BlobStore>(
+fn newly_sealed_sub_bucket_starts(from_next_trace_id: u64, to_next_trace_id: u64) -> Vec<u64> {
+    sealed_ranges(
+        from_next_trace_id,
+        to_next_trace_id,
+        TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+        crate::traces::keys::trace_sub_bucket_start,
+    )
+}
+
+fn newly_sealed_bucket_starts(from_next_trace_id: u64, to_next_trace_id: u64) -> Vec<u64> {
+    sealed_ranges(
+        from_next_trace_id,
+        to_next_trace_id,
+        TRACE_DIRECTORY_BUCKET_SIZE,
+        crate::traces::keys::trace_bucket_start,
+    )
+}
+
+fn sealed_ranges(from_next: u64, to_next: u64, span: u64, align: impl Fn(u64) -> u64) -> Vec<u64> {
+    if to_next <= from_next {
+        return Vec::new();
+    }
+    let mut current = align(from_next);
+    let mut out = Vec::new();
+    loop {
+        let end = current.saturating_add(span);
+        if end > to_next {
+            break;
+        }
+        if end > from_next {
+            out.push(current);
+        }
+        current = current.saturating_add(span);
+    }
+    out
+}
+
+pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     touched_pages: &[(String, u32)],
+    from_next_trace_id: u64,
+    next_trace_id: u64,
 ) -> Result<()> {
     for (stream_id, page_start) in touched_pages {
-        compact_trace_stream_page(tables, stream_id, *page_start).await?;
+        if is_page_sealed(*page_start, from_next_trace_id, next_trace_id) {
+            compact_trace_stream_page(tables, stream_id, *page_start).await?;
+        }
     }
     Ok(())
+}
+
+fn is_page_sealed(page_start_local: u32, from_next_trace_id: u64, next_trace_id: u64) -> bool {
+    use crate::logs::keys::LOCAL_ID_MASK;
+    use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+    let page_end_local = page_start_local.saturating_add(TRACE_STREAM_PAGE_LOCAL_ID_SPAN);
+    let from_local = (from_next_trace_id & LOCAL_ID_MASK) as u32;
+    let to_local = (next_trace_id & LOCAL_ID_MASK) as u32;
+    // Page is sealed if next_trace_id moved past the page boundary.
+    // This can happen either within the same shard (to_local >= page_end)
+    // or by crossing a shard boundary (to_local < from_local).
+    to_local >= page_end_local || to_local < from_local
 }
 
 async fn compact_trace_stream_page<M: MetaStore, B: BlobStore>(

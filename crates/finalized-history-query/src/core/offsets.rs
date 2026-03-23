@@ -208,6 +208,20 @@ impl BucketedOffsets {
     }
 }
 
+/// Compute the byte offset of `slice` within `root`.
+///
+/// Both must point into the same allocation (e.g. `slice` was obtained by
+/// parsing `root`). Panics if `slice` does not live inside `root`.
+pub fn byte_offset_in(root: &[u8], slice: &[u8]) -> u64 {
+    let root_ptr = root.as_ptr();
+    let slice_ptr = slice.as_ptr();
+    // SAFETY: both pointers come from the same allocation (the caller must
+    // guarantee this). `offset_from` is well-defined for pointers into the
+    // same allocated object.
+    let offset = unsafe { slice_ptr.offset_from(root_ptr) };
+    u64::try_from(offset).expect("slice must live inside the root buffer")
+}
+
 #[cfg(test)]
 mod tests {
     use super::BucketedOffsets;

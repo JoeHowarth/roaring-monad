@@ -50,21 +50,10 @@ impl BlockTraceHeader {
         self.offsets.len()
     }
 
-    pub fn trace_range(&self, local_ordinal: usize, blob_len: usize) -> Result<(u64, u64)> {
-        let start = self
-            .offsets
+    pub fn trace_start(&self, local_ordinal: usize) -> Result<u64> {
+        self.offsets
             .get(local_ordinal)
-            .ok_or(Error::Decode("trace ordinal out of bounds"))?;
-        let end = match self.offsets.get(local_ordinal.saturating_add(1)) {
-            Some(next) => next,
-            None => {
-                u64::try_from(blob_len).map_err(|_| Error::Decode("trace blob length overflow"))?
-            }
-        };
-        if start > end {
-            return Err(Error::Decode("trace offsets not monotonic"));
-        }
-        Ok((start, end))
+            .ok_or(Error::Decode("trace ordinal out of bounds"))
     }
 
     pub fn tx_idx_for_trace(&self, local_ordinal: usize) -> Option<u32> {

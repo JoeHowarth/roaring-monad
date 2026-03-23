@@ -16,8 +16,9 @@ use crate::family::FinalizedBlock;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
-    compact_trace_directory_for_range, compact_trace_stream_pages, persist_trace_artifacts,
-    persist_trace_block_record, persist_trace_dir_by_block, persist_trace_stream_fragments,
+    compact_newly_sealed_trace_directory, compact_sealed_trace_stream_pages,
+    persist_trace_artifacts, persist_trace_block_record, persist_trace_dir_by_block,
+    persist_trace_stream_fragments,
 };
 
 pub use filter::TraceFilter;
@@ -65,13 +66,21 @@ impl TracesFamily {
         )
         .await?;
 
+        let next_trace_id = from_next_trace_id + trace_count as u64;
+
         let touched_pages =
             persist_trace_stream_fragments(runtime.tables(), block, from_next_trace_id).await?;
-        compact_trace_directory_for_range(runtime.tables(), from_next_trace_id, trace_count_u32)
+        compact_newly_sealed_trace_directory(runtime.tables(), from_next_trace_id, next_trace_id)
             .await?;
-        compact_trace_stream_pages(runtime.tables(), &touched_pages).await?;
+        compact_sealed_trace_stream_pages(
+            runtime.tables(),
+            &touched_pages,
+            from_next_trace_id,
+            next_trace_id,
+        )
+        .await?;
 
-        state.next_trace_id = TraceId::new(from_next_trace_id.saturating_add(trace_count as u64));
+        state.next_trace_id = TraceId::new(next_trace_id);
         Ok(trace_count)
     }
 }

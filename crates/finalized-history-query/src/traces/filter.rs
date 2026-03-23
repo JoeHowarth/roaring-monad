@@ -34,6 +34,34 @@ impl TraceFilter {
     }
 }
 
+impl TraceFilter {
+    pub fn matches_trace(&self, item: &crate::traces::types::Trace) -> bool {
+        if let Some(expected) = self.is_top_level
+            && (item.depth == 0) != expected
+        {
+            return false;
+        }
+        if let Some(expected) = self.has_value {
+            let has_value = item.value.iter().any(|byte| *byte != 0);
+            if has_value != expected {
+                return false;
+            }
+        }
+        if !match_address(&item.from, &self.from) {
+            return false;
+        }
+        if !match_optional_address(item.to, &self.to) {
+            return false;
+        }
+        let selector = (item.input.len() >= 4)
+            .then(|| <[u8; 4]>::try_from(&item.input[..4]).expect("4-byte selector slice"));
+        if !match_selector(selector, &self.selector) {
+            return false;
+        }
+        true
+    }
+}
+
 pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
     let from = match trace.from_addr() {
         Ok(from) => from,

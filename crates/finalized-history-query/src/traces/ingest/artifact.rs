@@ -146,8 +146,5 @@ fn empty_trace_header() -> BlockTraceHeader {
 }
 
 fn offset_in(root: &[u8], slice: &[u8]) -> u64 {
-    let root_ptr = root.as_ptr();
-    let slice_ptr = slice.as_ptr();
-    usize::try_from(unsafe { slice_ptr.offset_from(root_ptr) })
-        .expect("slice must live inside the root blob") as u64
+    crate::core::offsets::byte_offset_in(root, slice)
 }

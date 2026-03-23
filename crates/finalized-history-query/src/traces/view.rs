@@ -166,7 +166,7 @@ impl<'a> Iterator for BlockTraceIter<'a> {
                 self.current_frame_idx += 1;
                 self.trace_idx_in_tx = self.trace_idx_in_tx.saturating_add(1);
 
-                let byte_offset = offset_in(self.blob, frame_bytes);
+                let byte_offset = crate::core::offsets::byte_offset_in(self.blob, frame_bytes);
                 let byte_length = frame_bytes.len() as u64;
                 let tx_idx = self.tx_idx.saturating_sub(1) as u32;
                 return Some(
@@ -204,13 +204,6 @@ impl<'a> Iterator for BlockTraceIter<'a> {
             self.current_frame_idx = 0;
         }
     }
-}
-
-fn offset_in(root: &[u8], slice: &[u8]) -> u64 {
-    let root_ptr = root.as_ptr();
-    let slice_ptr = slice.as_ptr();
-    usize::try_from(unsafe { slice_ptr.offset_from(root_ptr) })
-        .expect("slice must live inside the root blob") as u64
 }
 
 fn decode_u8(field: &[u8]) -> Result<u8> {
