@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::StorageCodec;
 use finalized_history_query::config::Config;
 use finalized_history_query::family::Families;
 use finalized_history_query::ingest::authority::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
+use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::keys::{
     BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
 };

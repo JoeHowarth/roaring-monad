@@ -3,7 +3,7 @@ mod helpers;
 
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::StorageCodec;
+use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::keys::{BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE};
 use finalized_history_query::logs::table_specs::{
     BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec,

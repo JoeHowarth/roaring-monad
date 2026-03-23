@@ -6,9 +6,9 @@ use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder, QueryTracesRequest,
 };
-use finalized_history_query::codec::StorageCodec;
 use finalized_history_query::config::Config;
 use finalized_history_query::ingest::authority::LeaseAuthority;
+use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::table_specs::{BlobTableSpec, BlockLogBlobSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;

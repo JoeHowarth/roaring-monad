@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
-use finalized_history_query::codec::StorageCodec;
 use finalized_history_query::config::Config;
 use finalized_history_query::family::Families;
+use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
 use finalized_history_query::logs::table_specs::BlockRecordSpec;
 use finalized_history_query::logs::types::BlockRecord;
