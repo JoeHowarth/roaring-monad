@@ -1,13 +1,13 @@
-use crate::core::ids::{compose_trace_id, TraceId, TraceShard};
+use crate::core::ids::{TraceId, TraceShard, compose_trace_id};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 pub use crate::tables::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::traces::keys::{
-    trace_bucket_start, trace_stream_page_start_local, trace_sub_bucket_start, u64_be_trace,
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
     TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_BLOCK_RECORD_TABLE,
-    TRACE_DIRECTORY_BUCKET_SIZE, TRACE_DIRECTORY_SUB_BUCKET_SIZE, TRACE_DIR_BUCKET_TABLE,
-    TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE, TRACE_OPEN_BITMAP_PAGE_TABLE,
-    TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+    TRACE_DIR_BUCKET_TABLE, TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE,
+    TRACE_DIRECTORY_BUCKET_SIZE, TRACE_DIRECTORY_SUB_BUCKET_SIZE, TRACE_OPEN_BITMAP_PAGE_TABLE,
+    TRACE_STREAM_PAGE_LOCAL_ID_SPAN, trace_bucket_start, trace_stream_page_start_local,
+    trace_sub_bucket_start, u64_be_trace,
 };
 
 pub struct TraceBlockRecordSpec;

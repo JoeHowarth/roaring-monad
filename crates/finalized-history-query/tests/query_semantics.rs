@@ -38,7 +38,7 @@ fn ingest_and_query_with_limits_and_resume() {
             .expect("first page");
         assert_eq!(first.items.len(), 2);
         assert!(first.meta.has_more);
-        assert_eq!(first.meta.next_resume_log_id, Some(2));
+        assert_eq!(first.meta.next_resume_id, Some(2));
 
         let second = query_page(
             &svc,
@@ -46,7 +46,7 @@ fn ingest_and_query_with_limits_and_resume() {
             2,
             indexed_address_filter(1),
             2,
-            first.meta.next_resume_log_id,
+            first.meta.next_resume_id,
         )
         .await
         .expect("second page");

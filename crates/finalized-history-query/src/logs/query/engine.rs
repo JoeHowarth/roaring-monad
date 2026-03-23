@@ -128,7 +128,7 @@ impl LogsQueryEngine {
                 resolved_to_block: block_range.resolved_to_ref,
                 cursor_block: block_range.examined_endpoint_ref,
                 has_more: false,
-                next_resume_log_id: None,
+                next_resume_id: None,
             },
         }
     }
@@ -144,7 +144,7 @@ impl LogsQueryEngine {
             matched.truncate(effective_limit);
         }
 
-        let next_resume_log_id = if has_more {
+        let next_resume_id = if has_more {
             matched.last().map(|matched_log| matched_log.id.get())
         } else {
             None
@@ -166,7 +166,7 @@ impl LogsQueryEngine {
                 resolved_to_block: block_range.resolved_to_ref,
                 cursor_block,
                 has_more,
-                next_resume_log_id,
+                next_resume_id,
             },
         }
     }

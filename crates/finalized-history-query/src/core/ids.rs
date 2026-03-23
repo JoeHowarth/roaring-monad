@@ -264,8 +264,8 @@ impl TraceIdRange {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_log_id, compose_trace_id, LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId,
-        TraceLocalId, TraceShard,
+        LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId,
+        TraceShard, compose_log_id, compose_trace_id,
     };
     use crate::logs::keys::MAX_LOCAL_ID;
 

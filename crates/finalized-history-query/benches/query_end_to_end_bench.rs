@@ -59,7 +59,7 @@ fn bench_pagination_heavy_queries(c: &mut Criterion) {
                 if !page.meta.has_more || pages >= 8 {
                     break black_box(page.items.len());
                 }
-                resume_log_id = page.meta.next_resume_log_id;
+                resume_log_id = page.meta.next_resume_id;
             }
         })
     });

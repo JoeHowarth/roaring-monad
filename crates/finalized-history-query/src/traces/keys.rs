@@ -1,6 +1,6 @@
 use crate::logs::keys::{
-    hex_digit, u64_be, LOCAL_ID_BITS, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
-    MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
+    LOCAL_ID_BITS, LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID,
+    STREAM_PAGE_LOCAL_ID_SPAN, hex_digit, u64_be,
 };
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 

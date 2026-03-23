@@ -49,7 +49,7 @@ pub struct QueryPageMeta {
     pub resolved_to_block: BlockRef,
     pub cursor_block: BlockRef,
     pub has_more: bool,
-    pub next_resume_log_id: Option<u64>,
+    pub next_resume_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

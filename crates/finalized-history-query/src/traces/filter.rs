@@ -1,0 +1,209 @@
+use crate::core::clause::Clause;
+use crate::traces::types::{Address20, Selector4};
+use crate::traces::view::CallFrameView;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TraceFilter {
+    pub from: Option<Clause<Address20>>,
+    pub to: Option<Clause<Address20>>,
+    pub selector: Option<Clause<Selector4>>,
+    pub is_top_level: Option<bool>,
+    pub has_value: Option<bool>,
+}
+
+impl TraceFilter {
+    pub fn max_or_terms(&self) -> usize {
+        let mut max_terms = 0usize;
+        if let Some(clause) = &self.from {
+            max_terms = max_terms.max(clause.or_terms());
+        }
+        if let Some(clause) = &self.to {
+            max_terms = max_terms.max(clause.or_terms());
+        }
+        if let Some(clause) = &self.selector {
+            max_terms = max_terms.max(clause.or_terms());
+        }
+        max_terms
+    }
+
+    pub fn has_indexed_clause(&self) -> bool {
+        has_indexed_value_20(&self.from)
+            || has_indexed_value_20(&self.to)
+            || has_indexed_value_4(&self.selector)
+            || self.has_value == Some(true)
+    }
+}
+
+pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
+    let from = match trace.from_addr() {
+        Ok(from) => from,
+        Err(_) => return false,
+    };
+    if !match_address(from, &filter.from) {
+        return false;
+    }
+
+    let to = match trace.to_addr() {
+        Ok(to) => to,
+        Err(_) => return false,
+    };
+    if !match_optional_address(to.copied(), &filter.to) {
+        return false;
+    }
+
+    let selector = match trace.selector() {
+        Ok(selector) => selector,
+        Err(_) => return false,
+    };
+    if !match_selector(selector.copied(), &filter.selector) {
+        return false;
+    }
+
+    if let Some(expected) = filter.is_top_level {
+        match trace.depth() {
+            Ok(depth) if (depth == 0) == expected => {}
+            _ => return false,
+        }
+    }
+
+    if let Some(expected) = filter.has_value {
+        match trace.has_value() {
+            Ok(has_value) if has_value == expected => {}
+            _ => return false,
+        }
+    }
+
+    true
+}
+
+fn match_address(address: &[u8; 20], clause: &Option<Clause<[u8; 20]>>) -> bool {
+    match clause {
+        None | Some(Clause::Any) => true,
+        Some(Clause::One(value)) => value == address,
+        Some(Clause::Or(values)) => values.iter().any(|value| value == address),
+    }
+}
+
+fn match_optional_address(address: Option<[u8; 20]>, clause: &Option<Clause<[u8; 20]>>) -> bool {
+    match clause {
+        None | Some(Clause::Any) => true,
+        Some(Clause::One(value)) => address.as_ref() == Some(value),
+        Some(Clause::Or(values)) => address
+            .as_ref()
+            .map(|actual| values.iter().any(|value| value == actual))
+            .unwrap_or(false),
+    }
+}
+
+fn match_selector(selector: Option<[u8; 4]>, clause: &Option<Clause<[u8; 4]>>) -> bool {
+    match clause {
+        None | Some(Clause::Any) => true,
+        Some(Clause::One(value)) => selector.as_ref() == Some(value),
+        Some(Clause::Or(values)) => selector
+            .as_ref()
+            .map(|actual| values.iter().any(|value| value == actual))
+            .unwrap_or(false),
+    }
+}
+
+fn has_indexed_value_20(clause: &Option<Clause<[u8; 20]>>) -> bool {
+    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
+}
+
+fn has_indexed_value_4(clause: &Option<Clause<[u8; 4]>>) -> bool {
+    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traces::view::BlockTraceIter;
+    use alloy_rlp::Encodable;
+
+    fn encode_field<T: alloy_rlp::Encodable>(value: T) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_bytes(value: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_frame(input: &[u8], depth: u64, value: &[u8]) -> Vec<u8> {
+        let fields = vec![
+            encode_field(0u8),
+            encode_field(0u64),
+            encode_bytes(&[1u8; 20]),
+            encode_bytes(&[2u8; 20]),
+            encode_bytes(value),
+            encode_field(10u64),
+            encode_field(9u64),
+            encode_bytes(input),
+            encode_bytes(&[]),
+            encode_field(1u8),
+            encode_field(depth),
+        ];
+        let mut out = Vec::new();
+        alloy_rlp::Header {
+            list: true,
+            payload_length: fields.iter().map(Vec::len).sum(),
+        }
+        .encode(&mut out);
+        for field in fields {
+            out.extend_from_slice(&field);
+        }
+        out
+    }
+
+    fn frame_view() -> CallFrameView<'static> {
+        let block = {
+            let frame = encode_frame(&[1, 2, 3, 4, 5], 0, &[0, 7]);
+            let mut tx = Vec::new();
+            alloy_rlp::Header {
+                list: true,
+                payload_length: frame.len(),
+            }
+            .encode(&mut tx);
+            tx.extend_from_slice(&frame);
+            let mut out = Vec::new();
+            alloy_rlp::Header {
+                list: true,
+                payload_length: tx.len(),
+            }
+            .encode(&mut out);
+            out.extend_from_slice(&tx);
+            Box::leak(out.into_boxed_slice()) as &'static [u8]
+        };
+        BlockTraceIter::new(block)
+            .expect("iter")
+            .next()
+            .expect("frame")
+            .expect("iterated frame")
+            .view
+    }
+
+    #[test]
+    fn exact_match_accepts_matching_indexed_and_post_filters() {
+        let trace = frame_view();
+        let filter = TraceFilter {
+            from: Some(Clause::One([1; 20])),
+            to: Some(Clause::One([2; 20])),
+            selector: Some(Clause::One([1, 2, 3, 4])),
+            is_top_level: Some(true),
+            has_value: Some(true),
+        };
+        assert!(exact_match(&trace, &filter));
+    }
+
+    #[test]
+    fn has_indexed_clause_ignores_is_top_level_only() {
+        let filter = TraceFilter {
+            is_top_level: Some(true),
+            ..Default::default()
+        };
+        assert!(!filter.has_indexed_clause());
+    }
+}

@@ -1,5 +1,6 @@
 use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
+use crate::error::{Error, Result};
 use crate::family::Hash32;
 
 pub type Address20 = [u8; 20];
@@ -42,6 +43,46 @@ pub struct BlockTraceHeader {
     pub encoding_version: u32,
     pub offsets: BucketedOffsets,
     pub tx_starts: Vec<u32>,
+}
+
+impl BlockTraceHeader {
+    pub fn trace_count(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub fn trace_range(&self, local_ordinal: usize, blob_len: usize) -> Result<(u64, u64)> {
+        let start = self
+            .offsets
+            .get(local_ordinal)
+            .ok_or(Error::Decode("trace ordinal out of bounds"))?;
+        let end = match self.offsets.get(local_ordinal.saturating_add(1)) {
+            Some(next) => next,
+            None => {
+                u64::try_from(blob_len).map_err(|_| Error::Decode("trace blob length overflow"))?
+            }
+        };
+        if start > end {
+            return Err(Error::Decode("trace offsets not monotonic"));
+        }
+        Ok((start, end))
+    }
+
+    pub fn tx_idx_for_trace(&self, local_ordinal: usize) -> Option<u32> {
+        let local_ordinal = u32::try_from(local_ordinal).ok()?;
+        let upper = self
+            .tx_starts
+            .partition_point(|start| *start <= local_ordinal);
+        upper
+            .checked_sub(1)
+            .and_then(|index| u32::try_from(index).ok())
+    }
+
+    pub fn trace_idx_in_tx(&self, local_ordinal: usize) -> Option<u32> {
+        let tx_idx = usize::try_from(self.tx_idx_for_trace(local_ordinal)?).ok()?;
+        let tx_start = *self.tx_starts.get(tx_idx)?;
+        let local_ordinal = u32::try_from(local_ordinal).ok()?;
+        local_ordinal.checked_sub(tx_start)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

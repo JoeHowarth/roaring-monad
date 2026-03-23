@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use alloy_rlp::Encodable;
 use bytes::Bytes;
 use finalized_history_query::api::{
-    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
+    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder, QueryTracesRequest,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::ingest::authority::LeaseAuthority;
@@ -19,7 +20,7 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Clause, Error, FinalizedBlock, LogFilter, WriteAuthority, WriteSession,
+    Clause, Error, FinalizedBlock, LogFilter, Trace, TraceFilter, WriteAuthority, WriteSession,
 };
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -127,6 +128,122 @@ where
         ExecutionBudget { max_results: None },
     )
     .await
+}
+
+pub async fn query_trace_page<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
+    from_block: u64,
+    to_block: u64,
+    filter: TraceFilter,
+    limit: usize,
+    resume_trace_id: Option<u64>,
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Trace>>
+where
+    A: WriteAuthority,
+    M: MetaStore,
+    B: BlobStore,
+{
+    svc.query_traces(
+        QueryTracesRequest {
+            from_block: Some(from_block),
+            to_block: Some(to_block),
+            from_block_hash: None,
+            to_block_hash: None,
+            order: QueryOrder::Ascending,
+            resume_trace_id,
+            limit,
+            filter,
+        },
+        ExecutionBudget { max_results: None },
+    )
+    .await
+}
+
+pub fn indexed_trace_from_filter(address: u8) -> TraceFilter {
+    TraceFilter {
+        from: Some(Clause::One([address; 20])),
+        ..Default::default()
+    }
+}
+
+pub fn encode_trace_block(txs: Vec<Vec<Vec<u8>>>) -> Vec<u8> {
+    let tx_blobs = txs
+        .into_iter()
+        .map(|frames| {
+            let payload_length = frames.iter().map(Vec::len).sum();
+            let mut tx = Vec::new();
+            alloy_rlp::Header {
+                list: true,
+                payload_length,
+            }
+            .encode(&mut tx);
+            for frame in frames {
+                tx.extend_from_slice(&frame);
+            }
+            tx
+        })
+        .collect::<Vec<_>>();
+    let payload_length = tx_blobs.iter().map(Vec::len).sum();
+    let mut out = Vec::new();
+    alloy_rlp::Header {
+        list: true,
+        payload_length,
+    }
+    .encode(&mut out);
+    for tx in tx_blobs {
+        out.extend_from_slice(&tx);
+    }
+    out
+}
+
+pub fn encode_trace_frame(
+    typ: u8,
+    flags: u64,
+    from: [u8; 20],
+    to: Option<[u8; 20]>,
+    value: &[u8],
+    gas: u64,
+    gas_used: u64,
+    input: &[u8],
+    output: &[u8],
+    status: u8,
+    depth: u64,
+) -> Vec<u8> {
+    let fields = vec![
+        encode_trace_field(typ),
+        encode_trace_field(flags),
+        encode_trace_bytes(&from),
+        encode_trace_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+        encode_trace_bytes(value),
+        encode_trace_field(gas),
+        encode_trace_field(gas_used),
+        encode_trace_bytes(input),
+        encode_trace_bytes(output),
+        encode_trace_field(status),
+        encode_trace_field(depth),
+    ];
+    let mut out = Vec::new();
+    alloy_rlp::Header {
+        list: true,
+        payload_length: fields.iter().map(Vec::len).sum(),
+    }
+    .encode(&mut out);
+    for field in fields {
+        out.extend_from_slice(&field);
+    }
+    out
+}
+
+fn encode_trace_field<T: Encodable>(value: T) -> Vec<u8> {
+    let mut out = Vec::new();
+    value.encode(&mut out);
+    out
+}
+
+fn encode_trace_bytes(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    value.encode(&mut out);
+    out
 }
 
 pub async fn acquire_lease<P: PublicationStore + Clone>(

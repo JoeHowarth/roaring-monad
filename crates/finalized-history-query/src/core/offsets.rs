@@ -174,7 +174,9 @@ impl BucketedOffsets {
         if self.bucket_high_bits.len() != self.bucket_starts.len()
             || self.bucket_high_bits.len() != self.buckets.len()
         {
-            return Err(Error::Decode("bucketed offsets bucket vector length mismatch"));
+            return Err(Error::Decode(
+                "bucketed offsets bucket vector length mismatch",
+            ));
         }
 
         let mut expected_start = 0u32;

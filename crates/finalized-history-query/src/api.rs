@@ -15,6 +15,9 @@ use crate::startup::{startup_plan, startup_plan_from_head};
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::BytesCacheMetrics;
+use crate::traces::filter::TraceFilter;
+use crate::traces::query::TracesQueryEngine;
+use crate::traces::types::Trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryLogsRequest {
@@ -24,6 +27,18 @@ pub struct QueryLogsRequest {
     pub resume_log_id: Option<u64>,
     pub limit: usize,
     pub filter: LogFilter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryTracesRequest {
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub from_block_hash: Option<[u8; 32]>,
+    pub to_block_hash: Option<[u8; 32]>,
+    pub order: QueryOrder,
+    pub resume_trace_id: Option<u64>,
+    pub limit: usize,
+    pub filter: TraceFilter,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -42,7 +57,8 @@ pub struct IngestOutcome {
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     pub ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
-    query: LogsQueryEngine,
+    logs_query: LogsQueryEngine,
+    traces_query: TracesQueryEngine,
     runtime: Runtime<M, B>,
     allows_writes: bool,
 }
@@ -55,14 +71,16 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         authority: A,
         allows_writes: bool,
     ) -> Self {
-        let query = LogsQueryEngine::from_config(&config);
+        let logs_query = LogsQueryEngine::from_config(&config);
+        let traces_query = TracesQueryEngine::from_config(&config);
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
         let publication_store = MetaPublicationStore::new(runtime.meta_store().clone());
         let ingest = IngestEngine::new(config, authority, Families::default());
         Self {
             ingest,
             publication_store,
-            query,
+            logs_query,
+            traces_query,
             runtime,
             allows_writes,
         }
@@ -89,8 +107,23 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<crate::core::page::QueryPage<Log>> {
-        self.query
+        self.logs_query
             .query_logs(
+                self.runtime.tables(),
+                &self.publication_store,
+                request,
+                budget,
+            )
+            .await
+    }
+
+    pub async fn query_traces(
+        &self,
+        request: QueryTracesRequest,
+        budget: ExecutionBudget,
+    ) -> Result<crate::core::page::QueryPage<Trace>> {
+        self.traces_query
+            .query_traces(
                 self.runtime.tables(),
                 &self.publication_store,
                 request,

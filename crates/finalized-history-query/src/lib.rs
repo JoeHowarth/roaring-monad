@@ -14,7 +14,9 @@ pub mod tables;
 pub mod traces;
 pub mod txs;
 
-pub use api::{ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryLogsRequest};
+pub use api::{
+    ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryLogsRequest, QueryTracesRequest,
+};
 pub use config::Config;
 pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};
@@ -26,4 +28,6 @@ pub use ingest::authority::{
 };
 pub use logs::filter::LogFilter;
 pub use logs::types::Log;
+pub use traces::filter::TraceFilter;
+pub use traces::types::Trace;
 pub use txs::Tx;
