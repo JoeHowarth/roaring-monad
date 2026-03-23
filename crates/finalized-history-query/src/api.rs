@@ -55,7 +55,7 @@ pub struct IngestOutcome {
 }
 
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
-    pub ingest: IngestEngine<A>,
+    ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
     logs_query: LogsQueryEngine,
     traces_query: TracesQueryEngine,

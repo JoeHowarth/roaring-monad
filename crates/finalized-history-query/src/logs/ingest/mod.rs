@@ -5,14 +5,8 @@ mod stream;
 pub use artifact::{
     parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
 };
-pub use compaction::{
-    compact_newly_sealed_directory, compact_sealed_directory, newly_sealed_directory_bucket_starts,
-    newly_sealed_directory_sub_bucket_starts,
-};
-pub use stream::{
-    collect_stream_appends, compact_sealed_stream_pages, compact_stream_page,
-    persist_stream_fragments,
-};
+pub use compaction::compact_newly_sealed_directory;
+pub use stream::{compact_stream_page, persist_stream_fragments};
 
 #[cfg(test)]
 mod tests {
@@ -21,10 +15,6 @@ mod tests {
     use crate::family::FinalizedBlock;
     use crate::kernel::codec::StorageCodec;
     use crate::logs::codec::validate_log;
-    use crate::logs::ingest::{
-        compact_sealed_directory, compact_sealed_stream_pages, persist_log_artifacts,
-        persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
-    };
     use crate::logs::keys::{
         BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE,
         LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
@@ -42,7 +32,13 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
 
-    use super::collect_stream_appends;
+    use super::artifact::{
+        persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
+    };
+    use super::compaction::compact_sealed_directory;
+    use super::stream::{
+        collect_stream_appends, compact_sealed_stream_pages, persist_stream_fragments,
+    };
     use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {

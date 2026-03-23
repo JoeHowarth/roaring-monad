@@ -2,4 +2,4 @@ mod clause;
 mod engine;
 mod stream_bitmap;
 
-pub use engine::TracesQueryEngine;
+pub(crate) use engine::TracesQueryEngine;

@@ -3,4 +3,4 @@ mod engine;
 pub mod execution;
 mod stream_bitmap;
 
-pub use engine::LogsQueryEngine;
+pub(crate) use engine::LogsQueryEngine;

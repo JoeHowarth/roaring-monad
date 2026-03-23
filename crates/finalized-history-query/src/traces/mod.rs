@@ -1,11 +1,11 @@
-pub mod codec;
+pub(crate) mod codec;
 pub mod filter;
-pub mod ingest;
+pub(crate) mod ingest;
 pub mod keys;
 pub(crate) mod materialize;
-pub mod query;
-pub mod state;
-pub mod table_specs;
+pub(crate) mod query;
+pub(crate) mod state;
+pub(crate) mod table_specs;
 pub mod types;
 pub mod view;
 
