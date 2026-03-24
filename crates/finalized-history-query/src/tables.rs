@@ -912,3 +912,207 @@ fn slice_relative(bytes: &Bytes, start: u32, end: u32) -> Result<Bytes> {
     }
     Ok(bytes.slice(start..end))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::store::manifest::{
+        REQUIRED_BLOB_TABLES, REQUIRED_POINT_TABLES, REQUIRED_SCANNABLE_TABLES,
+    };
+    use crate::store::traits::{
+        BlobTable, DelCond, Page, PutCond, PutResult, Record, ScannableKvTable,
+        ScannableTableId, TableId,
+    };
+
+    #[derive(Clone, Default)]
+    struct RecordingMetaStore {
+        point_tables: Arc<Mutex<BTreeSet<TableId>>>,
+        scannable_tables: Arc<Mutex<BTreeSet<ScannableTableId>>>,
+    }
+
+    impl MetaStore for RecordingMetaStore {
+        fn table(&self, table: TableId) -> crate::store::traits::KvTable<Self>
+        where
+            Self: Sized,
+        {
+            self.point_tables
+                .lock()
+                .expect("point table lock")
+                .insert(table);
+            crate::store::traits::KvTable::new(self.clone(), table)
+        }
+
+        fn scannable_table(&self, table: ScannableTableId) -> ScannableKvTable<Self>
+        where
+            Self: Sized,
+        {
+            self.scannable_tables
+                .lock()
+                .expect("scannable table lock")
+                .insert(table);
+            ScannableKvTable::new(self.clone(), table)
+        }
+
+        async fn get(&self, _table: TableId, _key: &[u8]) -> Result<Option<Record>> {
+            Ok(None)
+        }
+
+        async fn put(
+            &self,
+            _table: TableId,
+            _key: &[u8],
+            _value: Bytes,
+            _cond: PutCond,
+        ) -> Result<PutResult> {
+            unreachable!("recording meta store is only used for Tables::new")
+        }
+
+        async fn delete(&self, _table: TableId, _key: &[u8], _cond: DelCond) -> Result<()> {
+            unreachable!("recording meta store is only used for Tables::new")
+        }
+
+        async fn scan_get(
+            &self,
+            _table: ScannableTableId,
+            _partition: &[u8],
+            _clustering: &[u8],
+        ) -> Result<Option<Record>> {
+            Ok(None)
+        }
+
+        async fn scan_put(
+            &self,
+            _table: ScannableTableId,
+            _partition: &[u8],
+            _clustering: &[u8],
+            _value: Bytes,
+            _cond: PutCond,
+        ) -> Result<PutResult> {
+            unreachable!("recording meta store is only used for Tables::new")
+        }
+
+        async fn scan_delete(
+            &self,
+            _table: ScannableTableId,
+            _partition: &[u8],
+            _clustering: &[u8],
+            _cond: DelCond,
+        ) -> Result<()> {
+            unreachable!("recording meta store is only used for Tables::new")
+        }
+
+        async fn scan_list(
+            &self,
+            _table: ScannableTableId,
+            _partition: &[u8],
+            _prefix: &[u8],
+            _cursor: Option<Vec<u8>>,
+            _limit: usize,
+        ) -> Result<Page> {
+            Ok(Page {
+                keys: Vec::new(),
+                next_cursor: None,
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingBlobStore {
+        blob_tables: Arc<Mutex<BTreeSet<crate::store::traits::BlobTableId>>>,
+    }
+
+    impl BlobStore for RecordingBlobStore {
+        fn table(&self, table: crate::store::traits::BlobTableId) -> BlobTable<Self>
+        where
+            Self: Sized,
+        {
+            self.blob_tables
+                .lock()
+                .expect("blob table lock")
+                .insert(table);
+            BlobTable::new(self.clone(), table)
+        }
+
+        async fn put_blob(
+            &self,
+            _table: crate::store::traits::BlobTableId,
+            _key: &[u8],
+            _value: Bytes,
+        ) -> Result<()> {
+            unreachable!("recording blob store is only used for Tables::new")
+        }
+
+        async fn get_blob(
+            &self,
+            _table: crate::store::traits::BlobTableId,
+            _key: &[u8],
+        ) -> Result<Option<Bytes>> {
+            Ok(None)
+        }
+
+        async fn delete_blob(
+            &self,
+            _table: crate::store::traits::BlobTableId,
+            _key: &[u8],
+        ) -> Result<()> {
+            unreachable!("recording blob store is only used for Tables::new")
+        }
+
+        async fn list_prefix(
+            &self,
+            _table: crate::store::traits::BlobTableId,
+            _prefix: &[u8],
+            _cursor: Option<Vec<u8>>,
+            _limit: usize,
+        ) -> Result<Page> {
+            Ok(Page {
+                keys: Vec::new(),
+                next_cursor: None,
+            })
+        }
+    }
+
+    #[test]
+    fn tables_new_uses_exactly_the_manifest_declared_tables() {
+        let meta = RecordingMetaStore::default();
+        let blob = RecordingBlobStore::default();
+
+        let _tables = Tables::new(meta.clone(), blob.clone(), BytesCacheConfig::disabled());
+
+        assert_eq!(
+            meta.point_tables
+                .lock()
+                .expect("point table lock")
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            REQUIRED_POINT_TABLES.iter().copied().collect::<BTreeSet<_>>()
+        );
+        assert_eq!(
+            meta.scannable_tables
+                .lock()
+                .expect("scannable table lock")
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            REQUIRED_SCANNABLE_TABLES
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(
+            blob.blob_tables
+                .lock()
+                .expect("blob table lock")
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            REQUIRED_BLOB_TABLES.iter().copied().collect::<BTreeSet<_>>()
+        );
+    }
+}

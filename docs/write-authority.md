@@ -138,11 +138,9 @@ async def ingest_finalized_blocks(owner_id, observed_upstream_finalized_block, b
     session = begin_write(
         observed_upstream_finalized_block
     )
-    family_states = load_family_state_from_head(session.state().indexed_finalized_head)
-    if session.state().continuity in [Fresh, Reacquired]:
-        repair_after_ownership_transition(family_states)
-    validate_sequence(blocks, session.state().indexed_finalized_head)
-    ingest(blocks, family_states)
+    prepared = preflight_writer_state(session)
+    validate_sequence(blocks, prepared.indexed_finalized_head)
+    ingest(blocks, prepared.family_states)
     publish(blocks[-1].block_num)
 ```
 

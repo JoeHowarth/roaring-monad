@@ -318,28 +318,15 @@ impl ScannableTableSchema {
     }
 }
 
-const POINT_TABLE_SCHEMAS: [PointTableSchema; REQUIRED_POINT_TABLES.len()] = [
-    PointTableSchema::named(REQUIRED_POINT_TABLES[0]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[1]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[2]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[3]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[4]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[5]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[6]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[7]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[8]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[9]),
-    PointTableSchema::named(REQUIRED_POINT_TABLES[10]),
-];
+fn point_table_schemas() -> impl Iterator<Item = PointTableSchema> {
+    REQUIRED_POINT_TABLES.into_iter().map(PointTableSchema::named)
+}
 
-const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; REQUIRED_SCANNABLE_TABLES.len()] = [
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[0]),
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[1]),
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[2]),
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[3]),
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[4]),
-    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[5]),
-];
+fn scannable_table_schemas() -> impl Iterator<Item = ScannableTableSchema> {
+    REQUIRED_SCANNABLE_TABLES
+        .into_iter()
+        .map(ScannableTableSchema::named)
+}
 
 impl ScyllaMetaStore {
     pub async fn new(nodes: &[String], keyspace: &str) -> Result<Self> {
@@ -369,13 +356,13 @@ impl ScyllaMetaStore {
             .map_err(|e| Error::Backend(format!("use keyspace: {e}")))?;
 
         let mut point = BTreeMap::new();
-        for schema in POINT_TABLE_SCHEMAS {
+        for schema in point_table_schemas() {
             schema.ensure(&session).await?;
             point.insert(schema.id, schema.prepare(&session).await?);
         }
 
         let mut scannable = BTreeMap::new();
-        for schema in SCANNABLE_TABLE_SCHEMAS {
+        for schema in scannable_table_schemas() {
             schema.ensure(&session).await?;
             scannable.insert(schema.id, schema.prepare(&session).await?);
         }
@@ -805,6 +792,25 @@ impl MetaStore for ScyllaMetaStore {
             None
         };
         Ok(Page { keys, next_cursor })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scylla_schema_iterators_cover_the_required_manifest_tables() {
+        assert_eq!(
+            point_table_schemas().map(|schema| schema.id).collect::<Vec<_>>(),
+            REQUIRED_POINT_TABLES.to_vec()
+        );
+        assert_eq!(
+            scannable_table_schemas()
+                .map(|schema| schema.id)
+                .collect::<Vec<_>>(),
+            REQUIRED_SCANNABLE_TABLES.to_vec()
+        );
     }
 }
 

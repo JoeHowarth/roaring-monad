@@ -4,7 +4,7 @@ use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
 use crate::family::{Families, FamilyBlockWrites, FamilyStates, FinalizedBlock};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
-use crate::ingest::recovery::repair_after_ownership_transition;
+use crate::ingest::recovery::preflight_recovery;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -14,19 +14,45 @@ pub struct IngestEngine<A: WriteAuthority> {
     pub families: Families,
 }
 
-struct PreparedWrite<S> {
+struct PreparedWriterState<S> {
     session: S,
+    indexed_finalized_head: u64,
     family_states: FamilyStates,
+}
+
+impl<S> PreparedWriterState<S> {
+    fn indexed_finalized_head(&self) -> u64 {
+        self.indexed_finalized_head
+    }
+
+    fn family_states_mut(&mut self) -> &mut FamilyStates {
+        &mut self.family_states
+    }
+}
+
+impl<S> PreparedWriterState<S>
+where
+    S: WriteSession,
+{
+    async fn publish(
+        self,
+        indexed_finalized_head: u64,
+        observed_upstream_finalized_block: Option<u64>,
+    ) -> Result<()> {
+        self.session
+            .publish(indexed_finalized_head, observed_upstream_finalized_block)
+            .await
+    }
 }
 
 impl<A> IngestEngine<A>
 where
     A: WriteAuthority,
 {
-    async fn prepare_write<'a, M, B>(
+    async fn preflight_writer_state<'a, M, B>(
         &'a self,
         runtime: &Runtime<M, B>,
-    ) -> Result<PreparedWrite<A::Session<'a>>>
+    ) -> Result<PreparedWriterState<A::Session<'a>>>
     where
         M: MetaStore,
         B: BlobStore,
@@ -40,13 +66,11 @@ where
             .families
             .load_state_from_head(runtime, state.indexed_finalized_head)
             .await?;
+        preflight_recovery(state.continuity, &runtime.tables, &family_states).await?;
 
-        if state.continuity.requires_recovery() {
-            repair_after_ownership_transition(&runtime.tables, &family_states).await?;
-        }
-
-        Ok(PreparedWrite {
+        Ok(PreparedWriterState {
             session,
+            indexed_finalized_head: state.indexed_finalized_head,
             family_states,
         })
     }
@@ -85,18 +109,15 @@ where
             return Err(Error::InvalidParams("ingest requires at least one block"));
         }
 
-        let PreparedWrite {
-            session,
-            mut family_states,
-        } = self.prepare_write(runtime).await?;
-        let indexed_finalized_head = session.state().indexed_finalized_head;
+        let mut prepared = self.preflight_writer_state(runtime).await?;
+        let indexed_finalized_head = prepared.indexed_finalized_head();
         validate_block_sequence(runtime, blocks, indexed_finalized_head).await?;
         let mut writes = FamilyBlockWrites::default();
 
         for block in blocks {
             writes += self
                 .families
-                .ingest_block(&self.config, runtime, &mut family_states, block)
+                .ingest_block(&self.config, runtime, prepared.family_states_mut(), block)
                 .await?;
         }
 
@@ -104,7 +125,7 @@ where
             .last()
             .map(|block| block.block_num)
             .expect("ingest requires at least one block");
-        session
+        prepared
             .publish(
                 indexed_finalized_head,
                 self.config.observe_upstream_finalized_block.as_ref()(),

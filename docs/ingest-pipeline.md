@@ -6,14 +6,12 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 
 ```python
 async def ingest_finalized_blocks(blocks, lease):
-    family_states = load_family_state_from_head(lease.indexed_finalized_head)
-    if lease.continuity in [Fresh, Reacquired]:
-        repair_after_ownership_transition(family_states)
-    validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
+    prepared = preflight_writer_state(lease)
+    validate_contiguous_finalized_sequence_and_parent(blocks, prepared.indexed_finalized_head)
     for block in blocks:
-        await logs.ingest_block(block, family_states.logs)
-        await txs.ingest_block(block, family_states.txs)
-        await traces.ingest_block(block, family_states.traces)
+        await logs.ingest_block(block, prepared.family_states.logs)
+        await txs.ingest_block(block, prepared.family_states.txs)
+        await traces.ingest_block(block, prepared.family_states.traces)
 
     await compare_and_set_publication_state(
         expected=lease,
@@ -21,7 +19,7 @@ async def ingest_finalized_blocks(blocks, lease):
     )
 ```
 
-The `IngestEngine` orchestrates this flow. It owns write-session acquisition, finalized sequencing validation, recovery-only repair of stale sealed open-page markers, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive sequencing state from the published head before ingesting one shared `FinalizedBlock` at a time.
+The `IngestEngine` orchestrates this flow. It owns write-session acquisition, writer preflight, finalized sequencing validation, recovery-only repair of stale sealed open-page markers, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive sequencing state from the published head before ingesting one shared `FinalizedBlock` at a time.
 
 Shared ingest helpers under `src/ingest/` now own the generic primary-directory and bitmap-page mechanics. Family adapters supply payload-specific block artifacts, stream fanout values, and any family-only behavior such as logs open-page markers.
 
@@ -101,9 +99,9 @@ When a stream fragment is written to a page for the first time in a batch, an op
 - `ingest/engine.rs`: generic writer preflight and publication orchestration from current head to new tail for the shared finalized block envelope
 - `ingest/primary_dir.rs`: shared primary-directory fragment persistence and sealed-boundary compaction
 - `ingest/bitmap_pages.rs`: shared stream-page fragment persistence and compacted-page writes
-- `logs/family.rs`: logs-specific sequencing recovery and per-block ingest handler
+- `logs/family.rs`: logs-specific sequencing-state derivation and per-block ingest handler
 - `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
-- `traces/mod.rs`: trace-family sequencing recovery and per-block ingest handler
+- `traces/mod.rs`: trace-family sequencing-state derivation and per-block ingest handler
 - `logs/ingest/`: logs payload encoding, logs stream fanout, and open-page marker handling
 - `traces/ingest/`: trace payload encoding and trace stream fanout
 - `publication_state.indexed_finalized_head` is published last
