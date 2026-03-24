@@ -30,18 +30,20 @@ where
             .authority
             .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
             .await?;
-        let indexed_finalized_head = session.state().indexed_finalized_head;
+        let state = session.state();
         let family_states = self
             .families
-            .load_startup_state(runtime, indexed_finalized_head)
+            .load_startup_state(runtime, state.indexed_finalized_head)
             .await?;
 
-        repair_sealed_open_bitmap_pages(
-            &runtime.tables,
-            family_states.logs.next_log_id.get(),
-            family_states.traces.next_trace_id.get(),
-        )
-        .await?;
+        if state.needs_recovery {
+            repair_sealed_open_bitmap_pages(
+                &runtime.tables,
+                family_states.logs.next_log_id.get(),
+                family_states.traces.next_trace_id.get(),
+            )
+            .await?;
+        }
 
         Ok((session, family_states))
     }

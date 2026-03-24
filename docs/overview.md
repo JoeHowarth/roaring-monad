@@ -305,6 +305,7 @@ Today the logs and traces families persist finalized-history artifacts. The shar
 
 ```python
 class FinalizedHistoryService:
+    async def status(self) -> StartupPlan
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
     async def ingest_finalized_block(self, block: FinalizedBlock) -> IngestOutcome
     async def ingest_finalized_blocks(self, blocks: list[FinalizedBlock]) -> IngestOutcome
@@ -315,7 +316,7 @@ This boundary is transport-free:
 - the RPC crate parses and validates transport requests
 - this crate executes queries and ingest
 - the RPC crate formats the final response envelope
-- read-only startup inspection remains available through `startup_plan(...)`
+- read-only service inspection remains available through `status()` or `startup_plan(...)`
 
 ## Deferred Scope
 

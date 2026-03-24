@@ -1,5 +1,43 @@
 # Optimization Log
 
+## 2026-03-24T16:19:16Z - Skip Recovery Scans On Continuous Writer Leases
+
+### Change Summary
+
+- surfaced `needs_recovery` from `WriteAuthority::begin_write`
+- made ingest-time sealed-open-page repair conditional on fresh acquisition / reacquisition
+- added a service-level regression test that counts open-page tracking-table scans across consecutive ingests
+
+### Hypothesis
+
+- steady-state writer ingests should not rescan `open_bitmap_page` / `trace_open_bitmap_page` tables when the same writer is continuing under a valid cached lease
+- skipping those empty scans removes avoidable Scylla round-trips from the hot ingest path without weakening crash recovery after lease loss or takeover
+
+### Commands
+
+```bash
+cargo test -p finalized-history-query continuous_writer_ingest_skips_open_page_repair_scans -- --exact --nocapture
+```
+
+### Before/After Metrics
+
+- derived steady-state open-page recovery scans per continuous ingest at shard `0`:
+  - before: `2` scan-list calls (`open_bitmap_page`, `trace_open_bitmap_page`)
+  - after: `0` scan-list calls
+- asymptotic steady-state cost per continuous ingest:
+  - before: `2 * (frontier_shard + 1)` empty partition scans
+  - after: `0`
+
+### Interpretation
+
+- recovery work now aligns with the actual ownership-transition boundary instead of the batch boundary
+- continuous ingests keep the hot path free of empty recovery scans while fresh acquisitions still repair stale markers before new writes
+
+### Methodology Learnings
+
+- performance-sensitive recovery logic needs a service-level assertion on backend calls, not just authority-unit assertions on session state
+- coarse publication fault injection was too imprecise for publish-only crash coverage; distinguishing head-advancing publication CAS from generic publication-state CAS makes crash tests more trustworthy
+
 ## 2026-02-23T19:40:00Z - Baseline Before New Optimization Commits
 
 ### Context

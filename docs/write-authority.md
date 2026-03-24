@@ -139,19 +139,20 @@ async def ingest_finalized_blocks(owner_id, observed_upstream_finalized_block, b
         observed_upstream_finalized_block
     )
     family_states = load_family_startup_state(session.state().indexed_finalized_head)
-    repair_stale_open_page_markers(family_states)
+    if session.state().needs_recovery:
+        repair_stale_open_page_markers(family_states)
     validate_sequence(blocks, session.state().indexed_finalized_head)
     ingest(blocks, family_states)
     publish(blocks[-1].block_num)
 ```
 
-The writer has no separate explicit startup call. Recovery that is required for correctness runs inside the write-scoped ingest entry after ownership is acquired and before new blocks are validated or published. It does not delete unpublished suffix artifacts.
+The writer has no separate explicit startup call. Recovery that is required for correctness runs inside the write-scoped ingest entry after ownership transitions that may leave stale mutable state behind. Continuous lease renewals skip that repair path. Recovery does not delete unpublished suffix artifacts.
 
 ### Reader-only
 
 ```python
 async def reader_only_status():
-    return startup_plan()  # observational only, never mutates ownership
+    return service.status()  # observational only, never mutates ownership
 ```
 
 ### `startup_plan(...)`

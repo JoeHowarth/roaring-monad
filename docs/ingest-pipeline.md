@@ -7,7 +7,8 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 ```python
 async def ingest_finalized_blocks(blocks, lease):
     family_states = load_family_startup_states(lease.indexed_finalized_head)
-    repair_stale_open_page_markers(family_states)
+    if lease.needs_recovery:
+        repair_stale_open_page_markers(family_states)
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
     for block in blocks:
         await logs.ingest_block(block, family_states.logs)
@@ -20,7 +21,7 @@ async def ingest_finalized_blocks(blocks, lease):
     )
 ```
 
-The `IngestEngine` orchestrates this flow. It owns write-session acquisition, finalized sequencing validation, ingest-time repair of stale sealed open-page markers, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive sequencing state from the published head before ingesting one shared `FinalizedBlock` at a time.
+The `IngestEngine` orchestrates this flow. It owns write-session acquisition, finalized sequencing validation, recovery-only repair of stale sealed open-page markers, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive sequencing state from the published head before ingesting one shared `FinalizedBlock` at a time.
 
 Shared ingest helpers under `src/ingest/` now own the generic primary-directory and bitmap-page mechanics. Family adapters supply payload-specific block artifacts, stream fanout values, and any family-only behavior such as logs open-page markers.
 

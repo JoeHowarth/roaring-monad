@@ -17,8 +17,10 @@ use finalized_history_query::error::{Error, Result};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
-use finalized_history_query::logs::keys::{BITMAP_PAGE_META_TABLE, STREAM_PAGE_LOCAL_ID_SPAN};
-use finalized_history_query::logs::table_specs::BitmapPageMetaSpec;
+use finalized_history_query::logs::keys::{
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
+};
+use finalized_history_query::logs::table_specs::{BitmapByBlockSpec, BitmapPageMetaSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -41,6 +43,7 @@ enum FaultOp {
     MetaPut,
     BlobPut,
     PublicationCas,
+    PublicationAdvanceCas,
 }
 
 #[derive(Clone)]
@@ -118,6 +121,10 @@ fn matches_op(a: FaultOp, b: FaultOp) -> bool {
         (FaultOp::MetaPut, FaultOp::MetaPut)
             | (FaultOp::BlobPut, FaultOp::BlobPut)
             | (FaultOp::PublicationCas, FaultOp::PublicationCas)
+            | (
+                FaultOp::PublicationAdvanceCas,
+                FaultOp::PublicationAdvanceCas
+            )
     )
 }
 
@@ -171,6 +178,16 @@ impl MetaStore for FaultyMetaStore {
         if family == PUBLICATION_STATE_TABLE {
             self.injector
                 .maybe_fail(FaultOp::PublicationCas, &logical_key)?;
+            if matches!(cond, PutCond::IfVersion(_))
+                && let Some(current) = self.inner.get(family, key).await?
+            {
+                let current_state = PublicationState::decode(&current.value)?;
+                let next_state = PublicationState::decode(&value)?;
+                if next_state.indexed_finalized_head > current_state.indexed_finalized_head {
+                    self.injector
+                        .maybe_fail(FaultOp::PublicationAdvanceCas, &logical_key)?;
+                }
+            }
         } else {
             self.injector.maybe_fail(FaultOp::MetaPut, &logical_key)?;
         }
@@ -488,8 +505,8 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
                 b"bitmap_by_block/".to_vec(),
             ),
             (
-                "publication_state_cas",
-                FaultOp::PublicationCas,
+                "publication_head_advance_cas",
+                FaultOp::PublicationAdvanceCas,
                 FaultyMetaStore::publication_state_logical_key(),
             ),
         ];
@@ -537,12 +554,35 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
+        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
             .expect_err("publication CAS should fail");
         assert!(matches!(err, Error::Backend(_)));
+        let sid = finalized_history_query::kernel::sharded_streams::sharded_stream_id(
+            "addr",
+            &[7; 20],
+            finalized_history_query::core::ids::LogShard::new(0)
+                .unwrap()
+                .get(),
+        );
+        assert!(
+            meta.get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
+                .await
+                .expect("block record after failed publish")
+                .is_some()
+        );
+        assert!(
+            meta.scan_get(
+                BITMAP_BY_BLOCK_TABLE,
+                &BitmapByBlockSpec::partition(&sid, page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN)),
+                &BitmapByBlockSpec::clustering(1),
+            )
+            .await
+            .expect("bitmap fragment after failed publish")
+            .is_some()
+        );
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
         assert!(query_range(&svc, 1, 1).await.is_empty());
 
@@ -572,7 +612,7 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
+        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
@@ -668,7 +708,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationCas, &publication_state_key, 1);
+        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
         let err = crashing_writer
             .ingest_finalized_block(first_attempt)
             .await
@@ -686,7 +726,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             (seed_first_log_id as u32).saturating_sub(0),
             STREAM_PAGE_LOCAL_ID_SPAN,
         );
-
         injector.clear();
         let current_state = publication_store
             .load()

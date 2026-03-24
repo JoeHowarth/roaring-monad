@@ -12,6 +12,10 @@ use crate::store::publication::{CasOutcome, PublicationState, PublicationStore, 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthorityState {
     pub indexed_finalized_head: u64,
+    /// True when this write session follows a fresh ownership acquisition or a
+    /// reacquisition after lease loss/expiry. Callers can use this to run
+    /// takeover-style recovery only when mutable writer state may be stale.
+    pub needs_recovery: bool,
 }
 
 #[allow(async_fn_in_trait)]
@@ -146,6 +150,12 @@ struct PublicationLease {
     session_id: SessionId,
     indexed_finalized_head: u64,
     lease_valid_through_block: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LeaseBeginOutcome {
+    lease: PublicationLease,
+    needs_recovery: bool,
 }
 
 impl From<PublicationState> for PublicationLease {
@@ -333,20 +343,24 @@ impl<P: PublicationStore> LeaseAuthority<P> {
     async fn ensure_cached_lease(
         &self,
         observed_upstream_finalized_block: Option<u64>,
-    ) -> Result<PublicationLease> {
+    ) -> Result<LeaseBeginOutcome> {
         let mut guard = self.lease.lock().await;
-        let next_lease = match *guard {
-            Some(lease) => {
-                self.renew_if_needed(lease, observed_upstream_finalized_block)
-                    .await?
-            }
-            None => {
-                self.acquire_publication_with_session(observed_upstream_finalized_block)
-                    .await?
-            }
+        let outcome = match *guard {
+            Some(lease) => LeaseBeginOutcome {
+                lease: self
+                    .renew_if_needed(lease, observed_upstream_finalized_block)
+                    .await?,
+                needs_recovery: false,
+            },
+            None => LeaseBeginOutcome {
+                lease: self
+                    .acquire_publication_with_session(observed_upstream_finalized_block)
+                    .await?,
+                needs_recovery: true,
+            },
         };
-        *guard = Some(next_lease);
-        Ok(next_lease)
+        *guard = Some(outcome.lease);
+        Ok(outcome)
     }
 
     async fn renew_if_needed(
@@ -480,11 +494,11 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
         observed_upstream_finalized_block: Option<u64>,
     ) -> Result<Self::Session<'_>> {
         let operation = self.operation.lock().await;
-        let lease = match self
+        let begin = match self
             .ensure_cached_lease(observed_upstream_finalized_block)
             .await
         {
-            Ok(lease) => lease,
+            Ok(begin) => begin,
             Err(error) => {
                 if Self::should_invalidate_cached_lease(&error) {
                     let retry = self.can_retry_after_invalidation().await?;
@@ -504,7 +518,8 @@ impl<P: PublicationStore> WriteAuthority for LeaseAuthority<P> {
             authority: self,
             _operation: operation,
             state: AuthorityState {
-                indexed_finalized_head: lease.indexed_finalized_head,
+                indexed_finalized_head: begin.lease.indexed_finalized_head,
+                needs_recovery: begin.needs_recovery,
             },
         })
     }
@@ -596,6 +611,7 @@ mod tests {
                 .expect("acquire publication");
 
             assert_eq!(session.state().indexed_finalized_head, 0);
+            assert!(session.state().needs_recovery);
             assert_eq!(
                 authority
                     .publication_store
@@ -784,10 +800,13 @@ mod tests {
             let authority =
                 LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
 
-            authority
+            let first_needs_recovery = authority
                 .begin_write(Some(100))
                 .await
-                .expect("first acquire");
+                .expect("first acquire")
+                .state()
+                .needs_recovery;
+            assert!(first_needs_recovery);
             let first_session = authority
                 .publication_store
                 .load()
@@ -796,10 +815,13 @@ mod tests {
                 .expect("state")
                 .session_id;
             // valid_through = 100 + 49 = 149; observed 150 > 149 -> expired
-            authority
+            let second_needs_recovery = authority
                 .begin_write(Some(150))
                 .await
-                .expect("reacquire after expiry");
+                .expect("reacquire after expiry")
+                .state()
+                .needs_recovery;
+            assert!(second_needs_recovery);
             let second_session = authority
                 .publication_store
                 .load()
@@ -819,10 +841,13 @@ mod tests {
             let authority =
                 LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 0);
 
-            authority
+            let first_needs_recovery = authority
                 .begin_write(Some(100))
                 .await
-                .expect("first acquire");
+                .expect("first acquire")
+                .state()
+                .needs_recovery;
+            assert!(first_needs_recovery);
             let first_session = authority
                 .publication_store
                 .load()
@@ -831,10 +856,13 @@ mod tests {
                 .expect("state")
                 .session_id;
             // valid_through = 149; observed 140 <= 149 -> still valid
-            authority
+            let second_needs_recovery = authority
                 .begin_write(Some(140))
                 .await
-                .expect("reuse before expiry");
+                .expect("reuse before expiry")
+                .state()
+                .needs_recovery;
+            assert!(!second_needs_recovery);
             let second_session = authority
                 .publication_store
                 .load()
@@ -854,7 +882,13 @@ mod tests {
             let authority =
                 LeaseAuthority::with_session(publication_store(&store), 7, [1u8; 16], 50, 10);
 
-            authority.begin_write(Some(100)).await.expect("acquire");
+            let first_needs_recovery = authority
+                .begin_write(Some(100))
+                .await
+                .expect("acquire")
+                .state()
+                .needs_recovery;
+            assert!(first_needs_recovery);
             let first_session = authority
                 .publication_store
                 .load()
@@ -863,10 +897,13 @@ mod tests {
                 .expect("state")
                 .session_id;
             // valid_through = 149; observed 150 > 149 -> expired, no external takeover
-            authority
+            let second_needs_recovery = authority
                 .begin_write(Some(150))
                 .await
-                .expect("begin_write should reacquire after own expiry");
+                .expect("begin_write should reacquire after own expiry")
+                .state()
+                .needs_recovery;
+            assert!(second_needs_recovery);
             let second_session = authority
                 .publication_store
                 .load()
