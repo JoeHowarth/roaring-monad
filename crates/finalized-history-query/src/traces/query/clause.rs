@@ -2,9 +2,10 @@ use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
 use crate::query::planner::{
-    IndexedClause, PreparedClause, StreamPlanner, StreamSelector, clause_values,
+    IndexedClause, PreparedClause, StreamSelector, clause_values,
     prepare_shard_clauses as prepare_query_shard_clauses,
 };
+use crate::query::stream_family::StreamIndexFamily;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
@@ -27,6 +28,8 @@ pub(in crate::traces) struct IndexedClauseSpec {
 }
 
 pub(in crate::traces) type PreparedShardClause = PreparedClause<ClauseKind>;
+
+pub(in crate::traces) struct TracesStreamFamily;
 
 pub(crate) fn is_too_broad(filter: &TraceFilter, max_or_terms: usize) -> bool {
     filter.max_or_terms() > max_or_terms
@@ -115,14 +118,12 @@ pub(in crate::traces) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>
     local_from: TraceLocalId,
     local_to: TraceLocalId,
 ) -> Result<Vec<PreparedShardClause>> {
-    let planner = TracesStreamPlanner;
     let shared_specs = clause_specs
         .iter()
         .map(|spec| spec.inner.clone())
         .collect::<Vec<_>>();
-    prepare_query_shard_clauses(
+    prepare_query_shard_clauses::<M, B, TracesStreamFamily>(
         tables,
-        &planner,
         &shared_specs,
         shard,
         local_from.get(),
@@ -140,37 +141,45 @@ fn clause_kind_rank(kind: ClauseKind) -> u8 {
     }
 }
 
-struct TracesStreamPlanner;
-
-impl StreamPlanner for TracesStreamPlanner {
+impl StreamIndexFamily for TracesStreamFamily {
     type Shard = TraceShard;
     type ClauseKind = ClauseKind;
     type BitmapMeta = crate::traces::types::StreamBitmapMeta;
 
-    fn stream_id(&self, selector: &StreamSelector, shard: Self::Shard) -> String {
+    fn stream_tables<M: MetaStore, B: BlobStore>(
+        tables: &Tables<M, B>,
+    ) -> &crate::tables::StreamTables<M, B, Self::BitmapMeta> {
+        tables.trace_streams()
+    }
+
+    fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {
         match selector.stream_kind {
             "has_value" => has_value_stream_id(shard),
             _ => crate::traces::keys::stream_id(selector.stream_kind, &selector.value, shard),
         }
     }
 
-    fn clause_sort_rank(&self, kind: Self::ClauseKind) -> u8 {
+    fn clause_sort_rank(kind: Self::ClauseKind) -> u8 {
         clause_kind_rank(kind)
     }
 
-    fn first_page_start(&self, local_from: u32) -> u32 {
+    fn first_page_start(local_from: u32) -> u32 {
         table_specs::stream_page_start_local(local_from)
     }
 
-    fn last_page_start(&self, local_to: u32) -> u32 {
+    fn last_page_start(local_to: u32) -> u32 {
         table_specs::stream_page_start_local(local_to)
     }
 
-    fn next_page_start(&self, page_start: u32) -> u32 {
+    fn next_page_start(page_start: u32) -> u32 {
         page_start.saturating_add(TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
     }
 
-    fn meta_overlaps(&self, meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
+    fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
+        is_full_shard_range(local_from, local_to)
+    }
+
+    fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
         crate::kernel::sharded_streams::overlaps(
             meta.min_local,
             meta.max_local,
@@ -179,29 +188,8 @@ impl StreamPlanner for TracesStreamPlanner {
         )
     }
 
-    fn meta_count(&self, meta: &Self::BitmapMeta) -> u32 {
+    fn meta_count(meta: &Self::BitmapMeta) -> u32 {
         meta.count
-    }
-
-    async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        stream_id: &str,
-        page_start: u32,
-    ) -> Result<Option<Self::BitmapMeta>> {
-        super::stream_bitmap::load_trace_bitmap_page_meta(tables, stream_id, page_start).await
-    }
-
-    async fn load_page_fragments<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        stream_id: &str,
-        page_start: u32,
-    ) -> Result<Vec<bytes::Bytes>> {
-        tables
-            .trace_streams()
-            .load_page_fragments(stream_id, page_start)
-            .await
     }
 }
 
