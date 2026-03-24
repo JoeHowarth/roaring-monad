@@ -11,9 +11,11 @@ use crate::core::range::{ResolvedBlockRange, load_block_ref};
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::streams::StreamBitmapMeta;
+use crate::tables::{StreamTables, Tables};
 
-use super::planner::PreparedClause;
+use super::bitmap::load_prepared_clause_bitmap;
+use super::planner::{IndexedClause, prepare_shard_clauses};
 pub type ShardBitmapSet = BTreeMap<u64, RoaringBitmap>;
 
 pub struct MaterializerCaches<F> {
@@ -231,33 +233,15 @@ where
 #[allow(async_fn_in_trait)]
 pub(crate) trait QueryDescriptor {
     type Id: QueryId;
-    type ClauseSpec: Clone;
     type Filter;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec>;
+    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause>;
     fn local_range_for_shard(
         &self,
         from: Self::Id,
         to_inclusive: Self::Id,
         shard_raw: u64,
     ) -> (u32, u32);
-
-    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<Vec<PreparedClause>>;
-
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<RoaringBitmap>;
 }
 
 pub(crate) fn empty_page<T>(block_range: &ResolvedBlockRange) -> QueryPage<T> {
@@ -358,7 +342,7 @@ pub async fn cached_parent_block_ref<M: MetaStore, B: BlobStore>(
 }
 
 pub(crate) async fn execute_indexed_query<M, B, D, Q>(
-    tables: &Tables<M, B>,
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     descriptor: &D,
     filter: &D::Filter,
     id_window: (D::Id, D::Id),
@@ -378,9 +362,14 @@ where
     for shard_raw in from_id.shard_raw()..=to_id_inclusive.shard_raw() {
         let (local_from, local_to) =
             descriptor.local_range_for_shard(from_id, to_id_inclusive, shard_raw);
-        let shard_clauses = descriptor
-            .prepare_shard_clauses(tables, &clause_specs, shard_raw, local_from, local_to)
-            .await?;
+        let shard_clauses = prepare_shard_clauses(
+            stream_tables,
+            &clause_specs,
+            shard_raw,
+            local_from,
+            local_to,
+        )
+        .await?;
 
         if shard_clauses.is_empty() {
             continue;
@@ -388,9 +377,9 @@ where
 
         let mut shard_accumulator: Option<RoaringBitmap> = None;
         for prepared_clause in shard_clauses {
-            let clause_bitmap = descriptor
-                .load_prepared_clause_bitmap(tables, &prepared_clause, local_from, local_to)
-                .await?;
+            let clause_bitmap =
+                load_prepared_clause_bitmap(stream_tables, &prepared_clause, local_from, local_to)
+                    .await?;
             if clause_bitmap.is_empty() {
                 shard_accumulator = Some(RoaringBitmap::new());
                 break;

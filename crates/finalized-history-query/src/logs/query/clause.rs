@@ -1,18 +1,8 @@
 use crate::core::clause::Clause;
-use crate::core::ids::{LogLocalId, LogShard};
-use crate::error::Result;
 use crate::logs::filter::LogFilter;
-use crate::query::bitmap;
-use crate::query::planner::{
-    IndexedClause, PreparedClause, clause_values, indexed_clause,
-    prepare_shard_clauses as prepare_indexed_shard_clauses,
-};
-use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::query::planner::{IndexedClause, clause_values, indexed_clause};
 
 pub(in crate::logs) type IndexedClauseSpec = IndexedClause;
-
-pub(in crate::logs) type PreparedShardClause = PreparedClause;
 
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
@@ -48,38 +38,6 @@ pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClau
     }
 
     clauses
-}
-
-pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    clause_specs: &[IndexedClauseSpec],
-    shard: LogShard,
-    local_from: LogLocalId,
-    local_to: LogLocalId,
-) -> Result<Vec<PreparedShardClause>> {
-    prepare_indexed_shard_clauses(
-        &tables.log_streams,
-        clause_specs,
-        shard.get(),
-        local_from.get(),
-        local_to.get(),
-    )
-    .await
-}
-
-pub(in crate::logs) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    prepared_clause: &PreparedShardClause,
-    _local_from: LogLocalId,
-    _local_to: LogLocalId,
-) -> Result<roaring::RoaringBitmap> {
-    bitmap::load_prepared_clause_bitmap(
-        &tables.log_streams,
-        prepared_clause,
-        _local_from.get(),
-        _local_to.get(),
-    )
-    .await
 }
 
 fn clause_values_20(clause: &Clause<[u8; 20]>) -> Vec<Vec<u8>> {

@@ -9,7 +9,8 @@ use crate::query::runner::{
 use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::streams::StreamBitmapMeta;
+use crate::tables::{StreamTables, Tables};
 
 pub(crate) trait IndexedFilter {
     fn has_indexed_clause(&self) -> bool;
@@ -32,6 +33,11 @@ pub(crate) trait IndexedQueryRequest {
 pub(crate) struct QueryLimits {
     pub budget: ExecutionBudget,
     pub max_or_terms: usize,
+}
+
+pub(crate) struct FamilyQueryTables<'a, M: MetaStore, B: BlobStore> {
+    pub tables: &'a Tables<M, B>,
+    pub stream_tables: &'a StreamTables<M, B, StreamBitmapMeta>,
 }
 
 pub(crate) async fn resolve_request_block_bounds<
@@ -72,7 +78,7 @@ pub(crate) async fn resolve_request_block_bounds<
 }
 
 pub(crate) async fn execute_family_query<M, P, B, R, D, Q, W>(
-    tables: &Tables<M, B>,
+    family_tables: FamilyQueryTables<'_, M, B>,
     publication_store: &P,
     request: &R,
     limits: QueryLimits,
@@ -91,6 +97,8 @@ where
     Q: QueryMaterializer<Id = D::Id, Filter = D::Filter>,
     W: Fn(&crate::core::state::BlockRecord) -> Option<crate::core::state::PrimaryWindowRecord>,
 {
+    let tables = family_tables.tables;
+
     if !request.filter().has_indexed_clause() {
         return Err(Error::InvalidParams(
             "query must include at least one indexed clause",
@@ -133,7 +141,7 @@ where
     };
 
     let matched = execute_indexed_query(
-        tables,
+        family_tables.stream_tables,
         descriptor,
         request.filter(),
         (normalized.id_range.start, normalized.id_range.end_inclusive),

@@ -1,16 +1,16 @@
-use super::clause::{
-    IndexedClauseSpec, build_clause_specs, load_prepared_clause_bitmap, prepare_shard_clauses,
-};
+use super::clause::build_clause_specs;
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, LogLocalId, LogShard, family_local_range_for_shard};
+use crate::core::ids::{LogId, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::materialize::LogMaterializer;
 use crate::logs::types::Log;
-use crate::query::engine::{IndexedQueryRequest, QueryLimits, execute_family_query};
-use crate::query::planner::PreparedClause;
+use crate::query::engine::{
+    FamilyQueryTables, IndexedQueryRequest, QueryLimits, execute_family_query,
+};
+use crate::query::planner::IndexedClause;
 use crate::query::runner::QueryDescriptor;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -38,7 +38,10 @@ impl LogsQueryEngine {
         let descriptor = LogsQueryDescriptor;
         let mut materializer = LogMaterializer::new(tables);
         execute_family_query(
-            tables,
+            FamilyQueryTables {
+                tables,
+                stream_tables: &tables.log_streams,
+            },
             publication_store,
             &request,
             QueryLimits {
@@ -93,10 +96,9 @@ struct LogsQueryDescriptor;
 
 impl QueryDescriptor for LogsQueryDescriptor {
     type Id = LogId;
-    type ClauseSpec = IndexedClauseSpec;
     type Filter = LogFilter;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
+    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause> {
         build_clause_specs(filter)
     }
 
@@ -107,39 +109,5 @@ impl QueryDescriptor for LogsQueryDescriptor {
         shard_raw: u64,
     ) -> (u32, u32) {
         family_local_range_for_shard(from, to_inclusive, shard_raw)
-    }
-
-    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<Vec<PreparedClause>> {
-        prepare_shard_clauses(
-            tables,
-            clause_specs,
-            LogShard::new(shard_raw).expect("shard derived from LogId range"),
-            LogLocalId::new(local_from).expect("local range start must fit local-id"),
-            LogLocalId::new(local_to).expect("local range end must fit local-id"),
-        )
-        .await
-    }
-
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap(
-            tables,
-            prepared_clause,
-            LogLocalId::new(local_from).expect("local range start must fit local-id"),
-            LogLocalId::new(local_to).expect("local range end must fit local-id"),
-        )
-        .await
     }
 }

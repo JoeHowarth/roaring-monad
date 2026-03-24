@@ -1,13 +1,13 @@
-use super::clause::{
-    IndexedClauseSpec, build_clause_specs, load_prepared_clause_bitmap, prepare_shard_clauses,
-};
+use super::clause::build_clause_specs;
 use crate::api::{ExecutionBudget, QueryTracesRequest};
 use crate::config::Config;
-use crate::core::ids::{TraceId, TraceLocalId, TraceShard, family_local_range_for_shard};
+use crate::core::ids::{TraceId, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
-use crate::query::engine::{IndexedQueryRequest, QueryLimits, execute_family_query};
-use crate::query::planner::PreparedClause;
+use crate::query::engine::{
+    FamilyQueryTables, IndexedQueryRequest, QueryLimits, execute_family_query,
+};
+use crate::query::planner::IndexedClause;
 use crate::query::runner::QueryDescriptor;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -38,7 +38,10 @@ impl TracesQueryEngine {
         let descriptor = TracesQueryDescriptor;
         let mut materializer = TraceMaterializer::new(tables);
         execute_family_query(
-            tables,
+            FamilyQueryTables {
+                tables,
+                stream_tables: &tables.trace_streams,
+            },
             publication_store,
             &request,
             QueryLimits {
@@ -93,10 +96,9 @@ struct TracesQueryDescriptor;
 
 impl QueryDescriptor for TracesQueryDescriptor {
     type Id = TraceId;
-    type ClauseSpec = IndexedClauseSpec;
     type Filter = TraceFilter;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
+    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause> {
         build_clause_specs(filter)
     }
 
@@ -107,39 +109,5 @@ impl QueryDescriptor for TracesQueryDescriptor {
         shard_raw: u64,
     ) -> (u32, u32) {
         family_local_range_for_shard(from, to_inclusive, shard_raw)
-    }
-
-    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<Vec<PreparedClause>> {
-        prepare_shard_clauses(
-            tables,
-            clause_specs,
-            TraceShard::new(shard_raw).expect("shard derived from TraceId range"),
-            TraceLocalId::new(local_from).expect("local range start must fit trace local-id"),
-            TraceLocalId::new(local_to).expect("local range end must fit trace local-id"),
-        )
-        .await
-    }
-
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap(
-            tables,
-            prepared_clause,
-            TraceLocalId::new(local_from).expect("local range start must fit trace local-id"),
-            TraceLocalId::new(local_to).expect("local range end must fit trace local-id"),
-        )
-        .await
     }
 }
