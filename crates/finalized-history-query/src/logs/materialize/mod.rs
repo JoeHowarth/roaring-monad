@@ -1,29 +1,11 @@
 mod hydrate;
-mod resolve;
 
 use std::collections::HashMap;
 
 use crate::core::refs::BlockRef;
 use crate::logs::types::DirByBlock;
-use crate::query::runner::CandidateLocation;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResolvedLogLocation {
-    pub block_num: u64,
-    pub local_ordinal: usize,
-}
-
-impl CandidateLocation for ResolvedLogLocation {
-    fn block_num(self) -> u64 {
-        self.block_num
-    }
-
-    fn local_ordinal(self) -> usize {
-        self.local_ordinal
-    }
-}
 
 pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
@@ -54,6 +36,7 @@ mod tests {
 
     use bytes::Bytes;
 
+    use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::LogId;
     use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
@@ -144,13 +127,13 @@ mod tests {
             let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
-                .resolve_log_id(LogId::new(12))
+                .resolve_id(LogId::new(12))
                 .await
                 .expect("resolve log id");
 
             assert_eq!(
                 resolved,
-                Some(super::ResolvedLogLocation {
+                Some(ResolvedPrimaryLocation {
                     block_num: 700,
                     local_ordinal: 1,
                 })
@@ -182,13 +165,13 @@ mod tests {
             let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
-                .resolve_log_id(log_id)
+                .resolve_id(log_id)
                 .await
                 .expect("resolve log id");
 
             assert_eq!(
                 resolved,
-                Some(super::ResolvedLogLocation {
+                Some(ResolvedPrimaryLocation {
                     block_num: 700,
                     local_ordinal: 5,
                 })
@@ -222,13 +205,13 @@ mod tests {
             let tables = Tables::without_cache(meta, blob);
             let mut materializer = LogMaterializer::new(&tables);
             let resolved = materializer
-                .resolve_log_id(log_id)
+                .resolve_id(log_id)
                 .await
                 .expect("resolve log id");
 
             assert_eq!(
                 resolved,
-                Some(super::ResolvedLogLocation {
+                Some(ResolvedPrimaryLocation {
                     block_num: 700,
                     local_ordinal: (LOG_DIRECTORY_BUCKET_SIZE + 5) as usize,
                 })

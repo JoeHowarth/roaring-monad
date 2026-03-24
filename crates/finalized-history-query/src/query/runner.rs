@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use roaring::RoaringBitmap;
 
+use crate::core::directory_resolver::ResolvedPrimaryLocation;
 use crate::core::ids::{LogId, TraceId, compose_log_id, compose_trace_id};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::core::page::{QueryPage, QueryPageMeta};
@@ -116,12 +117,11 @@ pub trait CandidateLocation: Copy {
 #[allow(async_fn_in_trait)]
 pub trait QueryMaterializer {
     type Id: QueryId;
-    type Location: CandidateLocation;
     type Item;
     type Filter;
     type Output;
 
-    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>>;
+    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>>;
     async fn load_by_id(&mut self, id: Self::Id) -> Result<Option<Self::Item>> {
         let Some(location) = self.resolve_id(id).await? else {
             return Ok(None);
@@ -135,7 +135,7 @@ pub trait QueryMaterializer {
     }
     async fn load_run(
         &mut self,
-        run: &[(Self::Id, Self::Location)],
+        run: &[(Self::Id, ResolvedPrimaryLocation)],
     ) -> Result<Vec<(Self::Id, Self::Item)>>;
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef>;
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool;
@@ -437,10 +437,10 @@ async fn collect_contiguous_chunk<I, D, Q>(
     locals: &mut std::iter::Peekable<I>,
     descriptor: &D,
     shard: D::Shard,
-    first: (D::Id, Q::Location),
+    first: (D::Id, ResolvedPrimaryLocation),
     max_len: usize,
     materializer: &mut Q,
-) -> Result<Vec<(D::Id, Q::Location)>>
+) -> Result<Vec<(D::Id, ResolvedPrimaryLocation)>>
 where
     I: Iterator<Item = u32>,
     D: QueryDescriptor,
@@ -458,8 +458,8 @@ where
             continue;
         };
         let previous = run.last().expect("run must be non-empty").1;
-        if next_location.block_num() != previous.block_num()
-            || next_location.local_ordinal() != previous.local_ordinal() + 1
+        if next_location.block_num != previous.block_num
+            || next_location.local_ordinal != previous.local_ordinal + 1
         {
             break;
         }
@@ -473,10 +473,10 @@ where
 async fn collect_candidate_chunk<I, Iter, M>(
     locals: &mut std::iter::Peekable<Iter>,
     shard_raw: u64,
-    first: (I, M::Location),
+    first: (I, ResolvedPrimaryLocation),
     max_len: usize,
     materializer: &mut M,
-) -> Result<Vec<(I, M::Location)>>
+) -> Result<Vec<(I, ResolvedPrimaryLocation)>>
 where
     I: QueryId,
     Iter: Iterator<Item = u32>,
@@ -494,8 +494,8 @@ where
             continue;
         };
         let previous = run.last().expect("run must be non-empty").1;
-        if next_location.block_num() != previous.block_num()
-            || next_location.local_ordinal() != previous.local_ordinal() + 1
+        if next_location.block_num != previous.block_num
+            || next_location.local_ordinal != previous.local_ordinal + 1
         {
             break;
         }
@@ -568,6 +568,7 @@ mod tests {
     use roaring::RoaringBitmap;
 
     use super::{CandidateLocation, QueryDescriptor, QueryMaterializer, collect_contiguous_chunk};
+    use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
     use crate::core::refs::BlockRef;
     use crate::error::Result;
@@ -575,21 +576,6 @@ mod tests {
     use crate::store::traits::{BlobStore, MetaStore};
     use crate::tables::Tables;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    struct StubLocation {
-        block_num: u64,
-        local_ordinal: usize,
-    }
-
-    impl CandidateLocation for StubLocation {
-        fn block_num(self) -> u64 {
-            self.block_num
-        }
-
-        fn local_ordinal(self) -> usize {
-            self.local_ordinal
-        }
-    }
 
     struct StubDescriptor;
 
@@ -652,17 +638,16 @@ mod tests {
     }
 
     struct StubMaterializer {
-        planned: VecDeque<(LogId, Result<Option<StubLocation>>)>,
+        planned: VecDeque<(LogId, Result<Option<ResolvedPrimaryLocation>>)>,
     }
 
     impl QueryMaterializer for StubMaterializer {
         type Id = LogId;
-        type Location = StubLocation;
         type Item = ();
         type Filter = ();
         type Output = ();
 
-        async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
+        async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
             let (expected_id, outcome) = self.planned.pop_front().expect("planned resolution");
             assert_eq!(id, expected_id, "unexpected resolve order");
             outcome
@@ -670,7 +655,7 @@ mod tests {
 
         async fn load_run(
             &mut self,
-            _run: &[(Self::Id, Self::Location)],
+            _run: &[(Self::Id, ResolvedPrimaryLocation)],
         ) -> Result<Vec<(Self::Id, Self::Item)>> {
             unreachable!("not used in these tests")
         }
@@ -696,7 +681,7 @@ mod tests {
             let mut locals = vec![1u32, 2u32].into_iter().peekable();
             let first = (
                 compose_log_id(shard, LogLocalId::new(0).expect("local")),
-                StubLocation {
+                ResolvedPrimaryLocation {
                     block_num: 7,
                     local_ordinal: 0,
                 },
@@ -707,7 +692,7 @@ mod tests {
                 planned: VecDeque::from([
                     (
                         second_id,
-                        Ok(Some(StubLocation {
+                        Ok(Some(ResolvedPrimaryLocation {
                             block_num: 7,
                             local_ordinal: 1,
                         })),
@@ -745,7 +730,7 @@ mod tests {
             let mut locals = vec![1u32, 2u32, 3u32].into_iter().peekable();
             let first = (
                 compose_log_id(shard, LogLocalId::new(0).expect("local")),
-                StubLocation {
+                ResolvedPrimaryLocation {
                     block_num: 7,
                     local_ordinal: 0,
                 },
@@ -756,14 +741,14 @@ mod tests {
                 planned: VecDeque::from([
                     (
                         second_id,
-                        Ok(Some(StubLocation {
+                        Ok(Some(ResolvedPrimaryLocation {
                             block_num: 7,
                             local_ordinal: 1,
                         })),
                     ),
                     (
                         fourth_id,
-                        Ok(Some(StubLocation {
+                        Ok(Some(ResolvedPrimaryLocation {
                             block_num: 7,
                             local_ordinal: 3,
                         })),
@@ -789,7 +774,7 @@ mod tests {
                 shard,
                 (
                     compose_log_id(shard, next_local),
-                    StubLocation {
+                    ResolvedPrimaryLocation {
                         block_num: 7,
                         local_ordinal: 2,
                     },

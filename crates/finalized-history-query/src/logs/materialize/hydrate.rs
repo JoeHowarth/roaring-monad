@@ -1,9 +1,11 @@
+use crate::core::directory_resolver::{ResolvedPrimaryLocation, resolve_primary_id};
 use crate::core::ids::LogId;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
 use crate::logs::state::load_log_block_record;
+use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
 use crate::query::runner::{QueryMaterializer, cached_block_ref_with_fallback};
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -25,17 +27,27 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
 
 impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B> {
     type Id = LogId;
-    type Location = super::ResolvedLogLocation;
     type Item = LogRef;
     type Filter = LogFilter;
     type Output = crate::logs::types::Log;
 
-    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
-        self.resolve_log_id(id).await
+    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
+        Ok(resolve_primary_id::<M, LogId>(
+            self.tables.log_dir(),
+            &mut self.directory_fragment_cache,
+            id,
+            |value| LogDirBucketSpec::bucket_start(value.get()),
+            |value| LogDirSubBucketSpec::sub_bucket_start(value.get()),
+        )
+        .await?
+        .map(|location| ResolvedPrimaryLocation {
+            block_num: location.block_num,
+            local_ordinal: location.local_ordinal,
+        }))
     }
 
     async fn load_by_id(&mut self, id: Self::Id) -> Result<Option<Self::Item>> {
-        let Some(location) = self.resolve_log_id(id).await? else {
+        let Some(location) = self.resolve_id(id).await? else {
             return Ok(None);
         };
         Ok(self
@@ -51,7 +63,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
 
     async fn load_run(
         &mut self,
-        run: &[(Self::Id, Self::Location)],
+        run: &[(Self::Id, ResolvedPrimaryLocation)],
     ) -> Result<Vec<(Self::Id, Self::Item)>> {
         let Some((_, first)) = run.first().copied() else {
             return Ok(Vec::new());
