@@ -32,10 +32,6 @@ pub(crate) fn is_too_broad(filter: &LogFilter, max_or_terms: usize) -> bool {
     filter.max_or_terms() > max_or_terms
 }
 
-pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-    local_from == 0 && local_to == MAX_LOCAL_ID
-}
-
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 
@@ -89,16 +85,6 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
     .await
 }
 
-fn clause_kind_rank(kind: ClauseKind) -> u8 {
-    match kind {
-        ClauseKind::Address => 0,
-        ClauseKind::Topic1 => 1,
-        ClauseKind::Topic2 => 2,
-        ClauseKind::Topic3 => 3,
-        ClauseKind::Topic0 => 4,
-    }
-}
-
 impl StreamIndexFamily for LogsStreamFamily {
     type Shard = LogShard;
     type ClauseKind = ClauseKind;
@@ -115,7 +101,13 @@ impl StreamIndexFamily for LogsStreamFamily {
     }
 
     fn clause_sort_rank(kind: Self::ClauseKind) -> u8 {
-        clause_kind_rank(kind)
+        match kind {
+            ClauseKind::Address => 0,
+            ClauseKind::Topic1 => 1,
+            ClauseKind::Topic2 => 2,
+            ClauseKind::Topic3 => 3,
+            ClauseKind::Topic0 => 4,
+        }
     }
 
     fn first_page_start(local_from: u32) -> u32 {
@@ -131,7 +123,7 @@ impl StreamIndexFamily for LogsStreamFamily {
     }
 
     fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-        is_full_shard_range(local_from, local_to)
+        local_from == 0 && local_to == MAX_LOCAL_ID
     }
 
     fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {

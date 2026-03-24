@@ -32,10 +32,6 @@ pub(crate) fn is_too_broad(filter: &TraceFilter, max_or_terms: usize) -> bool {
     filter.max_or_terms() > max_or_terms
 }
 
-pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-    local_from == 0 && local_to == MAX_TRACE_LOCAL_ID
-}
-
 pub(in crate::traces) fn build_clause_specs(filter: &TraceFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 
@@ -86,15 +82,6 @@ pub(in crate::traces) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>
     .await
 }
 
-fn clause_kind_rank(kind: ClauseKind) -> u8 {
-    match kind {
-        ClauseKind::From => 0,
-        ClauseKind::To => 1,
-        ClauseKind::Selector => 2,
-        ClauseKind::HasValue => 3,
-    }
-}
-
 impl StreamIndexFamily for TracesStreamFamily {
     type Shard = TraceShard;
     type ClauseKind = ClauseKind;
@@ -114,7 +101,12 @@ impl StreamIndexFamily for TracesStreamFamily {
     }
 
     fn clause_sort_rank(kind: Self::ClauseKind) -> u8 {
-        clause_kind_rank(kind)
+        match kind {
+            ClauseKind::From => 0,
+            ClauseKind::To => 1,
+            ClauseKind::Selector => 2,
+            ClauseKind::HasValue => 3,
+        }
     }
 
     fn first_page_start(local_from: u32) -> u32 {
@@ -130,7 +122,7 @@ impl StreamIndexFamily for TracesStreamFamily {
     }
 
     fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-        is_full_shard_range(local_from, local_to)
+        local_from == 0 && local_to == MAX_TRACE_LOCAL_ID
     }
 
     fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
