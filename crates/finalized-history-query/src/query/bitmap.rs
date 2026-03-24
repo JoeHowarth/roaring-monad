@@ -13,9 +13,9 @@ use super::planner::PreparedClause;
 
 pub(crate) const STREAM_LOAD_CONCURRENCY: usize = 32;
 
-pub(crate) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore, K>(
+pub(crate) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
     stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
-    prepared_clause: &PreparedClause<K>,
+    prepared_clause: &PreparedClause,
     local_from: u32,
     local_to: u32,
 ) -> Result<RoaringBitmap> {

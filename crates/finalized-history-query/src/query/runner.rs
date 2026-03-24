@@ -231,7 +231,6 @@ where
 #[allow(async_fn_in_trait)]
 pub(crate) trait QueryDescriptor {
     type Id: QueryId;
-    type ClauseKind: Copy;
     type ClauseSpec: Clone;
     type Filter;
 
@@ -250,12 +249,12 @@ pub(crate) trait QueryDescriptor {
         shard_raw: u64,
         local_from: u32,
         local_to: u32,
-    ) -> Result<Vec<PreparedClause<Self::ClauseKind>>>;
+    ) -> Result<Vec<PreparedClause>>;
 
     async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause<Self::ClauseKind>,
+        prepared_clause: &PreparedClause,
         local_from: u32,
         local_to: u32,
     ) -> Result<RoaringBitmap>;

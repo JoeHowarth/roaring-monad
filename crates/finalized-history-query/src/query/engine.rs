@@ -103,7 +103,6 @@ where
         });
     }
 
-    let effective_limit = effective_limit(request.limit(), limits.budget)?;
     let (from_block, to_block) = resolve_request_block_bounds(tables, request).await?;
     let block_range = resolve_block_range(
         tables,
@@ -126,7 +125,7 @@ where
         &block_range,
         id_window,
         request.resume_id().map(D::Id::new),
-        effective_limit,
+        effective_limit(request.limit(), limits.budget)?,
         "resume_id outside resolved block window",
     )?
     else {

@@ -1,6 +1,5 @@
 use super::clause::{
-    ClauseKind, IndexedClauseSpec, build_clause_specs, load_prepared_clause_bitmap,
-    prepare_shard_clauses,
+    IndexedClauseSpec, build_clause_specs, load_prepared_clause_bitmap, prepare_shard_clauses,
 };
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
@@ -94,7 +93,6 @@ struct LogsQueryDescriptor;
 
 impl QueryDescriptor for LogsQueryDescriptor {
     type Id = LogId;
-    type ClauseKind = ClauseKind;
     type ClauseSpec = IndexedClauseSpec;
     type Filter = LogFilter;
 
@@ -118,7 +116,7 @@ impl QueryDescriptor for LogsQueryDescriptor {
         shard_raw: u64,
         local_from: u32,
         local_to: u32,
-    ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
+    ) -> Result<Vec<PreparedClause>> {
         prepare_shard_clauses(
             tables,
             clause_specs,
@@ -132,7 +130,7 @@ impl QueryDescriptor for LogsQueryDescriptor {
     async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause<Self::ClauseKind>,
+        prepared_clause: &PreparedClause,
         local_from: u32,
         local_to: u32,
     ) -> Result<roaring::RoaringBitmap> {
