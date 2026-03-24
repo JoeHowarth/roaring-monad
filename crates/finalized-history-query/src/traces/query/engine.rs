@@ -3,7 +3,7 @@ use super::clause::{
 };
 use crate::api::{ExecutionBudget, QueryTracesRequest};
 use crate::config::Config;
-use crate::core::ids::{TraceId, TraceLocalId, TraceShard};
+use crate::core::ids::{TraceId, TraceLocalId, TraceShard, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
@@ -12,7 +12,6 @@ use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
-use crate::traces::keys::trace_local_range_for_shard;
 use crate::traces::materialize::TraceMaterializer;
 use crate::traces::state::resolve_trace_window;
 use crate::traces::types::Trace;
@@ -108,8 +107,7 @@ impl IndexedQueryFamily for TracesQueryFamily {
         to_inclusive: Self::Id,
         shard: Self::Shard,
     ) -> (u32, u32) {
-        let (local_from, local_to) = trace_local_range_for_shard(from, to_inclusive, shard);
-        (local_from.get(), local_to.get())
+        family_local_range_for_shard(from, to_inclusive, shard.get())
     }
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(

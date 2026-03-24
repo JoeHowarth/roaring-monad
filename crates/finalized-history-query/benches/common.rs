@@ -16,10 +16,9 @@ use finalized_history_query::core::state::{
     BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
 };
 use finalized_history_query::kernel::codec::StorageCodec;
+use finalized_history_query::kernel::table_specs::PointTableSpec;
 use finalized_history_query::logs::codec::validate_log;
-use finalized_history_query::logs::keys::{
-    BLOCK_LOG_HEADER_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID,
-};
+use finalized_history_query::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID};
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
     BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
@@ -666,7 +665,7 @@ pub fn seed_materialized_blocks(
             if !block.logs.is_empty() {
                 put_meta_record(
                     meta_store,
-                    BLOCK_LOG_HEADER_TABLE,
+                    BlockLogHeaderSpec::TABLE,
                     &BlockLogHeaderSpec::key(block.block_num),
                     BlockLogHeader { offsets }.encode(),
                 )
@@ -716,7 +715,7 @@ pub fn seed_materialized_blocks(
             );
             put_meta_record(
                 meta_store,
-                LOG_DIR_BUCKET_TABLE,
+                LogDirBucketSpec::TABLE,
                 &LogDirBucketSpec::key(bucket_start),
                 DirBucket {
                     start_block,

@@ -17,9 +17,8 @@ use finalized_history_query::error::{Error, Result};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
-use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
-};
+use finalized_history_query::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
+use finalized_history_query::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use finalized_history_query::logs::table_specs::{BitmapByBlockSpec, BitmapPageMetaSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::status::service_status;
@@ -585,7 +584,7 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
         );
         assert!(
             meta.scan_get(
-                BITMAP_BY_BLOCK_TABLE,
+                BitmapByBlockSpec::TABLE,
                 &BitmapByBlockSpec::partition(&sid, page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN)),
                 &BitmapByBlockSpec::clustering(1),
             )
@@ -785,7 +784,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         assert_eq!(status.head_state.indexed_finalized_head, 2);
         assert!(
             meta.get(
-                BITMAP_PAGE_META_TABLE,
+                BitmapPageMetaSpec::TABLE,
                 &BitmapPageMetaSpec::key(&sid, page_start)
             )
             .await

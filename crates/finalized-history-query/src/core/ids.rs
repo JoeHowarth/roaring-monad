@@ -330,6 +330,26 @@ pub trait FamilyIdValue: Copy + Ord {
     fn get(self) -> u64;
 }
 
+pub fn family_local_range_for_shard<I: FamilyIdValue>(
+    from: I,
+    to_inclusive: I,
+    shard_raw: u64,
+) -> (u32, u32) {
+    let from_shard = from.get() >> LOCAL_ID_BITS;
+    let to_shard = to_inclusive.get() >> LOCAL_ID_BITS;
+    let local_from = if shard_raw == from_shard {
+        (from.get() & LOCAL_ID_MASK) as u32
+    } else {
+        0
+    };
+    let local_to = if shard_raw == to_shard {
+        (to_inclusive.get() & LOCAL_ID_MASK) as u32
+    } else {
+        MAX_LOCAL_ID
+    };
+    (local_from, local_to)
+}
+
 impl FamilyIdValue for LogId {
     fn new(raw: u64) -> Self {
         Self::new(raw)
@@ -497,5 +517,22 @@ mod tests {
             FamilyIdRange::new(TraceId::new(30), TraceId::new(32)).expect("trace range");
         assert!(log_range.contains(LogId::new(21)));
         assert!(trace_range.contains(TraceId::new(31)));
+    }
+
+    #[test]
+    fn family_local_range_for_shard_works_for_both_wrappers() {
+        let (log_from, log_to) = super::family_local_range_for_shard(
+            LogId::new(u64::from(MAX_LOCAL_ID) - 2),
+            LogId::new(u64::from(MAX_LOCAL_ID) + 2),
+            0,
+        );
+        assert_eq!((log_from, log_to), (MAX_LOCAL_ID - 2, MAX_LOCAL_ID));
+
+        let (trace_from, trace_to) = super::family_local_range_for_shard(
+            TraceId::new(u64::from(MAX_LOCAL_ID) + 1),
+            TraceId::new(u64::from(MAX_LOCAL_ID) + 3),
+            1,
+        );
+        assert_eq!((trace_from, trace_to), (0, 2));
     }
 }

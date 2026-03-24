@@ -10,10 +10,9 @@ mod tests {
     use crate::core::ids::LogId;
     use crate::family::FinalizedBlock;
     use crate::kernel::codec::StorageCodec;
+    use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
     use crate::logs::codec::validate_log;
     use crate::logs::keys::{
-        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE,
-        LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
     };
     use crate::logs::table_specs::{
@@ -76,7 +75,7 @@ mod tests {
                 .expect("read block blob")
                 .expect("block blob present");
             let header = meta
-                .get(BLOCK_LOG_HEADER_TABLE, &BlockLogHeaderSpec::key(7))
+                .get(BlockLogHeaderSpec::TABLE, &BlockLogHeaderSpec::key(7))
                 .await
                 .expect("read block header")
                 .expect("block header present");
@@ -117,7 +116,7 @@ mod tests {
 
             let fragment0 = meta
                 .scan_get(
-                    LOG_DIR_BY_BLOCK_TABLE,
+                    LogDirByBlockSpec::TABLE,
                     &LogDirByBlockSpec::partition(0),
                     &LogDirByBlockSpec::clustering(700),
                 )
@@ -126,7 +125,7 @@ mod tests {
                 .expect("fragment0");
             let fragment1 = meta
                 .scan_get(
-                    LOG_DIR_BY_BLOCK_TABLE,
+                    LogDirByBlockSpec::TABLE,
                     &LogDirByBlockSpec::partition(crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE),
                     &LogDirByBlockSpec::clustering(700),
                 )
@@ -134,7 +133,7 @@ mod tests {
                 .expect("read fragment1")
                 .expect("fragment1");
             let sub_bucket = meta
-                .get(LOG_DIR_SUB_BUCKET_TABLE, &LogDirSubBucketSpec::key(0))
+                .get(LogDirSubBucketSpec::TABLE, &LogDirSubBucketSpec::key(0))
                 .await
                 .expect("read sub bucket")
                 .expect("sub bucket");
@@ -216,7 +215,7 @@ mod tests {
             );
             let fragment = meta
                 .scan_get(
-                    BITMAP_BY_BLOCK_TABLE,
+                    BitmapByBlockSpec::TABLE,
                     &BitmapByBlockSpec::partition(&sid, first_page),
                     &BitmapByBlockSpec::clustering(block.block_num),
                 )
@@ -225,7 +224,7 @@ mod tests {
                 .expect("stream fragment");
             let page_meta = meta
                 .get(
-                    BITMAP_PAGE_META_TABLE,
+                    BitmapPageMetaSpec::TABLE,
                     &BitmapPageMetaSpec::key(&sid, first_page),
                 )
                 .await
@@ -282,7 +281,7 @@ mod tests {
             .expect("compact directory");
 
             let bucket = meta
-                .get(LOG_DIR_BUCKET_TABLE, &LogDirBucketSpec::key(0))
+                .get(LogDirBucketSpec::TABLE, &LogDirBucketSpec::key(0))
                 .await
                 .expect("directory bucket")
                 .expect("directory bucket present");

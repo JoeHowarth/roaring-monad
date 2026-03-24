@@ -15,9 +15,8 @@ use finalized_history_query::ingest::authority::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
-use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, LOG_DIR_BY_BLOCK_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
-};
+use finalized_history_query::kernel::table_specs::ScannableTableSpec;
+use finalized_history_query::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use finalized_history_query::logs::table_specs::{
     BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, LogDirByBlockSpec,
 };
@@ -132,7 +131,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    LOG_DIR_BY_BLOCK_TABLE,
+                    LogDirByBlockSpec::TABLE,
                     &LogDirByBlockSpec::partition(0),
                     &LogDirByBlockSpec::clustering(1),
                 )
@@ -152,7 +151,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    BITMAP_BY_BLOCK_TABLE,
+                    BitmapByBlockSpec::TABLE,
                     &BitmapByBlockSpec::partition(&sid, page_start),
                     &BitmapByBlockSpec::clustering(1),
                 )
