@@ -21,8 +21,10 @@ use crate::traces::types::Trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryLogsRequest {
-    pub from_block: u64,
-    pub to_block: u64,
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub from_block_hash: Option<[u8; 32]>,
+    pub to_block_hash: Option<[u8; 32]>,
     pub order: QueryOrder,
     pub resume_log_id: Option<u64>,
     pub limit: usize,

@@ -93,8 +93,10 @@ async fn scylla_minio_roundtrip_query() {
     let got = svc
         .query_logs(
             QueryLogsRequest {
-                from_block: 1,
-                to_block: 2,
+                from_block: Some(1),
+                to_block: Some(2),
+                from_block_hash: None,
+                to_block_hash: None,
                 order: QueryOrder::Ascending,
                 resume_log_id: None,
                 limit: 100,

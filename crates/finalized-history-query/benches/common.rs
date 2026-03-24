@@ -350,8 +350,10 @@ where
 {
     block_on(svc.query_logs(
         QueryLogsRequest {
-            from_block,
-            to_block,
+            from_block: Some(from_block),
+            to_block: Some(to_block),
+            from_block_hash: None,
+            to_block_hash: None,
             order: QueryOrder::Ascending,
             resume_log_id,
             limit,

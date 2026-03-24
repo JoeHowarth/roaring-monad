@@ -1,22 +1,18 @@
 use super::clause::{
-    ClauseKind, IndexedClauseSpec, LogsStreamFamily, build_clause_specs, is_too_broad,
-    prepare_shard_clauses,
+    ClauseKind, IndexedClauseSpec, LogsStreamFamily, build_clause_specs, prepare_shard_clauses,
 };
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
 use crate::core::page::QueryPage;
-use crate::core::range::resolve_block_range;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::materialize::LogMaterializer;
 use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
-use crate::query::bitmap::load_prepared_clause_bitmap;
-use crate::query::normalized::{effective_limit, normalize_query};
+use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
 use crate::query::planner::PreparedClause;
-use crate::query::runner::{QueryDescriptor, build_page, empty_page, execute_indexed_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -40,99 +36,89 @@ impl LogsQueryEngine {
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
-        if !request.filter.has_indexed_clause() {
-            return Err(Error::InvalidParams(
-                "query must include at least one indexed address or topic clause",
-            ));
-        }
-        let effective_limit = effective_limit(request.limit, budget)?;
-
-        let block_range = resolve_block_range(
+        execute_family_query::<M, P, B, _, LogsQueryFamily>(
             tables,
             publication_store,
-            request.from_block,
-            request.to_block,
-            request.order,
+            &request,
+            budget,
+            self.max_or_terms,
         )
-        .await?;
-        if block_range.is_empty() {
-            return Ok(empty_page(&block_range));
-        }
-
-        let Some(log_window) = resolve_log_window(tables, &block_range).await? else {
-            return Ok(empty_page(&block_range));
-        };
-
-        if is_too_broad(&request.filter, self.max_or_terms) {
-            let actual = request.filter.max_or_terms();
-            return Err(Error::QueryTooBroad {
-                actual,
-                max: self.max_or_terms,
-            });
-        }
-
-        let Some(normalized) = normalize_query(
-            &block_range,
-            log_window,
-            request.resume_log_id.map(LogId::new),
-            effective_limit,
-            "resume_log_id outside resolved block window",
-        )?
-        else {
-            return Ok(empty_page(&block_range));
-        };
-        let descriptor = LogsQueryDescriptor;
-        let mut materializer = LogMaterializer::new(tables);
-        let matched = execute_indexed_query(
-            tables,
-            &descriptor,
-            &request.filter,
-            (normalized.id_range.start, normalized.id_range.end_inclusive),
-            normalized.take,
-            &mut materializer,
-        )
-        .await?;
-
-        Ok(build_page::<LogMaterializer<'_, M, B>>(
-            normalized.block_range,
-            normalized.effective_limit,
-            matched,
-        ))
+        .await
     }
 }
 
-struct LogsQueryDescriptor;
+impl IndexedQueryRequest for QueryLogsRequest {
+    type Filter = LogFilter;
 
-impl QueryDescriptor for LogsQueryDescriptor {
+    fn start_block_num(&self) -> Option<u64> {
+        self.from_block
+    }
+
+    fn end_block_num(&self) -> Option<u64> {
+        self.to_block
+    }
+
+    fn start_block_hash(&self) -> Option<[u8; 32]> {
+        self.from_block_hash
+    }
+
+    fn end_block_hash(&self) -> Option<[u8; 32]> {
+        self.to_block_hash
+    }
+
+    fn order(&self) -> crate::core::page::QueryOrder {
+        self.order
+    }
+
+    fn resume_id(&self) -> Option<u64> {
+        self.resume_log_id
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn filter(&self) -> &Self::Filter {
+        &self.filter
+    }
+}
+
+struct LogsQueryFamily;
+
+impl IndexedQueryFamily for LogsQueryFamily {
     type Id = LogId;
+    type Shard = LogShard;
     type ClauseKind = ClauseKind;
     type ClauseSpec = IndexedClauseSpec;
     type Filter = LogFilter;
+    type Output = Log;
+    type StreamFamily = LogsStreamFamily;
+    type Materializer<'a, M: MetaStore + 'a, B: BlobStore + 'a> = LogMaterializer<'a, M, B>;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
+    fn build_clause_specs(filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
         build_clause_specs(filter)
     }
 
+    fn shard_from_raw(shard_raw: u64) -> Self::Shard {
+        LogShard::new(shard_raw).expect("shard derived from LogId range")
+    }
+
     fn local_range_for_shard(
-        &self,
         from: Self::Id,
         to_inclusive: Self::Id,
-        shard_raw: u64,
+        shard: Self::Shard,
     ) -> (u32, u32) {
-        let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
         let (local_from, local_to) = table_specs::local_range_for_shard(from, to_inclusive, shard);
         (local_from.get(), local_to.get())
     }
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
         tables: &Tables<M, B>,
         clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
+        shard: Self::Shard,
         local_from: u32,
         local_to: u32,
     ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
-        let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
         prepare_shard_clauses(
             tables,
             clause_specs,
@@ -143,19 +129,24 @@ impl QueryDescriptor for LogsQueryDescriptor {
         .await
     }
 
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
+    async fn resolve_window<M: MetaStore, B: BlobStore>(
         tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause<Self::ClauseKind>,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap::<M, B, _, LogsStreamFamily>(
-            tables,
-            prepared_clause,
-            local_from,
-            local_to,
-        )
-        .await
+        block_range: &crate::core::range::ResolvedBlockRange,
+    ) -> Result<Option<crate::core::ids::FamilyIdRange<Self::Id>>> {
+        resolve_log_window(tables, block_range).await
+    }
+
+    fn make_materializer<'a, M: MetaStore, B: BlobStore>(
+        tables: &'a Tables<M, B>,
+    ) -> Self::Materializer<'a, M, B> {
+        LogMaterializer::new(tables)
+    }
+
+    fn indexed_clause_error() -> &'static str {
+        "query must include at least one indexed address or topic clause"
+    }
+
+    fn resume_error() -> &'static str {
+        "resume_log_id outside resolved block window"
     }
 }

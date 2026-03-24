@@ -103,8 +103,10 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
     let e2 = svc
         .query_logs(
             QueryLogsRequest {
-                from_block: 1,
-                to_block: 1,
+                from_block: Some(1),
+                to_block: Some(1),
+                from_block_hash: None,
+                to_block_hash: None,
                 order: QueryOrder::Ascending,
                 resume_log_id: None,
                 limit: usize::MAX,
@@ -125,8 +127,10 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
     let e3 = svc
         .query_logs(
             QueryLogsRequest {
-                from_block: 1,
-                to_block: 2,
+                from_block: Some(1),
+                to_block: Some(2),
+                from_block_hash: None,
+                to_block_hash: None,
                 order: QueryOrder::Ascending,
                 resume_log_id: None,
                 limit: usize::MAX,

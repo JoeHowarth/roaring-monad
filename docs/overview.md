@@ -143,8 +143,10 @@ class QueryOrder:
 
 
 class QueryLogsRequest:
-    from_block: int
-    to_block: int
+    from_block: int | None
+    to_block: int | None
+    from_block_hash: bytes32 | None
+    to_block_hash: bytes32 | None
     order: QueryOrder
     resume_log_id: int | None
     limit: int

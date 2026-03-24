@@ -28,10 +28,6 @@ pub(in crate::logs) type PreparedShardClause = PreparedClause<ClauseKind>;
 
 pub(in crate::logs) struct LogsStreamFamily;
 
-pub(crate) fn is_too_broad(filter: &LogFilter, max_or_terms: usize) -> bool {
-    filter.max_or_terms() > max_or_terms
-}
-
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 

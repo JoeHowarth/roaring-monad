@@ -1,18 +1,13 @@
 use super::clause::{
-    ClauseKind, IndexedClauseSpec, TracesStreamFamily, build_clause_specs, is_too_broad,
-    prepare_shard_clauses,
+    ClauseKind, IndexedClauseSpec, TracesStreamFamily, build_clause_specs, prepare_shard_clauses,
 };
 use crate::api::{ExecutionBudget, QueryTracesRequest};
 use crate::config::Config;
 use crate::core::ids::{TraceId, TraceLocalId, TraceShard};
 use crate::core::page::QueryPage;
-use crate::core::range::resolve_block_range;
-use crate::core::state::load_block_num_by_hash;
-use crate::error::{Error, Result};
-use crate::query::bitmap::load_prepared_clause_bitmap;
-use crate::query::normalized::{effective_limit, normalize_query};
+use crate::error::Result;
+use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
 use crate::query::planner::PreparedClause;
-use crate::query::runner::{QueryDescriptor, build_page, empty_page, execute_indexed_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -41,128 +36,89 @@ impl TracesQueryEngine {
         request: QueryTracesRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Trace>> {
-        if !request.filter.has_indexed_clause() {
-            return Err(Error::InvalidParams(
-                "query must include at least one indexed trace predicate",
-            ));
-        }
-        if is_too_broad(&request.filter, self.max_or_terms) {
-            return Err(Error::QueryTooBroad {
-                actual: request.filter.max_or_terms(),
-                max: self.max_or_terms,
-            });
-        }
-        let effective_limit = effective_limit(request.limit, budget)?;
-
-        let (from_block, to_block) = resolve_request_block_bounds(tables, &request).await?;
-        let block_range = resolve_block_range(
+        execute_family_query::<M, P, B, _, TracesQueryFamily>(
             tables,
             publication_store,
-            from_block,
-            to_block,
-            request.order,
+            &request,
+            budget,
+            self.max_or_terms,
         )
-        .await?;
-        if block_range.is_empty() {
-            return Ok(empty_page(&block_range));
-        }
-
-        let Some(trace_window) = resolve_trace_window(tables, &block_range).await? else {
-            return Ok(empty_page(&block_range));
-        };
-
-        let Some(normalized) = normalize_query(
-            &block_range,
-            trace_window,
-            request.resume_trace_id.map(TraceId::new),
-            effective_limit,
-            "resume_trace_id outside resolved block window",
-        )?
-        else {
-            return Ok(empty_page(&block_range));
-        };
-
-        let descriptor = TracesQueryDescriptor;
-        let mut materializer = TraceMaterializer::new(tables);
-        let matched = execute_indexed_query(
-            tables,
-            &descriptor,
-            &request.filter,
-            (normalized.id_range.start, normalized.id_range.end_inclusive),
-            normalized.take,
-            &mut materializer,
-        )
-        .await?;
-
-        Ok(build_page::<TraceMaterializer<'_, M, B>>(
-            normalized.block_range,
-            normalized.effective_limit,
-            matched,
-        ))
+        .await
     }
 }
 
-async fn resolve_request_block_bounds<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    request: &QueryTracesRequest,
-) -> Result<(u64, u64)> {
-    let from_block = match (request.from_block, request.from_block_hash) {
-        (Some(number), None) => number,
-        (None, Some(hash)) => load_block_num_by_hash(tables, &hash)
-            .await?
-            .ok_or(Error::InvalidParams("unknown from_block_hash"))?,
-        _ => {
-            return Err(Error::InvalidParams(
-                "exactly one of from_block or from_block_hash is required",
-            ));
-        }
-    };
-    let to_block = match (request.to_block, request.to_block_hash) {
-        (Some(number), None) => number,
-        (None, Some(hash)) => load_block_num_by_hash(tables, &hash)
-            .await?
-            .ok_or(Error::InvalidParams("unknown to_block_hash"))?,
-        _ => {
-            return Err(Error::InvalidParams(
-                "exactly one of to_block or to_block_hash is required",
-            ));
-        }
-    };
-    Ok((from_block, to_block))
+impl IndexedQueryRequest for QueryTracesRequest {
+    type Filter = TraceFilter;
+
+    fn start_block_num(&self) -> Option<u64> {
+        self.from_block
+    }
+
+    fn end_block_num(&self) -> Option<u64> {
+        self.to_block
+    }
+
+    fn start_block_hash(&self) -> Option<[u8; 32]> {
+        self.from_block_hash
+    }
+
+    fn end_block_hash(&self) -> Option<[u8; 32]> {
+        self.to_block_hash
+    }
+
+    fn order(&self) -> crate::core::page::QueryOrder {
+        self.order
+    }
+
+    fn resume_id(&self) -> Option<u64> {
+        self.resume_trace_id
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn filter(&self) -> &Self::Filter {
+        &self.filter
+    }
 }
 
-struct TracesQueryDescriptor;
+struct TracesQueryFamily;
 
-impl QueryDescriptor for TracesQueryDescriptor {
+impl IndexedQueryFamily for TracesQueryFamily {
     type Id = TraceId;
+    type Shard = TraceShard;
     type ClauseKind = ClauseKind;
     type ClauseSpec = IndexedClauseSpec;
     type Filter = TraceFilter;
+    type Output = Trace;
+    type StreamFamily = TracesStreamFamily;
+    type Materializer<'a, M: MetaStore + 'a, B: BlobStore + 'a> = TraceMaterializer<'a, M, B>;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
+    fn build_clause_specs(filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
         build_clause_specs(filter)
     }
 
+    fn shard_from_raw(shard_raw: u64) -> Self::Shard {
+        TraceShard::new(shard_raw).expect("shard derived from TraceId range")
+    }
+
     fn local_range_for_shard(
-        &self,
         from: Self::Id,
         to_inclusive: Self::Id,
-        shard_raw: u64,
+        shard: Self::Shard,
     ) -> (u32, u32) {
-        let shard = TraceShard::new(shard_raw).expect("shard derived from TraceId range");
         let (local_from, local_to) = trace_local_range_for_shard(from, to_inclusive, shard);
         (local_from.get(), local_to.get())
     }
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
         tables: &Tables<M, B>,
         clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
+        shard: Self::Shard,
         local_from: u32,
         local_to: u32,
     ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
-        let shard = TraceShard::new(shard_raw).expect("shard derived from TraceId range");
         prepare_shard_clauses(
             tables,
             clause_specs,
@@ -173,19 +129,24 @@ impl QueryDescriptor for TracesQueryDescriptor {
         .await
     }
 
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
+    async fn resolve_window<M: MetaStore, B: BlobStore>(
         tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause<Self::ClauseKind>,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap::<M, B, _, TracesStreamFamily>(
-            tables,
-            prepared_clause,
-            local_from,
-            local_to,
-        )
-        .await
+        block_range: &crate::core::range::ResolvedBlockRange,
+    ) -> Result<Option<crate::core::ids::FamilyIdRange<Self::Id>>> {
+        resolve_trace_window(tables, block_range).await
+    }
+
+    fn make_materializer<'a, M: MetaStore, B: BlobStore>(
+        tables: &'a Tables<M, B>,
+    ) -> Self::Materializer<'a, M, B> {
+        TraceMaterializer::new(tables)
+    }
+
+    fn indexed_clause_error() -> &'static str {
+        "query must include at least one indexed trace predicate"
+    }
+
+    fn resume_error() -> &'static str {
+        "resume_trace_id outside resolved block window"
     }
 }

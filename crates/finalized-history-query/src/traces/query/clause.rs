@@ -26,10 +26,6 @@ pub(in crate::traces) type PreparedShardClause = PreparedClause<ClauseKind>;
 
 pub(in crate::traces) struct TracesStreamFamily;
 
-pub(crate) fn is_too_broad(filter: &TraceFilter, max_or_terms: usize) -> bool {
-    filter.max_or_terms() > max_or_terms
-}
-
 pub(in crate::traces) fn build_clause_specs(filter: &TraceFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 

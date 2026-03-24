@@ -30,8 +30,10 @@ fn query_returns_error_when_from_block_exceeds_to_block() {
         let err = svc
             .query_logs(
                 QueryLogsRequest {
-                    from_block: 5,
-                    to_block: 2,
+                    from_block: Some(5),
+                    to_block: Some(2),
+                    from_block_hash: None,
+                    to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_log_id: None,
                     limit: 10,
@@ -63,6 +65,41 @@ fn query_returns_empty_when_from_block_exceeds_finalized_head() {
             .expect("query beyond head");
         assert!(page.items.is_empty());
         assert!(!page.meta.has_more);
+    });
+}
+
+#[test]
+fn query_logs_resolves_block_hash_bounds() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest");
+
+        let page = svc
+            .query_logs(
+                QueryLogsRequest {
+                    from_block: None,
+                    to_block: None,
+                    from_block_hash: Some([1; 32]),
+                    to_block_hash: Some([1; 32]),
+                    order: QueryOrder::Ascending,
+                    resume_log_id: None,
+                    limit: 10,
+                    filter: indexed_address_filter(1),
+                },
+                ExecutionBudget::default(),
+            )
+            .await
+            .expect("query logs by block hash");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].block_num, 1);
     });
 }
 
@@ -100,8 +137,10 @@ fn query_rejects_resume_log_id_outside_window() {
         let err = svc
             .query_logs(
                 QueryLogsRequest {
-                    from_block: 1,
-                    to_block: 1,
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    from_block_hash: None,
+                    to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_log_id: Some(999_999),
                     limit: 10,
@@ -165,8 +204,10 @@ fn execution_budget_clamps_effective_limit() {
         let page = svc
             .query_logs(
                 QueryLogsRequest {
-                    from_block: 1,
-                    to_block: 1,
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    from_block_hash: None,
+                    to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_log_id: None,
                     limit: 10,
@@ -199,8 +240,10 @@ fn execution_budget_zero_is_rejected() {
         let err = svc
             .query_logs(
                 QueryLogsRequest {
-                    from_block: 1,
-                    to_block: 1,
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    from_block_hash: None,
+                    to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_log_id: None,
                     limit: 10,
@@ -234,8 +277,10 @@ fn query_rejects_filter_without_indexed_clause() {
         let err = svc
             .query_logs(
                 QueryLogsRequest {
-                    from_block: 1,
-                    to_block: 1,
+                    from_block: Some(1),
+                    to_block: Some(1),
+                    from_block_hash: None,
+                    to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_log_id: None,
                     limit: 10,
