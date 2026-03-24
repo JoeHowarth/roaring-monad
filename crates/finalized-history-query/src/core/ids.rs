@@ -91,278 +91,157 @@ impl FamilyLocalId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogId(FamilyId);
+macro_rules! define_family_id_types {
+    ($id:ident, $shard:ident, $invalid_shard:ident, $local:ident, $invalid_local:ident, $compose:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $id(FamilyId);
 
-impl LogId {
-    pub const fn new(raw: u64) -> Self {
-        Self(FamilyId::new(raw))
-    }
+        impl $id {
+            pub const fn new(raw: u64) -> Self {
+                Self(FamilyId::new(raw))
+            }
 
-    pub const fn from_family_id(value: FamilyId) -> Self {
-        Self(value)
-    }
+            pub const fn from_family_id(value: FamilyId) -> Self {
+                Self(value)
+            }
 
-    pub const fn into_family_id(self) -> FamilyId {
-        self.0
-    }
+            pub const fn into_family_id(self) -> FamilyId {
+                self.0
+            }
 
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
+            pub const fn get(self) -> u64 {
+                self.0.get()
+            }
 
-    pub const fn shard(self) -> LogShard {
-        LogShard::from_family_shard(FamilyShard::new_masked(self.0.shard_raw()))
-    }
+            pub const fn shard(self) -> $shard {
+                $shard::from_family_shard(FamilyShard::new_masked(self.0.shard_raw()))
+            }
 
-    pub const fn local(self) -> LogLocalId {
-        LogLocalId::from_family_local_id(FamilyLocalId::new_masked(self.0.local_raw()))
-    }
+            pub const fn local(self) -> $local {
+                $local::from_family_local_id(FamilyLocalId::new_masked(self.0.local_raw()))
+            }
 
-    pub const fn split(self) -> (LogShard, LogLocalId) {
-        (self.shard(), self.local())
-    }
+            pub const fn split(self) -> ($shard, $local) {
+                (self.shard(), self.local())
+            }
+        }
+
+        impl From<u64> for $id {
+            fn from(value: u64) -> Self {
+                Self::new(value)
+            }
+        }
+
+        impl From<$id> for u64 {
+            fn from(value: $id) -> Self {
+                value.get()
+            }
+        }
+
+        impl Default for $id {
+            fn default() -> Self {
+                Self::new(0)
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $shard(FamilyShard);
+
+        impl $shard {
+            pub fn new(raw: u64) -> Result<Self, $invalid_shard> {
+                FamilyShard::new(raw)
+                    .map(Self)
+                    .map_err(|err| $invalid_shard { raw: err.raw() })
+            }
+
+            pub const fn from_family_shard(value: FamilyShard) -> Self {
+                Self(value)
+            }
+
+            pub const fn into_family_shard(self) -> FamilyShard {
+                self.0
+            }
+
+            pub const fn get(self) -> u64 {
+                self.0.get()
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $invalid_shard {
+            raw: u64,
+        }
+
+        impl $invalid_shard {
+            pub const fn raw(self) -> u64 {
+                self.raw
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $invalid_local {
+            raw: u32,
+        }
+
+        impl $invalid_local {
+            pub const fn raw(self) -> u32 {
+                self.raw
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $local(FamilyLocalId);
+
+        impl $local {
+            pub fn new(raw: u32) -> Result<Self, $invalid_local> {
+                FamilyLocalId::new(raw)
+                    .map(Self)
+                    .map_err(|err| $invalid_local { raw: err.raw() })
+            }
+
+            pub const fn from_family_local_id(value: FamilyLocalId) -> Self {
+                Self(value)
+            }
+
+            pub const fn into_family_local_id(self) -> FamilyLocalId {
+                self.0
+            }
+
+            pub const fn get(self) -> u32 {
+                self.0.get()
+            }
+        }
+
+        pub const fn $compose(shard: $shard, local: $local) -> $id {
+            $id::from_family_id(FamilyId::compose(shard.get(), local.get()))
+        }
+    };
 }
 
-impl From<u64> for LogId {
-    fn from(value: u64) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<LogId> for u64 {
-    fn from(value: LogId) -> Self {
-        value.get()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogShard(FamilyShard);
-
-impl LogShard {
-    pub fn new(raw: u64) -> Result<Self, InvalidLogShard> {
-        FamilyShard::new(raw)
-            .map(Self)
-            .map_err(|err| InvalidLogShard { raw: err.raw() })
-    }
-
-    pub const fn from_family_shard(value: FamilyShard) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_shard(self) -> FamilyShard {
-        self.0
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidLogShard {
-    raw: u64,
-}
-
-impl InvalidLogShard {
-    pub const fn raw(self) -> u64 {
-        self.raw
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidLogLocalId {
-    raw: u32,
-}
-
-impl InvalidLogLocalId {
-    pub const fn raw(self) -> u32 {
-        self.raw
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogLocalId(FamilyLocalId);
-
-impl LogLocalId {
-    pub fn new(raw: u32) -> Result<Self, InvalidLogLocalId> {
-        FamilyLocalId::new(raw)
-            .map(Self)
-            .map_err(|err| InvalidLogLocalId { raw: err.raw() })
-    }
-
-    pub const fn from_family_local_id(value: FamilyLocalId) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_local_id(self) -> FamilyLocalId {
-        self.0
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0.get()
-    }
-}
-
-pub const fn compose_log_id(shard: LogShard, local: LogLocalId) -> LogId {
-    LogId::from_family_id(FamilyId::compose(shard.get(), local.get()))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TxId(FamilyId);
-
-impl TxId {
-    pub const fn new(raw: u64) -> Self {
-        Self(FamilyId::new(raw))
-    }
-
-    pub const fn from_family_id(value: FamilyId) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_id(self) -> FamilyId {
-        self.0
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl From<u64> for TxId {
-    fn from(value: u64) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<TxId> for u64 {
-    fn from(value: TxId) -> Self {
-        value.get()
-    }
-}
-
-impl Default for TxId {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceId(FamilyId);
-
-impl TraceId {
-    pub const fn new(raw: u64) -> Self {
-        Self(FamilyId::new(raw))
-    }
-
-    pub const fn from_family_id(value: FamilyId) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_id(self) -> FamilyId {
-        self.0
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-
-    pub const fn shard(self) -> TraceShard {
-        TraceShard::from_family_shard(FamilyShard::new_masked(self.0.shard_raw()))
-    }
-
-    pub const fn local(self) -> TraceLocalId {
-        TraceLocalId::from_family_local_id(FamilyLocalId::new_masked(self.0.local_raw()))
-    }
-
-    pub const fn split(self) -> (TraceShard, TraceLocalId) {
-        (self.shard(), self.local())
-    }
-}
-
-impl From<u64> for TraceId {
-    fn from(value: u64) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<TraceId> for u64 {
-    fn from(value: TraceId) -> Self {
-        value.get()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceShard(FamilyShard);
-
-impl TraceShard {
-    pub fn new(raw: u64) -> Result<Self, InvalidTraceShard> {
-        FamilyShard::new(raw)
-            .map(Self)
-            .map_err(|err| InvalidTraceShard { raw: err.raw() })
-    }
-
-    pub const fn from_family_shard(value: FamilyShard) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_shard(self) -> FamilyShard {
-        self.0
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidTraceShard {
-    raw: u64,
-}
-
-impl InvalidTraceShard {
-    pub const fn raw(self) -> u64 {
-        self.raw
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidTraceLocalId {
-    raw: u32,
-}
-
-impl InvalidTraceLocalId {
-    pub const fn raw(self) -> u32 {
-        self.raw
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceLocalId(FamilyLocalId);
-
-impl TraceLocalId {
-    pub fn new(raw: u32) -> Result<Self, InvalidTraceLocalId> {
-        FamilyLocalId::new(raw)
-            .map(Self)
-            .map_err(|err| InvalidTraceLocalId { raw: err.raw() })
-    }
-
-    pub const fn from_family_local_id(value: FamilyLocalId) -> Self {
-        Self(value)
-    }
-
-    pub const fn into_family_local_id(self) -> FamilyLocalId {
-        self.0
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0.get()
-    }
-}
-
-pub const fn compose_trace_id(shard: TraceShard, local: TraceLocalId) -> TraceId {
-    TraceId::from_family_id(FamilyId::compose(shard.get(), local.get()))
-}
+define_family_id_types!(
+    LogId,
+    LogShard,
+    InvalidLogShard,
+    LogLocalId,
+    InvalidLogLocalId,
+    compose_log_id
+);
+define_family_id_types!(
+    TxId,
+    TxShard,
+    InvalidTxShard,
+    TxLocalId,
+    InvalidTxLocalId,
+    compose_tx_id
+);
+define_family_id_types!(
+    TraceId,
+    TraceShard,
+    InvalidTraceShard,
+    TraceLocalId,
+    InvalidTraceLocalId,
+    compose_trace_id
+);
 
 pub trait FamilyIdValue: Copy + Ord {
     fn new(raw: u64) -> Self;
@@ -450,8 +329,8 @@ pub type TraceIdRange = FamilyIdRange<TraceId>;
 mod tests {
     use super::{
         FamilyId, FamilyIdRange, FamilyLocalId, FamilyShard, LogId, LogLocalId, LogShard,
-        PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId, TraceShard, TxId, compose_log_id,
-        compose_trace_id,
+        PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId, TraceShard, TxId, TxLocalId, TxShard,
+        compose_log_id, compose_trace_id, compose_tx_id,
     };
     use crate::core::layout::MAX_LOCAL_ID;
 
@@ -546,6 +425,29 @@ mod tests {
     }
 
     #[test]
+    fn tx_id_roundtrips_at_boundaries() {
+        let values = [
+            TxId::new(0),
+            TxId::new(1),
+            TxId::new(u64::from(MAX_LOCAL_ID)),
+            TxId::new(u64::from(MAX_LOCAL_ID) + 1),
+            compose_tx_id(
+                TxShard::new(u64::from(u32::MAX) + 1).unwrap(),
+                TxLocalId::new(7).unwrap(),
+            ),
+        ];
+
+        for value in values {
+            let (shard, local) = value.split();
+            assert_eq!(compose_tx_id(shard, local), value);
+            assert_eq!(
+                value.into_family_id(),
+                FamilyId::compose(shard.get(), local.get())
+            );
+        }
+    }
+
+    #[test]
     fn family_shard_and_local_validate_bounds() {
         assert_eq!(
             FamilyShard::new(u64::MAX).err().map(|err| err.raw()),
@@ -585,5 +487,12 @@ mod tests {
             1,
         );
         assert_eq!((trace_from, trace_to), (0, 2));
+
+        let (tx_from, tx_to) = super::family_local_range_for_shard(
+            TxId::new(u64::from(MAX_LOCAL_ID) + 1),
+            TxId::new(u64::from(MAX_LOCAL_ID) + 3),
+            1,
+        );
+        assert_eq!((tx_from, tx_to), (0, 2));
     }
 }
