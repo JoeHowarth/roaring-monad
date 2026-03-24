@@ -17,11 +17,8 @@ use finalized_history_query::error::{Error, Result};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
-use finalized_history_query::logs::keys::{
-    BITMAP_PAGE_META_TABLE, LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
-    STREAM_PAGE_LOCAL_ID_SPAN,
-};
-use finalized_history_query::logs::table_specs::{BitmapPageMetaSpec, LogDirSubBucketSpec};
+use finalized_history_query::logs::keys::{BITMAP_PAGE_META_TABLE, STREAM_PAGE_LOCAL_ID_SPAN};
+use finalized_history_query::logs::table_specs::BitmapPageMetaSpec;
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -660,7 +657,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
 
         let crashing_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 1);
-        crashing_writer.startup().await.expect("writer startup");
         let first_attempt = mk_block(
             2,
             [1; 32],
@@ -679,15 +675,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .expect_err("publish CAS should fail after summary creation");
         assert!(matches!(err, Error::Backend(_)));
 
-        assert!(
-            meta.get(
-                LOG_DIR_SUB_BUCKET_TABLE,
-                &LogDirSubBucketSpec::key(2_560_000 - LOG_DIRECTORY_SUB_BUCKET_SIZE),
-            )
-            .await
-            .expect("dir sub bucket")
-            .is_some()
-        );
         let sid = finalized_history_query::kernel::sharded_streams::sharded_stream_id(
             "addr",
             &[7; 20],
@@ -698,15 +685,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         let page_start = page_start_local(
             (seed_first_log_id as u32).saturating_sub(0),
             STREAM_PAGE_LOCAL_ID_SPAN,
-        );
-        assert!(
-            meta.get(
-                BITMAP_PAGE_META_TABLE,
-                &BitmapPageMetaSpec::key(&sid, page_start)
-            )
-            .await
-            .expect("stream page meta")
-            .is_some()
         );
 
         injector.clear();
@@ -728,10 +706,6 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         ));
         let takeover_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 2);
-        takeover_writer
-            .startup()
-            .await
-            .expect("startup without cleanup");
 
         let retry_block = mk_block(
             2,
@@ -762,6 +736,15 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         .await
         .expect("post conflict startup plan");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);
+        assert!(
+            meta.get(
+                BITMAP_PAGE_META_TABLE,
+                &BitmapPageMetaSpec::key(&sid, page_start)
+            )
+            .await
+            .expect("stream page meta after retry")
+            .is_some()
+        );
         let items = query_range(&takeover_writer, 2, 2).await;
         assert_eq!(items.len(), 4);
     });

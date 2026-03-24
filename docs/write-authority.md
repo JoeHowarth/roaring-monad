@@ -129,24 +129,28 @@ This ensures:
 If a cached lease becomes unusable, the authority drops it internally before the
 next write-scoped session attempt.
 
-## Startup Flow
+## Write Entry Flow
 
-### Lease-backed reader+writer
+### Lease-backed reader+writer ingest
 
 ```python
-async def startup_reader_writer(owner_id, observed_upstream_finalized_block):
+async def ingest_finalized_blocks(owner_id, observed_upstream_finalized_block, blocks):
     session = begin_write(
         observed_upstream_finalized_block
     )
-    return recovery_plan_from(session.state().indexed_finalized_head)
+    family_states = load_family_startup_state(session.state().indexed_finalized_head)
+    repair_stale_open_page_markers(family_states)
+    validate_sequence(blocks, session.state().indexed_finalized_head)
+    ingest(blocks, family_states)
+    publish(blocks[-1].block_num)
 ```
 
-Startup derives the next write position from the published head. It does not delete unpublished suffix artifacts.
+The writer has no separate explicit startup call. Recovery that is required for correctness runs inside the write-scoped ingest entry after ownership is acquired and before new blocks are validated or published. It does not delete unpublished suffix artifacts.
 
 ### Reader-only
 
 ```python
-async def startup_reader_only():
+async def reader_only_status():
     return startup_plan()  # observational only, never mutates ownership
 ```
 
@@ -166,7 +170,7 @@ async def startup_reader_only():
 4. if the observed block is still within the validity window, standby remains passive
 5. once the observed block is past the validity bound, standby attempts takeover by CAS
 6. the winning CAS writes: standby's `owner_id`, fresh `session_id`, unchanged `indexed_finalized_head`, new `lease_valid_through_block`
-7. after acquisition, the new primary derives next sequencing state from the published head and resumes ingest
+7. after acquisition, the new primary derives next sequencing state from the published head, repairs stale sealed open-page markers, and resumes ingest
 
 If the takeover CAS fails, the standby reloads `publication_state` and re-evaluates rather than retrying blindly.
 

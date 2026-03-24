@@ -45,7 +45,7 @@ fn shared_block_record(
 }
 
 #[test]
-fn service_startup_bootstraps_publication_ownership() {
+fn first_ingest_bootstraps_publication_ownership() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -54,14 +54,17 @@ fn service_startup_bootstraps_publication_ownership() {
             5,
         );
 
-        let plan = svc.startup().await.expect("startup");
-        assert_eq!(plan.head_state.indexed_finalized_head, 0);
-        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
+        let outcome = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest");
+        assert_eq!(outcome.indexed_finalized_head, 1);
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
     });
 }
 
 #[test]
-fn service_startup_uses_configured_lease_blocks() {
+fn first_ingest_uses_configured_lease_blocks() {
     block_on(async {
         let observed_upstream_finalized_block = 41;
         let config = Config {
@@ -78,7 +81,9 @@ fn service_startup_uses_configured_lease_blocks() {
             5,
         );
 
-        svc.startup().await.expect("startup");
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect("ingest");
         let publication_state = MetaPublicationStore::new(svc.meta_store().clone())
             .load()
             .await
@@ -93,7 +98,7 @@ fn service_startup_uses_configured_lease_blocks() {
 }
 
 #[test]
-fn lease_writer_startup_fails_closed_without_observed_finalized_block() {
+fn lease_writer_ingest_fails_closed_without_observed_finalized_block() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             Config::default(),
@@ -103,7 +108,7 @@ fn lease_writer_startup_fails_closed_without_observed_finalized_block() {
         );
 
         let err = svc
-            .startup()
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![]))
             .await
             .expect_err("missing observation should fail closed");
 
@@ -112,7 +117,7 @@ fn lease_writer_startup_fails_closed_without_observed_finalized_block() {
 }
 
 #[test]
-fn startup_rechecks_observation_for_a_cached_writer() {
+fn ingest_rechecks_observation_for_a_cached_writer() {
     block_on(async {
         let observation_available = Arc::new(AtomicBool::new(true));
         let config = Config {
@@ -129,20 +134,22 @@ fn startup_rechecks_observation_for_a_cached_writer() {
             5,
         );
 
-        svc.startup().await.expect("first startup");
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect("first ingest");
         observation_available.store(false, Ordering::Relaxed);
 
         let err = svc
-            .startup()
+            .ingest_finalized_block(mk_block(2, [1; 32], vec![]))
             .await
-            .expect_err("cached writer startup should fail closed without observation");
+            .expect_err("cached writer ingest should fail closed without observation");
 
         assert!(matches!(err, Error::LeaseObservationUnavailable));
     });
 }
 
 #[test]
-fn reader_only_startup_is_observational_and_ingest_is_rejected() {
+fn reader_only_plan_is_observational_and_ingest_is_rejected() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -164,7 +171,14 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         .expect("seed block meta");
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
-        let plan = svc.startup().await.expect("reader-only startup");
+        let runtime = finalized_history_query::runtime::Runtime::new(
+            meta.clone(),
+            svc.blob_store().clone(),
+            finalized_history_query::tables::BytesCacheConfig::default(),
+        );
+        let plan = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+            .await
+            .expect("reader-only startup plan");
         let state = publication_store
             .load()
             .await
@@ -221,7 +235,7 @@ fn startup_plan_should_not_take_publication_ownership() {
 }
 
 #[test]
-fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
+fn first_ingest_ignores_unpublished_suffix_artifacts() {
     block_on(async {
         let inner = InMemoryMetaStore::default();
         inner
@@ -240,14 +254,14 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
             7,
         );
 
-        svc.startup()
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
             .await
-            .expect("startup should ignore unpublished suffix artifacts");
+            .expect("ingest should ignore unpublished suffix artifacts");
         assert!(
             svc.meta_store()
                 .get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
                 .await
-                .expect("read block meta after startup")
+                .expect("read block meta after ingest")
                 .is_some()
         );
     });
@@ -262,7 +276,6 @@ fn service_can_publish_a_contiguous_batch() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.startup().await.expect("startup");
 
         let blocks = vec![
             mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),

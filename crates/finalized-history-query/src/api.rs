@@ -4,15 +4,13 @@ pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::family::Families;
 use crate::family::FinalizedBlock;
-use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession};
+use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority};
 use crate::ingest::engine::IngestEngine;
 use crate::kernel::cache::BytesCacheMetrics;
 use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::Log;
 use crate::runtime::Runtime;
-pub use crate::startup::StartupPlan;
-use crate::startup::{startup_plan, startup_plan_from_head};
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::filter::TraceFilter;
@@ -138,21 +136,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self,
         blocks: Vec<FinalizedBlock>,
     ) -> Result<IngestOutcome> {
-        self.ingest_blocks_with_startup(blocks).await
-    }
-
-    pub async fn startup(&self) -> Result<StartupPlan> {
-        if !self.allows_writes {
-            return startup_plan(
-                &self.runtime,
-                &self.publication_store,
-                &self.ingest.families,
-                0,
-            )
-            .await;
-        }
-
-        self.startup_locked().await
+        self.ingest_blocks(blocks).await
     }
 
     pub async fn indexed_finalized_head(&self) -> Result<u64> {
@@ -162,10 +146,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .map(|state| state.indexed_finalized_head)
     }
 
-    async fn ingest_blocks_with_startup(
-        &self,
-        blocks: Vec<FinalizedBlock>,
-    ) -> Result<IngestOutcome> {
+    async fn ingest_blocks(&self, blocks: Vec<FinalizedBlock>) -> Result<IngestOutcome> {
         if !self.allows_writes {
             return Err(reader_only_mode_error());
         }
@@ -173,36 +154,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         self.ingest
             .ingest_finalized_blocks(&self.runtime, &blocks)
             .await
-    }
-
-    async fn startup_locked(&self) -> Result<StartupPlan> {
-        debug_assert!(self.allows_writes);
-        let session = self
-            .ingest
-            .authority
-            .begin_write(self.ingest.config.observe_upstream_finalized_block.as_ref()())
-            .await?;
-        self.recover_and_plan(session.state().indexed_finalized_head)
-            .await
-    }
-
-    async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        let plan = startup_plan_from_head(
-            &self.runtime,
-            &self.ingest.families,
-            indexed_finalized_head,
-            0,
-        )
-        .await?;
-
-        crate::ingest::open_pages::repair_sealed_open_bitmap_pages(
-            &self.runtime.tables,
-            plan.log_state.next_log_id.get(),
-            plan.trace_state.next_trace_id.get(),
-        )
-        .await?;
-
-        Ok(plan)
     }
 }
 

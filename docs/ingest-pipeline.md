@@ -1,14 +1,14 @@
 # Ingest Pipeline
 
-This document describes the block ingestion flow, artifact writes, compaction triggers, and startup behavior.
+This document describes the block ingestion flow, artifact writes, compaction triggers, and ingest-time recovery behavior.
 
 ## Block Ingestion Flow
 
 ```python
 async def ingest_finalized_blocks(blocks, lease):
-    validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
-
     family_states = load_family_startup_states(lease.indexed_finalized_head)
+    repair_stale_open_page_markers(family_states)
+    validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
     for block in blocks:
         await logs.ingest_block(block, family_states.logs)
         await txs.ingest_block(block, family_states.txs)
@@ -20,7 +20,7 @@ async def ingest_finalized_blocks(blocks, lease):
     )
 ```
 
-The `IngestEngine` orchestrates this flow. It owns finalized sequencing validation, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive startup state from the published head before ingesting one shared `FinalizedBlock` at a time.
+The `IngestEngine` orchestrates this flow. It owns write-session acquisition, finalized sequencing validation, ingest-time repair of stale sealed open-page markers, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive sequencing state from the published head before ingesting one shared `FinalizedBlock` at a time.
 
 Shared ingest helpers under `src/ingest/` now own the generic primary-directory and bitmap-page mechanics. Family adapters supply payload-specific block artifacts, stream fanout values, and any family-only behavior such as logs open-page markers.
 
@@ -93,16 +93,16 @@ When a stream fragment is written to a page for the first time in a batch, an op
 
 ## Important Boundaries
 
-- `api.rs` startup: re-authorizes cached writer or acquires ownership, then derives the next write position from the published head
+- `api.rs`: transport-free query and ingest entrypoints
 - `block.rs`: shared finalized block envelope carrying block identity plus family payloads
 - `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared startup/write aggregation
-- `runtime.rs`: shared store-handle + typed-table runtime used by query/startup/ingest
+- `runtime.rs`: shared store-handle + typed-table runtime used by query/startup-plan/ingest
 - `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
 - `ingest/primary_dir.rs`: shared primary-directory fragment persistence and sealed-boundary compaction
 - `ingest/bitmap_pages.rs`: shared stream-page fragment persistence and compacted-page writes
-- `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing
+- `logs/family.rs`: logs-specific sequencing recovery and per-block ingest handler
 - `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
-- `traces/mod.rs`: trace-family startup recovery and per-block ingest sequencing
+- `traces/mod.rs`: trace-family sequencing recovery and per-block ingest handler
 - `logs/ingest/`: logs payload encoding, logs stream fanout, and open-page marker handling
 - `traces/ingest/`: trace payload encoding and trace stream fanout
 - `publication_state.indexed_finalized_head` is published last

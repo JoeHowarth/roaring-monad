@@ -22,7 +22,6 @@ fn query_returns_error_when_from_block_exceeds_to_block() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.startup().await.expect("startup");
         svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
             .await
             .expect("ingest");

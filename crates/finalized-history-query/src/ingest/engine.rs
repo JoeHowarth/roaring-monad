@@ -2,9 +2,9 @@ use crate::api::IngestOutcome;
 use crate::config::Config;
 use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
-use crate::family::FinalizedBlock;
-use crate::family::{Families, FamilyBlockWrites};
+use crate::family::{Families, FamilyBlockWrites, FamilyStates, FinalizedBlock};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
+use crate::ingest::open_pages::repair_sealed_open_bitmap_pages;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -18,6 +18,34 @@ impl<A> IngestEngine<A>
 where
     A: WriteAuthority,
 {
+    async fn begin_recovered_write<'a, M, B>(
+        &'a self,
+        runtime: &Runtime<M, B>,
+    ) -> Result<(A::Session<'a>, FamilyStates)>
+    where
+        M: MetaStore,
+        B: BlobStore,
+    {
+        let session = self
+            .authority
+            .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
+            .await?;
+        let indexed_finalized_head = session.state().indexed_finalized_head;
+        let family_states = self
+            .families
+            .load_startup_state(runtime, indexed_finalized_head)
+            .await?;
+
+        repair_sealed_open_bitmap_pages(
+            &runtime.tables,
+            family_states.logs.next_log_id.get(),
+            family_states.traces.next_trace_id.get(),
+        )
+        .await?;
+
+        Ok((session, family_states))
+    }
+
     pub fn new(config: Config, authority: A, families: Families) -> Self {
         Self {
             config,
@@ -52,16 +80,9 @@ where
             return Err(Error::InvalidParams("ingest requires at least one block"));
         }
 
-        let session = self
-            .authority
-            .begin_write(self.config.observe_upstream_finalized_block.as_ref()())
-            .await?;
+        let (session, mut family_states) = self.begin_recovered_write(runtime).await?;
         let indexed_finalized_head = session.state().indexed_finalized_head;
         validate_block_sequence(runtime, blocks, indexed_finalized_head).await?;
-        let mut family_states = self
-            .families
-            .load_startup_state(runtime, indexed_finalized_head)
-            .await?;
         let mut writes = FamilyBlockWrites::default();
 
         for block in blocks {

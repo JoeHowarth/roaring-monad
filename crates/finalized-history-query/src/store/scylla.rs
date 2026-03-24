@@ -19,6 +19,11 @@ use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
+use crate::traces::keys::{
+    BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE, TRACE_BITMAP_PAGE_META_TABLE,
+    TRACE_DIR_BUCKET_TABLE, TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE,
+    TRACE_OPEN_BITMAP_PAGE_TABLE,
+};
 
 const DEFAULT_FENCE_KEY: &str = "global";
 const META_BUCKETS: u16 = 256;
@@ -305,7 +310,7 @@ impl ScannableTableSchema {
     }
 }
 
-const POINT_TABLE_SCHEMAS: [PointTableSchema; 7] = [
+const POINT_TABLE_SCHEMAS: [PointTableSchema; 11] = [
     PointTableSchema {
         id: PUBLICATION_STATE_TABLE,
         table_name: "publication_state",
@@ -334,9 +339,25 @@ const POINT_TABLE_SCHEMAS: [PointTableSchema; 7] = [
         id: BITMAP_PAGE_META_TABLE,
         table_name: "bitmap_page_meta",
     },
+    PointTableSchema {
+        id: BLOCK_TRACE_HEADER_TABLE,
+        table_name: "block_trace_header",
+    },
+    PointTableSchema {
+        id: TRACE_DIR_BUCKET_TABLE,
+        table_name: "trace_dir_bucket",
+    },
+    PointTableSchema {
+        id: TRACE_DIR_SUB_BUCKET_TABLE,
+        table_name: "trace_dir_sub_bucket",
+    },
+    PointTableSchema {
+        id: TRACE_BITMAP_PAGE_META_TABLE,
+        table_name: "trace_bitmap_page_meta",
+    },
 ];
 
-const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; 3] = [
+const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; 6] = [
     ScannableTableSchema {
         id: LOG_DIR_BY_BLOCK_TABLE,
         table_name: "log_dir_by_block",
@@ -348,6 +369,18 @@ const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; 3] = [
     ScannableTableSchema {
         id: OPEN_BITMAP_PAGE_TABLE,
         table_name: "open_bitmap_page",
+    },
+    ScannableTableSchema {
+        id: TRACE_DIR_BY_BLOCK_TABLE,
+        table_name: "trace_dir_by_block",
+    },
+    ScannableTableSchema {
+        id: TRACE_BITMAP_BY_BLOCK_TABLE,
+        table_name: "trace_bitmap_by_block",
+    },
+    ScannableTableSchema {
+        id: TRACE_OPEN_BITMAP_PAGE_TABLE,
+        table_name: "trace_open_bitmap_page",
     },
 ];
 
