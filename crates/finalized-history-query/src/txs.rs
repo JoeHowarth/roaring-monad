@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::{FinalizedBlock, Hash32};
 use crate::runtime::Runtime;
@@ -17,10 +18,9 @@ pub struct TxFamilyState;
 pub struct TxsFamily;
 
 impl TxsFamily {
-    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
+    pub fn load_state_from_head_record(
         &self,
-        _runtime: &Runtime<M, B>,
-        _indexed_finalized_head: u64,
+        _head_record: Option<&BlockRecord>,
     ) -> Result<TxFamilyState> {
         Ok(TxFamilyState)
     }

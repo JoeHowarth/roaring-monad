@@ -8,11 +8,11 @@ use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::materialize::LogMaterializer;
-use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
 use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
 use crate::query::planner::PreparedClause;
+use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -133,7 +133,7 @@ impl IndexedQueryFamily for LogsQueryFamily {
         tables: &Tables<M, B>,
         block_range: &crate::core::range::ResolvedBlockRange,
     ) -> Result<Option<crate::core::ids::FamilyIdRange<Self::Id>>> {
-        resolve_log_window(tables, block_range).await
+        resolve_primary_window::<_, _, LogId, _>(tables, block_range, |record| record.logs).await
     }
 
     fn make_materializer<'a, M: MetaStore, B: BlobStore>(

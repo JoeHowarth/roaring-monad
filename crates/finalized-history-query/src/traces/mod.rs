@@ -4,13 +4,13 @@ pub(crate) mod ingest;
 pub mod keys;
 pub(crate) mod materialize;
 pub(crate) mod query;
-pub(crate) mod state;
 pub(crate) mod table_specs;
 pub mod types;
 pub mod view;
 
 use crate::config::Config;
 use crate::core::ids::TraceId;
+use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
@@ -35,15 +35,18 @@ pub use types::{Trace, TraceSequencingState};
 pub struct TracesFamily;
 
 impl TracesFamily {
-    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
+    pub fn load_state_from_head_record(
         &self,
-        runtime: &Runtime<M, B>,
-        indexed_finalized_head: u64,
+        head_record: Option<&BlockRecord>,
     ) -> Result<TraceSequencingState> {
-        let next_trace_id = if indexed_finalized_head == 0 {
-            0
-        } else {
-            state::derive_next_trace_id(&runtime.tables, indexed_finalized_head).await?
+        let next_trace_id = match head_record {
+            None => 0,
+            Some(block_record) => {
+                let window = block_record.traces.ok_or(Error::NotFound)?;
+                window
+                    .first_primary_id
+                    .saturating_add(u64::from(window.count))
+            }
         };
         Ok(TraceSequencingState {
             next_trace_id: TraceId::new(next_trace_id),

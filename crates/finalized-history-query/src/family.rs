@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::core::state::{BlockRecord, PrimaryWindowRecord};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::logs::family::LogsFamily;
 use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
@@ -59,19 +59,15 @@ impl Families {
         M: MetaStore,
         B: BlobStore,
     {
+        let head_record = load_head_block_record(runtime, indexed_finalized_head).await?;
         Ok(FamilyStates {
             logs: self
                 .logs
-                .load_state_from_head(runtime, indexed_finalized_head)
-                .await?,
-            txs: self
-                .txs
-                .load_state_from_head(runtime, indexed_finalized_head)
-                .await?,
+                .load_state_from_head_record(head_record.as_ref())?,
+            txs: self.txs.load_state_from_head_record(head_record.as_ref())?,
             traces: self
                 .traces
-                .load_state_from_head(runtime, indexed_finalized_head)
-                .await?,
+                .load_state_from_head_record(head_record.as_ref())?,
         })
     }
 
@@ -132,4 +128,24 @@ impl Families {
 
         Ok(writes)
     }
+}
+
+pub(crate) async fn load_head_block_record<M, B>(
+    runtime: &Runtime<M, B>,
+    indexed_finalized_head: u64,
+) -> Result<Option<BlockRecord>>
+where
+    M: MetaStore,
+    B: BlobStore,
+{
+    if indexed_finalized_head == 0 {
+        return Ok(None);
+    }
+    runtime
+        .tables
+        .block_records
+        .get(indexed_finalized_head)
+        .await?
+        .ok_or(Error::NotFound)
+        .map(Some)
 }

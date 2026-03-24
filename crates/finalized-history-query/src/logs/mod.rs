@@ -6,6 +6,5 @@ pub mod keys;
 pub mod log_ref;
 pub mod materialize;
 pub mod query;
-pub(crate) mod state;
 pub mod table_specs;
 pub mod types;

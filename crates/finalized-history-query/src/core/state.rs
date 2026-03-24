@@ -150,25 +150,6 @@ pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
         .map(|opt| opt.map(|block_record| BlockIdentity::from((block_num, &block_record))))
 }
 
-pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    indexed_finalized_head: u64,
-) -> Result<u64> {
-    if indexed_finalized_head == 0 {
-        return Ok(0);
-    }
-
-    let Some(block_record) = tables.block_records.get(indexed_finalized_head).await? else {
-        return Err(Error::NotFound);
-    };
-    let Some(window) = block_record.logs else {
-        return Err(Error::NotFound);
-    };
-    Ok(window
-        .first_primary_id
-        .saturating_add(u64::from(window.count)))
-}
-
 pub async fn load_block_num_by_hash<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_hash: &[u8; 32],

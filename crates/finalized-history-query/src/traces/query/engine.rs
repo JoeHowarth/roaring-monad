@@ -8,13 +8,13 @@ use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
 use crate::query::planner::PreparedClause;
+use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
 use crate::traces::keys::trace_local_range_for_shard;
 use crate::traces::materialize::TraceMaterializer;
-use crate::traces::state::resolve_trace_window;
 use crate::traces::types::Trace;
 
 #[derive(Debug, Clone)]
@@ -133,7 +133,8 @@ impl IndexedQueryFamily for TracesQueryFamily {
         tables: &Tables<M, B>,
         block_range: &crate::core::range::ResolvedBlockRange,
     ) -> Result<Option<crate::core::ids::FamilyIdRange<Self::Id>>> {
-        resolve_trace_window(tables, block_range).await
+        resolve_primary_window::<_, _, TraceId, _>(tables, block_range, |record| record.traces)
+            .await
     }
 
     fn make_materializer<'a, M: MetaStore, B: BlobStore>(

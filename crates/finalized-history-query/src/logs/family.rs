@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::core::ids::LogId;
-use crate::core::state::derive_next_log_id;
-use crate::error::Result;
+use crate::core::state::BlockRecord;
+use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
 use crate::ingest::open_pages::{
@@ -23,12 +23,19 @@ use crate::store::traits::{BlobStore, MetaStore};
 pub struct LogsFamily;
 
 impl LogsFamily {
-    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
+    pub fn load_state_from_head_record(
         &self,
-        runtime: &Runtime<M, B>,
-        indexed_finalized_head: u64,
+        head_record: Option<&BlockRecord>,
     ) -> Result<LogSequencingState> {
-        let next_log_id = derive_next_log_id(&runtime.tables, indexed_finalized_head).await?;
+        let next_log_id = match head_record {
+            None => 0,
+            Some(block_record) => {
+                let window = block_record.logs.ok_or(Error::NotFound)?;
+                window
+                    .first_primary_id
+                    .saturating_add(u64::from(window.count))
+            }
+        };
         Ok(LogSequencingState {
             next_log_id: LogId::new(next_log_id),
         })
