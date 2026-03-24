@@ -118,7 +118,7 @@ async fn compact_trace_directory_sub_bucket<M: MetaStore, B: BlobStore>(
     sub_bucket_start: u64,
 ) -> Result<()> {
     let fragments = tables
-        .trace_directory_fragments()
+        .trace_dir()
         .load_sub_bucket_fragments(sub_bucket_start)
         .await?;
     if fragments.is_empty() {
@@ -139,8 +139,8 @@ async fn compact_trace_directory_sub_bucket<M: MetaStore, B: BlobStore>(
         first_primary_ids,
     };
     tables
-        .trace_dir_sub_buckets()
-        .put(sub_bucket_start, &bucket)
+        .trace_dir()
+        .put_sub_bucket(sub_bucket_start, &bucket)
         .await?;
     Ok(())
 }
@@ -154,7 +154,7 @@ async fn compact_trace_directory_bucket<M: MetaStore, B: BlobStore>(
     let mut sub_buckets = Vec::new();
 
     while sub_bucket_start < bucket_end {
-        let Some(sub_bucket) = tables.trace_dir_sub_buckets().get(sub_bucket_start).await? else {
+        let Some(sub_bucket) = tables.trace_dir().get_sub_bucket(sub_bucket_start).await? else {
             sub_bucket_start = sub_bucket_start.saturating_add(TRACE_DIRECTORY_SUB_BUCKET_SIZE);
             continue;
         };
@@ -176,8 +176,8 @@ async fn compact_trace_directory_bucket<M: MetaStore, B: BlobStore>(
     };
 
     tables
-        .trace_dir_buckets()
-        .put(
+        .trace_dir()
+        .put_bucket(
             bucket_start,
             &DirBucket {
                 start_block,

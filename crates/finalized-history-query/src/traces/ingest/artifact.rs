@@ -6,7 +6,7 @@ use crate::family::FinalizedBlock;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
-use crate::traces::table_specs::TraceDirSubBucketSpec;
+use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
 use crate::traces::types::{BlockTraceHeader, DirByBlock, TraceBlockRecord};
 use alloy_rlp::{Header, PayloadView};
 
@@ -70,8 +70,12 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
 
     loop {
         tables
-            .trace_directory_fragments()
-            .put(sub_bucket_start, block_num, &fragment)
+            .trace_dir()
+            .put_fragment(
+                TraceDirByBlockSpec::partition(sub_bucket_start),
+                TraceDirByBlockSpec::clustering(block_num),
+                &fragment,
+            )
             .await?;
         if sub_bucket_start == last_sub_bucket_start {
             break;

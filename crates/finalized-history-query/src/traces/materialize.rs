@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use alloy_rlp::Header;
 
+use crate::core::directory_resolver::resolve_primary_id;
 use crate::core::ids::TraceId;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
@@ -10,7 +11,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
 use crate::traces::table_specs::{TraceDirBucketSpec, TraceDirSubBucketSpec};
-use crate::traces::types::{DirBucket, Trace};
+use crate::traces::types::Trace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedTraceLocation {
@@ -51,65 +52,18 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         &mut self,
         id: TraceId,
     ) -> Result<Option<ResolvedTraceLocation>> {
-        let bucket_start = TraceDirBucketSpec::bucket_start(id);
-        if let Some(bucket) = self.tables.trace_dir_buckets().get(bucket_start).await?
-            && let Some(entry_index) = containing_bucket_entry(&bucket, id)
-        {
-            return Ok(Some(ResolvedTraceLocation {
-                block_num: bucket.start_block + entry_index as u64,
-                local_ordinal: usize::try_from(id.get() - bucket.first_primary_ids[entry_index])
-                    .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
-            }));
-        }
-
-        let sub_bucket_start = TraceDirSubBucketSpec::sub_bucket_start(id);
-        if let Some(bucket) = self
-            .tables
-            .trace_dir_sub_buckets()
-            .get(sub_bucket_start)
-            .await?
-            && let Some(entry_index) = containing_bucket_entry(&bucket, id)
-        {
-            return Ok(Some(ResolvedTraceLocation {
-                block_num: bucket.start_block + entry_index as u64,
-                local_ordinal: usize::try_from(id.get() - bucket.first_primary_ids[entry_index])
-                    .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
-            }));
-        }
-
-        let fragments = self.load_directory_fragments(sub_bucket_start).await?;
-        let Some(fragment) = fragments.iter().find(|fragment| {
-            id.get() >= fragment.first_primary_id && id.get() < fragment.end_primary_id_exclusive
-        }) else {
-            return Ok(None);
-        };
-
-        Ok(Some(ResolvedTraceLocation {
-            block_num: fragment.block_num,
-            local_ordinal: usize::try_from(id.get() - fragment.first_primary_id)
-                .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
+        Ok(resolve_primary_id::<M, TraceId>(
+            self.tables.trace_dir(),
+            &mut self.directory_fragment_cache,
+            id,
+            TraceDirBucketSpec::bucket_start,
+            TraceDirSubBucketSpec::sub_bucket_start,
+        )
+        .await?
+        .map(|location| ResolvedTraceLocation {
+            block_num: location.block_num,
+            local_ordinal: location.local_ordinal,
         }))
-    }
-
-    async fn load_directory_fragments(
-        &mut self,
-        sub_bucket_start: u64,
-    ) -> Result<&[crate::traces::types::DirByBlock]> {
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            self.directory_fragment_cache.entry(sub_bucket_start)
-        {
-            entry.insert(
-                self.tables
-                    .trace_directory_fragments()
-                    .load_sub_bucket_fragments(sub_bucket_start)
-                    .await?,
-            );
-        }
-        Ok(self
-            .directory_fragment_cache
-            .get(&sub_bucket_start)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]))
     }
 
     pub(crate) async fn load_trace_at(
@@ -188,19 +142,4 @@ pub(crate) fn rlp_element_len(buf: &[u8]) -> Result<usize> {
         Header::decode(&mut remaining).map_err(|_| Error::Decode("invalid trace frame header"))?;
     let header_len = original_len - remaining.len();
     Ok(header_len + header.payload_length)
-}
-
-fn containing_bucket_entry(bucket: &DirBucket, id: TraceId) -> Option<usize> {
-    if bucket.first_primary_ids.len() < 2 {
-        return None;
-    }
-    let upper = bucket
-        .first_primary_ids
-        .partition_point(|first_primary_id| *first_primary_id <= id.get());
-    if upper == 0 || upper >= bucket.first_primary_ids.len() {
-        return None;
-    }
-    let entry_index = upper - 1;
-    let end = bucket.first_primary_ids[upper];
-    (id.get() < end).then_some(entry_index)
 }

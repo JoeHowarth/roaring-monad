@@ -63,8 +63,12 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
 
     loop {
         tables
-            .directory_fragments()
-            .put(sub_bucket_start, block_num, &fragment)
+            .log_dir()
+            .put_fragment(
+                LogDirSubBucketSpec::key(sub_bucket_start),
+                crate::logs::table_specs::LogDirByBlockSpec::clustering(block_num),
+                &fragment,
+            )
             .await?;
         if sub_bucket_start == last_sub_bucket_start {
             break;
