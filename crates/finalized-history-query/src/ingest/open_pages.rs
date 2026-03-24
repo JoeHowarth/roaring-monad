@@ -53,35 +53,6 @@ impl OpenBitmapPage {
     }
 }
 
-pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
-    table: &OpenBitmapPageTable<M>,
-    page: &OpenBitmapPage,
-) -> Result<()> {
-    table.mark_if_absent(page).await
-}
-
-pub async fn delete_open_bitmap_page<M: MetaStore>(
-    table: &OpenBitmapPageTable<M>,
-    page: &OpenBitmapPage,
-) -> Result<()> {
-    table.delete(page).await
-}
-
-async fn list_open_bitmap_pages_for_shard<M: MetaStore>(
-    table: &OpenBitmapPageTable<M>,
-    shard: u64,
-) -> Result<Vec<OpenBitmapPage>> {
-    table.list_for_shard(shard).await
-}
-
-async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
-    table: &OpenBitmapPageTable<M>,
-    shard: u64,
-    page_start_local: u32,
-) -> Result<Vec<OpenBitmapPage>> {
-    table.list_for_shard_page(shard, page_start_local).await
-}
-
 pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
     table: &OpenBitmapPageTable<M>,
     opened_during: &[OpenBitmapPage],
@@ -108,12 +79,13 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         if affected_pages <= 32 {
             let mut ps = from.page_start_local;
             while ps < to.page_start_local {
-                sealed.extend(list_open_bitmap_pages_for_shard_page(table, from.shard, ps).await?);
+                sealed.extend(table.list_for_shard_page(from.shard, ps).await?);
                 ps = ps.saturating_add(page_span);
             }
         } else {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(table, from.shard)
+                table
+                    .list_for_shard(from.shard)
                     .await?
                     .into_iter()
                     .filter(|page| {
@@ -124,7 +96,8 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
         }
     } else {
         sealed.extend(
-            list_open_bitmap_pages_for_shard(table, from.shard)
+            table
+                .list_for_shard(from.shard)
                 .await?
                 .into_iter()
                 .filter(|page| page.page_start_local >= from.page_start_local),
@@ -132,13 +105,14 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
 
         let mut shard_raw = from.shard.saturating_add(1);
         while shard_raw < to.shard {
-            sealed.extend(list_open_bitmap_pages_for_shard(table, shard_raw).await?);
+            sealed.extend(table.list_for_shard(shard_raw).await?);
             shard_raw = shard_raw.saturating_add(1);
         }
 
         if to.page_start_local > 0 {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(table, to.shard)
+                table
+                    .list_for_shard(to.shard)
                     .await?
                     .into_iter()
                     .filter(|page| page.page_start_local < to.page_start_local),
@@ -164,7 +138,7 @@ pub async fn collect_all_sealed_open_bitmap_pages<M: MetaStore>(
     let mut sealed = Vec::new();
 
     for shard in 0..=frontier.shard {
-        let pages = list_open_bitmap_pages_for_shard(table, shard).await?;
+        let pages = table.list_for_shard(shard).await?;
         sealed.extend(
             pages
                 .into_iter()
@@ -201,7 +175,7 @@ pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
             },
         )
         .await?;
-        delete_open_bitmap_page(&tables.log_open_bitmap_pages, &page).await?;
+        tables.log_open_bitmap_pages.delete(&page).await?;
     }
 
     for page in collect_all_sealed_open_bitmap_pages(
@@ -222,7 +196,7 @@ pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
             },
         )
         .await?;
-        delete_open_bitmap_page(&tables.trace_open_bitmap_pages, &page).await?;
+        tables.trace_open_bitmap_pages.delete(&page).await?;
     }
 
     Ok(())

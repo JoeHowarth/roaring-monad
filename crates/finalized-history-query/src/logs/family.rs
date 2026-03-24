@@ -4,10 +4,7 @@ use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
-use crate::ingest::open_pages::{
-    OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
-    mark_open_bitmap_page_if_absent,
-};
+use crate::ingest::open_pages::{OpenBitmapPage, collect_newly_sealed_open_bitmap_pages};
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::logs::ingest::{
@@ -85,7 +82,11 @@ impl LogsFamily {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id, STREAM_PAGE_LOCAL_ID_SPAN))
         {
-            mark_open_bitmap_page_if_absent(&runtime.tables.log_open_bitmap_pages, page).await?;
+            runtime
+                .tables
+                .log_open_bitmap_pages
+                .mark_if_absent(page)
+                .await?;
         }
 
         compact_newly_sealed_primary_directory(
@@ -115,7 +116,7 @@ impl LogsFamily {
                 },
             )
             .await?;
-            delete_open_bitmap_page(&runtime.tables.log_open_bitmap_pages, &page).await?;
+            runtime.tables.log_open_bitmap_pages.delete(&page).await?;
         }
 
         state.next_log_id = LogId::new(next_log_id);
