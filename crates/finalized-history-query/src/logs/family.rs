@@ -8,9 +8,7 @@ use crate::ingest::open_pages::{OpenBitmapPage, collect_newly_sealed_open_bitmap
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::ingest::{
-    persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
-};
+use crate::logs::ingest::{persist_log_artifacts, persist_stream_fragments};
 use crate::logs::types::{LogSequencingState, StreamBitmapMeta};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -58,13 +56,11 @@ impl LogsFamily {
         )
         .await?;
 
-        persist_log_dir_by_block(
-            &runtime.tables,
-            block.block_num,
-            from_next_log_id,
-            block.logs.len() as u32,
-        )
-        .await?;
+        runtime
+            .tables
+            .log_dir
+            .persist_block_fragment(block.block_num, from_next_log_id, block.logs.len() as u32)
+            .await?;
 
         let touched_pages =
             persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;

@@ -35,18 +35,6 @@ pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
     Ok(trace_count)
 }
 
-pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-    first_trace_id: u64,
-    count: u32,
-) -> Result<()> {
-    tables
-        .trace_dir
-        .persist_block_fragment(block_num, first_trace_id, count)
-        .await
-}
-
 pub fn collect_trace_stream_appends(
     block: &FinalizedBlock,
     first_trace_id: u64,
@@ -173,7 +161,6 @@ fn empty_trace_header() -> BlockTraceHeader {
 mod tests {
     use futures::executor::block_on;
 
-    use super::persist_trace_dir_by_block;
     use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::kernel::codec::StorageCodec;
     use crate::kernel::table_specs::ScannableTableSpec;
@@ -185,14 +172,16 @@ mod tests {
     use crate::{store::traits::MetaStore, tables::Tables};
 
     #[test]
-    fn persist_trace_dir_by_block_writes_each_spanned_sub_bucket() {
+    fn persist_trace_dir_fragments_write_each_spanned_sub_bucket() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let first_trace_id = DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 7u32;
 
-            persist_trace_dir_by_block(&tables, 700, first_trace_id, count)
+            tables
+                .trace_dir
+                .persist_block_fragment(700, first_trace_id, count)
                 .await
                 .expect("persist fragments");
 

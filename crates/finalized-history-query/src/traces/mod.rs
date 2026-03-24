@@ -18,9 +18,7 @@ use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::ingest::{
-    persist_trace_artifacts, persist_trace_dir_by_block, persist_trace_stream_fragments,
-};
+use crate::traces::ingest::{persist_trace_artifacts, persist_trace_stream_fragments};
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
@@ -65,13 +63,11 @@ impl TracesFamily {
         let trace_count_u32 =
             u32::try_from(trace_count).map_err(|_| Error::Decode("trace count overflow"))?;
 
-        persist_trace_dir_by_block(
-            &runtime.tables,
-            block.block_num,
-            from_next_trace_id,
-            trace_count_u32,
-        )
-        .await?;
+        runtime
+            .tables
+            .trace_dir
+            .persist_block_fragment(block.block_num, from_next_trace_id, trace_count_u32)
+            .await?;
 
         let next_trace_id = from_next_trace_id + trace_count as u64;
 

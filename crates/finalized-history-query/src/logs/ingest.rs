@@ -95,18 +95,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
         .await
 }
 
-pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-    first_log_id: u64,
-    count: u32,
-) -> Result<()> {
-    tables
-        .log_dir
-        .persist_block_fragment(block_num, first_log_id, count)
-        .await
-}
-
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
@@ -127,10 +115,7 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
 
-    use super::{
-        collect_stream_appends, persist_log_artifacts, persist_log_dir_by_block,
-        persist_stream_fragments,
-    };
+    use super::{collect_stream_appends, persist_log_artifacts, persist_stream_fragments};
     use crate::ingest::bitmap_pages;
     use crate::ingest::primary_dir::compact_sealed_primary_directory;
     use crate::kernel::sharded_streams::page_start_local;
@@ -199,14 +184,16 @@ mod tests {
     }
 
     #[test]
-    fn persist_log_dir_by_block_and_compaction_cover_spanning_block() {
+    fn persist_log_dir_fragments_and_compaction_cover_spanning_block() {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
             let first_log_id = DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
-            persist_log_dir_by_block(&tables, 700, first_log_id, count)
+            tables
+                .log_dir
+                .persist_block_fragment(700, first_log_id, count)
                 .await
                 .expect("persist fragments");
             compact_sealed_primary_directory(
@@ -372,7 +359,9 @@ mod tests {
             let first_log_id = DIRECTORY_BUCKET_SIZE - DIRECTORY_SUB_BUCKET_SIZE - 2;
             let count = (DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
-            persist_log_dir_by_block(&tables, 700, first_log_id, count)
+            tables
+                .log_dir
+                .persist_block_fragment(700, first_log_id, count)
                 .await
                 .expect("persist fragments");
             compact_sealed_primary_directory(
