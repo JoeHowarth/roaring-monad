@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use alloy_rlp::Encodable;
 use bytes::Bytes;
 use finalized_history_query::api::{
-    ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder, QueryTracesRequest,
+    ExecutionBudget, FinalizedHistoryService, QueryBlocksRequest, QueryLogsRequest, QueryOrder,
+    QueryTracesRequest,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::ingest::authority::LeaseAuthority;
@@ -21,7 +22,8 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Clause, Error, FinalizedBlock, LogFilter, Trace, TraceFilter, WriteAuthority, WriteSession,
+    Block, Clause, Error, FinalizedBlock, LogFilter, Trace, TraceFilter, WriteAuthority,
+    WriteSession,
 };
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -167,6 +169,31 @@ where
             resume_id,
             limit,
             filter,
+        },
+        ExecutionBudget { max_results: None },
+    )
+    .await
+}
+
+pub async fn query_block_page<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
+    from_block: u64,
+    to_block: u64,
+    limit: usize,
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Block>>
+where
+    A: WriteAuthority,
+    M: MetaStore,
+    B: BlobStore,
+{
+    svc.query_blocks(
+        QueryBlocksRequest {
+            from_block: Some(from_block),
+            to_block: Some(to_block),
+            from_block_hash: None,
+            to_block_hash: None,
+            order: QueryOrder::Ascending,
+            limit,
         },
         ExecutionBudget { max_results: None },
     )

@@ -1,4 +1,5 @@
 pub mod api;
+pub mod blocks;
 pub mod config;
 pub mod core;
 pub mod error;
@@ -16,8 +17,10 @@ pub mod traces;
 pub mod txs;
 
 pub use api::{
-    ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryLogsRequest, QueryTracesRequest,
+    ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryBlocksRequest, QueryLogsRequest,
+    QueryTracesRequest,
 };
+pub use blocks::Block;
 pub use config::Config;
 pub use core::clause::Clause;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};

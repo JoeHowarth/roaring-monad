@@ -1,3 +1,4 @@
+use crate::blocks::{Block, BlocksQueryEngine};
 use crate::config::Config;
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
@@ -34,6 +35,16 @@ pub struct IndexedQueryRequest<F> {
 pub type QueryLogsRequest = IndexedQueryRequest<LogFilter>;
 pub type QueryTracesRequest = IndexedQueryRequest<TraceFilter>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryBlocksRequest {
+    pub from_block: Option<u64>,
+    pub to_block: Option<u64>,
+    pub from_block_hash: Option<[u8; 32]>,
+    pub to_block_hash: Option<[u8; 32]>,
+    pub order: QueryOrder,
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExecutionBudget {
     pub max_results: Option<usize>,
@@ -50,6 +61,7 @@ pub struct IngestOutcome {
 pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore> {
     ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
+    blocks_query: BlocksQueryEngine,
     logs_query: LogsQueryEngine,
     traces_query: TracesQueryEngine,
     pub(crate) runtime: Runtime<M, B>,
@@ -64,6 +76,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         authority: A,
         allows_writes: bool,
     ) -> Self {
+        let blocks_query = BlocksQueryEngine;
         let logs_query = LogsQueryEngine::from_config(&config);
         let traces_query = TracesQueryEngine::from_config(&config);
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
@@ -72,6 +85,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         Self {
             ingest,
             publication_store,
+            blocks_query,
             logs_query,
             traces_query,
             runtime,
@@ -89,6 +103,23 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub fn blob_store(&self) -> &B {
         &self.runtime.blob_store
+    }
+
+    /// Resolves the finalized block window for a blocks request and returns a
+    /// page of finalized block identities from shared block metadata.
+    pub async fn query_blocks(
+        &self,
+        request: QueryBlocksRequest,
+        budget: ExecutionBudget,
+    ) -> Result<crate::core::page::QueryPage<Block>> {
+        self.blocks_query
+            .query_blocks(
+                &self.runtime.tables,
+                &self.publication_store,
+                request,
+                budget,
+            )
+            .await
     }
 
     /// Resolves the finalized block window for a logs request and executes the
