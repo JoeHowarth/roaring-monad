@@ -1,5 +1,6 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::logs::types::{Address20, Topic32};
+use crate::query::engine::IndexedFilter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LogFilter {
@@ -10,8 +11,8 @@ pub struct LogFilter {
     pub topic3: Option<Clause<Topic32>>,
 }
 
-impl LogFilter {
-    pub fn max_or_terms(&self) -> usize {
+impl IndexedFilter for LogFilter {
+    fn max_or_terms(&self) -> usize {
         let mut max_terms = 0usize;
         if let Some(clause) = &self.address {
             max_terms = max_terms.max(clause.or_terms());
@@ -31,7 +32,7 @@ impl LogFilter {
         max_terms
     }
 
-    pub fn has_indexed_clause(&self) -> bool {
+    fn has_indexed_clause(&self) -> bool {
         has_indexed_value(&self.address)
             || has_indexed_value(&self.topic0)
             || has_indexed_value(&self.topic1)
@@ -77,6 +78,7 @@ pub fn exact_match(log: &impl crate::logs::log_ref::LogView, filter: &LogFilter)
 mod tests {
     use super::*;
     use crate::logs::types::Log;
+    use crate::query::engine::IndexedFilter;
 
     fn log_with_topics(address: u8, topics: &[u8]) -> Log {
         Log {

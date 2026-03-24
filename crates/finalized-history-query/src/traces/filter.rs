@@ -1,4 +1,5 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
+use crate::query::engine::IndexedFilter;
 use crate::traces::types::{Address20, Selector4};
 use crate::traces::view::CallFrameView;
 
@@ -11,8 +12,8 @@ pub struct TraceFilter {
     pub has_value: Option<bool>,
 }
 
-impl TraceFilter {
-    pub fn max_or_terms(&self) -> usize {
+impl IndexedFilter for TraceFilter {
+    fn max_or_terms(&self) -> usize {
         let mut max_terms = 0usize;
         if let Some(clause) = &self.from {
             max_terms = max_terms.max(clause.or_terms());
@@ -26,7 +27,7 @@ impl TraceFilter {
         max_terms
     }
 
-    pub fn has_indexed_clause(&self) -> bool {
+    fn has_indexed_clause(&self) -> bool {
         has_indexed_value(&self.from)
             || has_indexed_value(&self.to)
             || has_indexed_value(&self.selector)
@@ -107,6 +108,7 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::engine::IndexedFilter;
     use crate::traces::view::BlockTraceIter;
     use alloy_rlp::Encodable;
 

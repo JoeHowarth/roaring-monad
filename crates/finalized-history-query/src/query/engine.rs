@@ -5,7 +5,6 @@ use crate::core::ids::{FamilyIdRange, FamilyIdValue};
 use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
-use crate::logs::filter::LogFilter;
 use crate::query::bitmap::load_prepared_clause_bitmap;
 use crate::query::normalized::{effective_limit, normalize_query};
 use crate::query::planner::PreparedClause;
@@ -16,31 +15,10 @@ use crate::query::stream_family::StreamIndexFamily;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::filter::TraceFilter;
 
 pub(crate) trait IndexedFilter {
     fn has_indexed_clause(&self) -> bool;
     fn max_or_terms(&self) -> usize;
-}
-
-impl IndexedFilter for LogFilter {
-    fn has_indexed_clause(&self) -> bool {
-        self.has_indexed_clause()
-    }
-
-    fn max_or_terms(&self) -> usize {
-        self.max_or_terms()
-    }
-}
-
-impl IndexedFilter for TraceFilter {
-    fn has_indexed_clause(&self) -> bool {
-        self.has_indexed_clause()
-    }
-
-    fn max_or_terms(&self) -> usize {
-        self.max_or_terms()
-    }
 }
 
 pub(crate) trait IndexedQueryRequest {
