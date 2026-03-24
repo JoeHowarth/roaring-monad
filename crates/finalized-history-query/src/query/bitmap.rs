@@ -3,21 +3,18 @@ use roaring::RoaringBitmap;
 
 use crate::error::Result;
 use crate::kernel::sharded_streams::merge_bitmap_bytes_into;
+use crate::kernel::sharded_streams::overlaps;
+use crate::kernel::sharded_streams::page_start_local;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::streams::{StreamBitmapMeta, decode_bitmap_blob};
+use crate::tables::StreamTables;
 
-use super::engine::StreamIndexFamily;
 use super::planner::PreparedClause;
 
 pub(crate) const STREAM_LOAD_CONCURRENCY: usize = 32;
 
-pub(crate) async fn load_prepared_clause_bitmap<
-    M: MetaStore,
-    B: BlobStore,
-    K,
-    F: StreamIndexFamily<ClauseKind = K>,
->(
-    tables: &Tables<M, B>,
+pub(crate) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore, K>(
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     prepared_clause: &PreparedClause<K>,
     local_from: u32,
     local_to: u32,
@@ -26,9 +23,12 @@ pub(crate) async fn load_prepared_clause_bitmap<
     let mut in_flight = FuturesUnordered::new();
 
     for stream_id in &prepared_clause.stream_ids {
-        in_flight.push(async move {
-            load_stream_entries::<M, B, F>(tables, stream_id, local_from, local_to).await
-        });
+        in_flight.push(load_stream_entries(
+            stream_tables,
+            stream_id,
+            local_from,
+            local_to,
+        ));
         if in_flight.len() >= STREAM_LOAD_CONCURRENCY
             && let Some(result) = in_flight.next().await
         {
@@ -43,34 +43,48 @@ pub(crate) async fn load_prepared_clause_bitmap<
     Ok(out)
 }
 
-pub(crate) async fn load_stream_entries<M: MetaStore, B: BlobStore, F: StreamIndexFamily>(
-    tables: &Tables<M, B>,
+pub(crate) async fn load_stream_entries<M: MetaStore, B: BlobStore>(
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     stream: &str,
     local_from: u32,
     local_to: u32,
 ) -> Result<RoaringBitmap> {
     let mut out = RoaringBitmap::new();
-    let mut page_start = F::first_page_start(local_from);
-    let last_page_start = F::last_page_start(local_to);
-    let stream_tables = F::stream_tables(tables);
+    let mut page_start = page_start_local(local_from, 4_096);
+    let last_page_start = page_start_local(local_to, 4_096);
 
     loop {
         if let Some(meta) = stream_tables.get_page_meta(stream, page_start).await? {
-            if F::meta_overlaps(&meta, local_from, local_to) {
-                let loaded_page_blob = maybe_merge_cached_bitmap_blob::<M, B, F>(
-                    tables, stream, page_start, &mut out, local_from, local_to,
+            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                let loaded_page_blob = maybe_merge_cached_bitmap_blob(
+                    stream_tables,
+                    stream,
+                    page_start,
+                    &mut out,
+                    local_from,
+                    local_to,
                 )
                 .await?;
                 if !loaded_page_blob {
-                    load_bitmap_by_block_entries_for_page::<M, B, F>(
-                        tables, stream, page_start, local_from, local_to, &mut out,
+                    load_bitmap_by_block_entries_for_page(
+                        stream_tables,
+                        stream,
+                        page_start,
+                        local_from,
+                        local_to,
+                        &mut out,
                     )
                     .await?;
                 }
             }
         } else {
-            load_bitmap_by_block_entries_for_page::<M, B, F>(
-                tables, stream, page_start, local_from, local_to, &mut out,
+            load_bitmap_by_block_entries_for_page(
+                stream_tables,
+                stream,
+                page_start,
+                local_from,
+                local_to,
+                &mut out,
             )
             .await?;
         }
@@ -78,21 +92,57 @@ pub(crate) async fn load_stream_entries<M: MetaStore, B: BlobStore, F: StreamInd
         if page_start == last_page_start {
             break;
         }
-        page_start = F::next_page_start(page_start);
+        page_start = page_start.saturating_add(4_096);
     }
 
     Ok(out)
 }
 
-async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore, F: StreamIndexFamily>(
-    tables: &Tables<M, B>,
+pub(crate) async fn estimate_stream_overlap<M: MetaStore, B: BlobStore>(
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
+    stream_id: &str,
+    local_from: u32,
+    local_to: u32,
+) -> Result<u64> {
+    let mut estimated = 0u64;
+    let mut page_start = page_start_local(local_from, 4_096);
+    let last_page_start = page_start_local(local_to, 4_096);
+
+    loop {
+        if let Some(meta) = stream_tables.get_page_meta(stream_id, page_start).await? {
+            if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                estimated = estimated.saturating_add(u64::from(meta.count));
+            }
+        } else {
+            for bytes in stream_tables
+                .load_page_fragments(stream_id, page_start)
+                .await?
+            {
+                let meta = decode_bitmap_blob(&bytes)?;
+                if overlaps(meta.min_local, meta.max_local, local_from, local_to) {
+                    estimated = estimated.saturating_add(u64::from(meta.count));
+                }
+            }
+        }
+
+        if page_start == last_page_start {
+            break;
+        }
+        page_start = page_start.saturating_add(4_096);
+    }
+
+    Ok(estimated)
+}
+
+async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore>(
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     stream: &str,
     page_start: u32,
     local_from: u32,
     local_to: u32,
     out: &mut RoaringBitmap,
 ) -> Result<()> {
-    for bytes in F::stream_tables(tables)
+    for bytes in stream_tables
         .load_page_fragments(stream, page_start)
         .await?
     {
@@ -101,24 +151,21 @@ async fn load_bitmap_by_block_entries_for_page<M: MetaStore, B: BlobStore, F: St
             out,
             local_from,
             local_to,
-            F::is_full_shard_range(local_from, local_to),
+            local_from == 0 && local_to == crate::core::layout::MAX_LOCAL_ID,
         )?;
     }
     Ok(())
 }
 
-async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore, F: StreamIndexFamily>(
-    tables: &Tables<M, B>,
+async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore>(
+    stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     stream: &str,
     page_start: u32,
     out: &mut RoaringBitmap,
     local_from: u32,
     local_to: u32,
 ) -> Result<bool> {
-    let Some(bytes) = F::stream_tables(tables)
-        .get_page_blob(stream, page_start)
-        .await?
-    else {
+    let Some(bytes) = stream_tables.get_page_blob(stream, page_start).await? else {
         return Ok(false);
     };
     merge_bitmap_bytes_into(
@@ -126,7 +173,7 @@ async fn maybe_merge_cached_bitmap_blob<M: MetaStore, B: BlobStore, F: StreamInd
         out,
         local_from,
         local_to,
-        F::is_full_shard_range(local_from, local_to),
+        local_from == 0 && local_to == crate::core::layout::MAX_LOCAL_ID,
     )
 }
 
@@ -141,7 +188,6 @@ mod tests {
 
     use super::load_stream_entries;
     use crate::kernel::codec::StorageCodec;
-    use crate::logs::query::LogsStreamFamily;
     use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, PointTableSpec,
         ScannableTableSpec,
@@ -326,7 +372,7 @@ mod tests {
             .expect("write stream page meta");
 
             let tables = Tables::without_cache(meta, blob);
-            let entries = load_stream_entries::<_, _, LogsStreamFamily>(&tables, stream, 0, 20)
+            let entries = load_stream_entries(&tables.log_streams, stream, 0, 20)
                 .await
                 .expect("load stream entries");
 
@@ -405,10 +451,10 @@ mod tests {
                 },
             );
 
-            let first = load_stream_entries::<_, _, LogsStreamFamily>(&tables, stream, 0, 20)
+            let first = load_stream_entries(&tables.log_streams, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries::<_, _, LogsStreamFamily>(&tables, stream, 0, 20)
+            let second = load_stream_entries(&tables.log_streams, stream, 0, 20)
                 .await
                 .expect("second load");
 
@@ -485,10 +531,10 @@ mod tests {
                 },
             );
 
-            let first = load_stream_entries::<_, _, LogsStreamFamily>(&tables, stream, 0, 20)
+            let first = load_stream_entries(&tables.log_streams, stream, 0, 20)
                 .await
                 .expect("first load");
-            let second = load_stream_entries::<_, _, LogsStreamFamily>(&tables, stream, 0, 20)
+            let second = load_stream_entries(&tables.log_streams, stream, 0, 20)
                 .await
                 .expect("second load");
 

@@ -1,16 +1,14 @@
 use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
-use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
-use crate::query::engine::StreamIndexFamily;
+use crate::kernel::sharded_streams::sharded_stream_id;
+use crate::query::bitmap;
 use crate::query::planner::{
-    IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
-    prepare_shard_clauses as prepare_query_shard_clauses, single_selector_clause,
+    IndexedClause, PreparedClause, clause_values, indexed_clause, single_selector_clause,
 };
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
-use crate::traces::keys::{MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::traces) enum ClauseKind {
@@ -23,8 +21,6 @@ pub(in crate::traces) enum ClauseKind {
 pub(in crate::traces) type IndexedClauseSpec = IndexedClause<ClauseKind>;
 
 pub(in crate::traces) type PreparedShardClause = PreparedClause<ClauseKind>;
-
-pub(in crate::traces) struct TracesStreamFamily;
 
 pub(in crate::traces) fn build_clause_specs(filter: &TraceFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
@@ -66,70 +62,59 @@ pub(in crate::traces) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>
     local_from: TraceLocalId,
     local_to: TraceLocalId,
 ) -> Result<Vec<PreparedShardClause>> {
-    prepare_query_shard_clauses::<M, B, TracesStreamFamily>(
-        tables,
-        clause_specs,
-        shard,
+    let mut prepared = Vec::with_capacity(clause_specs.len());
+    for clause_spec in clause_specs {
+        let mut stream_ids = Vec::with_capacity(clause_spec.selectors.len());
+        let mut estimated_count = 0u64;
+
+        for selector in &clause_spec.selectors {
+            let stream_id = match selector.stream_kind {
+                "has_value" => sharded_stream_id("has_value", b"\x01", shard.get()),
+                _ => sharded_stream_id(selector.stream_kind, &selector.value, shard.get()),
+            };
+            estimated_count = estimated_count.saturating_add(
+                bitmap::estimate_stream_overlap(
+                    &tables.trace_streams,
+                    &stream_id,
+                    local_from.get(),
+                    local_to.get(),
+                )
+                .await?,
+            );
+            stream_ids.push(stream_id);
+        }
+
+        prepared.push(PreparedClause {
+            kind: clause_spec.kind,
+            stream_ids,
+            estimated_count,
+        });
+    }
+    prepared.sort_by_key(|clause| (clause.estimated_count, clause_sort_rank(clause.kind)));
+    Ok(prepared)
+}
+
+pub(in crate::traces) async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    prepared_clause: &PreparedShardClause,
+    local_from: TraceLocalId,
+    local_to: TraceLocalId,
+) -> Result<roaring::RoaringBitmap> {
+    bitmap::load_prepared_clause_bitmap(
+        &tables.trace_streams,
+        prepared_clause,
         local_from.get(),
         local_to.get(),
     )
     .await
 }
 
-impl StreamIndexFamily for TracesStreamFamily {
-    type Shard = TraceShard;
-    type ClauseKind = ClauseKind;
-    type BitmapMeta = crate::traces::types::StreamBitmapMeta;
-
-    fn stream_tables<M: MetaStore, B: BlobStore>(
-        tables: &Tables<M, B>,
-    ) -> &crate::tables::StreamTables<M, B, Self::BitmapMeta> {
-        &tables.trace_streams
-    }
-
-    fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {
-        match selector.stream_kind {
-            "has_value" => sharded_stream_id("has_value", b"\x01", shard.get()),
-            _ => sharded_stream_id(selector.stream_kind, &selector.value, shard.get()),
-        }
-    }
-
-    fn clause_sort_rank(kind: Self::ClauseKind) -> u8 {
-        match kind {
-            ClauseKind::From => 0,
-            ClauseKind::To => 1,
-            ClauseKind::Selector => 2,
-            ClauseKind::HasValue => 3,
-        }
-    }
-
-    fn first_page_start(local_from: u32) -> u32 {
-        page_start_local(local_from, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
-    }
-
-    fn last_page_start(local_to: u32) -> u32 {
-        page_start_local(local_to, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
-    }
-
-    fn next_page_start(page_start: u32) -> u32 {
-        page_start.saturating_add(TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
-    }
-
-    fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
-        local_from == 0 && local_to == MAX_TRACE_LOCAL_ID
-    }
-
-    fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool {
-        crate::kernel::sharded_streams::overlaps(
-            meta.min_local,
-            meta.max_local,
-            local_from,
-            local_to,
-        )
-    }
-
-    fn meta_count(meta: &Self::BitmapMeta) -> u32 {
-        meta.count
+fn clause_sort_rank(kind: ClauseKind) -> u8 {
+    match kind {
+        ClauseKind::From => 0,
+        ClauseKind::To => 1,
+        ClauseKind::Selector => 2,
+        ClauseKind::HasValue => 3,
     }
 }
 

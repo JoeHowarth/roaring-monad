@@ -2,8 +2,7 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::codec::fixed_codec;
-use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta};
+use crate::traces::types::BlockTraceHeader;
 
 impl StorageCodec for BlockTraceHeader {
     fn encode(&self) -> Bytes {
@@ -76,19 +75,6 @@ impl StorageCodec for BlockTraceHeader {
             offsets,
             tx_starts,
         })
-    }
-}
-
-fixed_codec! {
-    impl StreamBitmapMeta {
-        length_error = "invalid trace stream bitmap meta length";
-        version = 1;
-        version_error = "unsupported trace stream bitmap meta version";
-        fields {
-            count: u32,
-            min_local: u32,
-            max_local: u32,
-        }
     }
 }
 

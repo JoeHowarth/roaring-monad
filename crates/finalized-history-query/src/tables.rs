@@ -20,13 +20,13 @@ use crate::logs::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
     BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
 };
-use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
+use crate::streams::StreamBitmapMeta;
 use crate::traces::table_specs::{
     BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
     TraceBitmapPageMetaSpec, TraceDirBucketSpec, TraceDirByBlockSpec, TraceDirSubBucketSpec,
 };
-use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta as TraceStreamBitmapMeta};
+use crate::traces::types::BlockTraceHeader;
 
 pub struct PrimaryDirTables<M: MetaStore> {
     pub(crate) buckets: PrimaryDirBucketTable<M>,
@@ -90,7 +90,7 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub log_dir: PrimaryDirTables<M>,
     pub trace_dir: PrimaryDirTables<M>,
     pub log_streams: StreamTables<M, B, StreamBitmapMeta>,
-    pub trace_streams: StreamTables<M, B, TraceStreamBitmapMeta>,
+    pub trace_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub point_log_payloads: PointLogPayloadTable<M, B>,
     pub block_trace_blobs: BlockTraceBlobTable<M, B>,
     pub log_open_bitmap_pages: OpenBitmapPageTable<M>,

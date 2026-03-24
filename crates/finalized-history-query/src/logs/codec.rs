@@ -2,8 +2,7 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::codec::fixed_codec;
-use crate::logs::types::{BlockLogHeader, Log, StreamBitmapMeta, Topic32};
+use crate::logs::types::{BlockLogHeader, Log, Topic32};
 
 pub fn validate_log(log: &Log) -> bool {
     log.topics.len() <= 4
@@ -137,19 +136,6 @@ impl StorageCodec for BlockLogHeader {
             pos += 4;
         }
         Ok(Self { offsets })
-    }
-}
-
-fixed_codec! {
-    impl StreamBitmapMeta {
-        length_error = "invalid stream bitmap meta length";
-        version = 1;
-        version_error = "unsupported stream bitmap meta version";
-        fields {
-            count: u32,
-            min_local: u32,
-            max_local: u32,
-        }
     }
 }
 

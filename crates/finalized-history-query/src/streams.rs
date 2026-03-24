@@ -15,6 +15,13 @@ pub struct BitmapBlob {
     pub bitmap: RoaringBitmap,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StreamBitmapMeta {
+    pub count: u32,
+    pub min_local: u32,
+    pub max_local: u32,
+}
+
 struct BitmapBlobHeader {
     min_local: u32,
     max_local: u32,
@@ -30,6 +37,19 @@ fixed_codec! {
             min_local: u32,
             max_local: u32,
             count: u32,
+        }
+    }
+}
+
+fixed_codec! {
+    impl StreamBitmapMeta {
+        length_error = "invalid stream bitmap meta length";
+        version = 1;
+        version_error = "unsupported stream bitmap meta version";
+        fields {
+            count: u32,
+            min_local: u32,
+            max_local: u32,
         }
     }
 }

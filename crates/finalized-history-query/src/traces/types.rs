@@ -3,6 +3,7 @@ use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::Hash32;
+pub use crate::streams::StreamBitmapMeta;
 
 pub type Address20 = [u8; 20];
 pub type Selector4 = [u8; 4];
@@ -63,13 +64,6 @@ impl BlockTraceHeader {
         let local_ordinal = u32::try_from(local_ordinal).ok()?;
         local_ordinal.checked_sub(tx_start)
     }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct StreamBitmapMeta {
-    pub count: u32,
-    pub min_local: u32,
-    pub max_local: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

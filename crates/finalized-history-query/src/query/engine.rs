@@ -1,42 +1,20 @@
-use std::marker::PhantomData;
-
 use crate::api::{ExecutionBudget, QueryOrder};
-use crate::core::ids::{FamilyIdRange, FamilyIdValue};
-use crate::core::range::{ResolvedBlockRange, resolve_block_range};
+use crate::core::ids::FamilyIdValue;
+use crate::core::range::resolve_block_range;
 use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
-use crate::kernel::codec::StorageCodec;
-use crate::query::bitmap::load_prepared_clause_bitmap;
 use crate::query::normalized::{effective_limit, normalize_query};
-use crate::query::planner::PreparedClause;
 use crate::query::runner::{
-    QueryDescriptor, QueryId, QueryMaterializer, build_page, empty_page, execute_indexed_query,
+    QueryDescriptor, QueryMaterializer, build_page, empty_page, execute_indexed_query,
 };
+use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::{StreamTables, Tables};
+use crate::tables::Tables;
 
 pub(crate) trait IndexedFilter {
     fn has_indexed_clause(&self) -> bool;
     fn max_or_terms(&self) -> usize;
-}
-
-pub(crate) trait StreamIndexFamily {
-    type Shard: Copy;
-    type ClauseKind: Copy;
-    type BitmapMeta: StorageCodec;
-
-    fn stream_tables<M: MetaStore, B: BlobStore>(
-        tables: &Tables<M, B>,
-    ) -> &StreamTables<M, B, Self::BitmapMeta>;
-    fn stream_id(selector: &crate::query::planner::StreamSelector, shard: Self::Shard) -> String;
-    fn clause_sort_rank(kind: Self::ClauseKind) -> u8;
-    fn first_page_start(local_from: u32) -> u32;
-    fn last_page_start(local_to: u32) -> u32;
-    fn next_page_start(page_start: u32) -> u32;
-    fn is_full_shard_range(local_from: u32, local_to: u32) -> bool;
-    fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool;
-    fn meta_count(meta: &Self::BitmapMeta) -> u32;
 }
 
 pub(crate) trait IndexedQueryRequest {
@@ -52,99 +30,9 @@ pub(crate) trait IndexedQueryRequest {
     fn filter(&self) -> &Self::Filter;
 }
 
-pub(crate) trait IndexedQueryFamily {
-    type Id: QueryId + FamilyIdValue;
-    type Shard: Copy;
-    type ClauseKind: Copy;
-    type ClauseSpec: Clone;
-    type Filter: IndexedFilter;
-    type Output;
-    type StreamFamily: StreamIndexFamily<Shard = Self::Shard, ClauseKind = Self::ClauseKind>;
-    type Materializer<'a, M, B>: QueryMaterializer<Id = Self::Id, Filter = Self::Filter, Output = Self::Output>
-    where
-        M: MetaStore + 'a,
-        B: BlobStore + 'a,
-        Self: 'a;
-
-    fn build_clause_specs(filter: &Self::Filter) -> Vec<Self::ClauseSpec>;
-    fn shard_from_raw(shard_raw: u64) -> Self::Shard;
-    fn local_range_for_shard(
-        from: Self::Id,
-        to_inclusive: Self::Id,
-        shard: Self::Shard,
-    ) -> (u32, u32);
-    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        tables: &Tables<M, B>,
-        clause_specs: &[Self::ClauseSpec],
-        shard: Self::Shard,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<Vec<PreparedClause<Self::ClauseKind>>>;
-    async fn resolve_window<M: MetaStore, B: BlobStore>(
-        tables: &Tables<M, B>,
-        block_range: &ResolvedBlockRange,
-    ) -> Result<Option<FamilyIdRange<Self::Id>>>;
-    fn make_materializer<'a, M: MetaStore, B: BlobStore>(
-        tables: &'a Tables<M, B>,
-    ) -> Self::Materializer<'a, M, B>;
-    fn indexed_clause_error() -> &'static str;
-    fn resume_error() -> &'static str;
-}
-
-struct FamilyQueryDescriptor<F>(PhantomData<F>);
-
-impl<F: IndexedQueryFamily> QueryDescriptor for FamilyQueryDescriptor<F> {
-    type Id = F::Id;
-    type ClauseKind = F::ClauseKind;
-    type ClauseSpec = F::ClauseSpec;
-    type Filter = F::Filter;
-
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
-        F::build_clause_specs(filter)
-    }
-
-    fn local_range_for_shard(
-        &self,
-        from: Self::Id,
-        to_inclusive: Self::Id,
-        shard_raw: u64,
-    ) -> (u32, u32) {
-        F::local_range_for_shard(from, to_inclusive, F::shard_from_raw(shard_raw))
-    }
-
-    async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        clause_specs: &[Self::ClauseSpec],
-        shard_raw: u64,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
-        F::prepare_shard_clauses(
-            tables,
-            clause_specs,
-            F::shard_from_raw(shard_raw),
-            local_from,
-            local_to,
-        )
-        .await
-    }
-
-    async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        prepared_clause: &PreparedClause<Self::ClauseKind>,
-        local_from: u32,
-        local_to: u32,
-    ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap::<M, B, _, F::StreamFamily>(
-            tables,
-            prepared_clause,
-            local_from,
-            local_to,
-        )
-        .await
-    }
+pub(crate) struct QueryLimits {
+    pub budget: ExecutionBudget,
+    pub max_or_terms: usize,
 }
 
 pub(crate) async fn resolve_request_block_bounds<
@@ -180,31 +68,39 @@ pub(crate) async fn resolve_request_block_bounds<
     Ok((from_block, to_block))
 }
 
-pub(crate) async fn execute_family_query<M, P, B, R, F>(
+pub(crate) async fn execute_family_query<M, P, B, R, D, Q, W>(
     tables: &Tables<M, B>,
     publication_store: &P,
     request: &R,
-    budget: ExecutionBudget,
-    max_or_terms: usize,
-) -> Result<crate::core::page::QueryPage<F::Output>>
+    limits: QueryLimits,
+    descriptor: &D,
+    materializer: &mut Q,
+    select_window: W,
+) -> Result<crate::core::page::QueryPage<Q::Output>>
 where
     M: MetaStore,
     P: PublicationStore,
     B: BlobStore,
-    R: IndexedQueryRequest<Filter = F::Filter>,
-    F: IndexedQueryFamily,
+    R: IndexedQueryRequest<Filter = D::Filter>,
+    D: QueryDescriptor,
+    D::Id: FamilyIdValue,
+    D::Filter: IndexedFilter,
+    Q: QueryMaterializer<Id = D::Id, Filter = D::Filter>,
+    W: Fn(&crate::core::state::BlockRecord) -> Option<crate::core::state::PrimaryWindowRecord>,
 {
     if !request.filter().has_indexed_clause() {
-        return Err(Error::InvalidParams(F::indexed_clause_error()));
+        return Err(Error::InvalidParams(
+            "query must include at least one indexed clause",
+        ));
     }
-    if request.filter().max_or_terms() > max_or_terms {
+    if request.filter().max_or_terms() > limits.max_or_terms {
         return Err(Error::QueryTooBroad {
             actual: request.filter().max_or_terms(),
-            max: max_or_terms,
+            max: limits.max_or_terms,
         });
     }
 
-    let effective_limit = effective_limit(request.limit(), budget)?;
+    let effective_limit = effective_limit(request.limit(), limits.budget)?;
     let (from_block, to_block) = resolve_request_block_bounds(tables, request).await?;
     let block_range = resolve_block_range(
         tables,
@@ -218,35 +114,33 @@ where
         return Ok(empty_page(&block_range));
     }
 
-    let Some(id_window) = F::resolve_window(tables, &block_range).await? else {
+    let Some(id_window) =
+        resolve_primary_window::<_, _, D::Id, _>(tables, &block_range, select_window).await?
+    else {
         return Ok(empty_page(&block_range));
     };
     let Some(normalized) = normalize_query(
         &block_range,
         id_window,
-        request
-            .resume_id()
-            .map(<<F as IndexedQueryFamily>::Id as QueryId>::new),
+        request.resume_id().map(D::Id::new),
         effective_limit,
-        F::resume_error(),
+        "resume_id outside resolved block window",
     )?
     else {
         return Ok(empty_page(&block_range));
     };
 
-    let descriptor = FamilyQueryDescriptor::<F>(PhantomData);
-    let mut materializer = F::make_materializer(tables);
     let matched = execute_indexed_query(
         tables,
-        &descriptor,
+        descriptor,
         request.filter(),
         (normalized.id_range.start, normalized.id_range.end_inclusive),
         normalized.take,
-        &mut materializer,
+        materializer,
     )
     .await?;
 
-    Ok(build_page::<F::Materializer<'_, M, B>>(
+    Ok(build_page::<Q>(
         normalized.block_range,
         normalized.effective_limit,
         matched,
