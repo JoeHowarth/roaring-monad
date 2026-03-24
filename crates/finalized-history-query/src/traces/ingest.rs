@@ -1,10 +1,18 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bytes::Bytes;
 
+use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
+use crate::family::FinalizedBlock;
+use crate::ingest::bitmap_pages;
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
+use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::types::BlockTraceHeader;
+use crate::traces::view::BlockTraceIter;
 use alloy_rlp::{Header, PayloadView};
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
@@ -37,6 +45,65 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
         .trace_dir
         .persist_block_fragment(block_num, first_trace_id, count)
         .await
+}
+
+pub fn collect_trace_stream_appends(
+    block: &FinalizedBlock,
+    first_trace_id: u64,
+) -> Result<BTreeMap<String, Vec<u32>>> {
+    let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+
+    for (index, iterated) in BlockTraceIter::new(&block.trace_rlp)?.enumerate() {
+        let iterated = iterated?;
+        let global_trace_id = TraceId::new(first_trace_id + index as u64);
+        let shard = global_trace_id.shard();
+        let local = global_trace_id.local().get();
+        let view = iterated.view;
+
+        out.entry(sharded_stream_id("from", view.from_addr()?, shard.get()))
+            .or_default()
+            .insert(local);
+
+        if let Some(to_addr) = view.to_addr()? {
+            out.entry(sharded_stream_id("to", to_addr, shard.get()))
+                .or_default()
+                .insert(local);
+        }
+
+        if let Some(selector) = view.selector()? {
+            out.entry(sharded_stream_id("selector", selector, shard.get()))
+                .or_default()
+                .insert(local);
+        }
+
+        if view.has_value()? {
+            out.entry(sharded_stream_id("has_value", b"\x01", shard.get()))
+                .or_default()
+                .insert(local);
+        }
+    }
+
+    Ok(out
+        .into_iter()
+        .map(|(stream, values)| (stream, values.into_iter().collect()))
+        .collect())
+}
+
+pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block: &FinalizedBlock,
+    first_trace_id: u64,
+) -> Result<Vec<(String, u32)>> {
+    let grouped_values = collect_trace_stream_appends(block, first_trace_id)?
+        .into_iter()
+        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
+    bitmap_pages::persist_stream_fragments(
+        &tables.trace_streams,
+        block.block_num,
+        grouped_values,
+        TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await
 }
 
 fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize)> {
