@@ -655,7 +655,7 @@ fn collect_keys_from_group_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE;
+    use crate::kernel::table_specs::ScannableTableSpec;
     use crate::logs::table_specs::LogDirByBlockSpec;
     use crate::store::publication::PublicationState;
     use crate::store::publication::{CasOutcome, MetaPublicationStore, PublicationStore};
@@ -773,7 +773,7 @@ mod tests {
             for index in 0..ENTRY_COUNT as u64 {
                 meta_store
                     .scan_put(
-                        LOG_DIR_BY_BLOCK_TABLE,
+                        LogDirByBlockSpec::TABLE,
                         &partition,
                         &LogDirByBlockSpec::clustering(index),
                         Bytes::from_static(b"v"),
@@ -793,7 +793,7 @@ mod tests {
             loop {
                 let page = meta_store
                     .scan_list(
-                        LOG_DIR_BY_BLOCK_TABLE,
+                        LogDirByBlockSpec::TABLE,
                         &partition,
                         b"",
                         meta_cursor.take(),

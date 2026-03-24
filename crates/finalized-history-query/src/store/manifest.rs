@@ -1,29 +1,30 @@
-use crate::core::state::BLOCK_RECORD_TABLE;
+use crate::core::state::BlockRecordSpec;
 use crate::kernel::table_specs::BlobTableSpec;
-use crate::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE,
-    LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE, OPEN_BITMAP_PAGE_TABLE,
+use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
+use crate::logs::table_specs::{
+    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
+    BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
+    OpenBitmapPageSpec,
 };
-use crate::logs::table_specs::{BitmapPageBlobSpec, BlockLogBlobSpec};
 use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
-use crate::traces::keys::{
-    BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
-    TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_DIR_BUCKET_TABLE,
-    TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE, TRACE_OPEN_BITMAP_PAGE_TABLE,
+use crate::traces::table_specs::{
+    BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
+    TraceBitmapPageMetaSpec, TraceDirBucketSpec, TraceDirByBlockSpec, TraceDirSubBucketSpec,
+    TraceOpenBitmapPageSpec,
 };
 
 pub const RUNTIME_POINT_TABLES: [TableId; 10] = [
-    BLOCK_RECORD_TABLE,
-    BLOCK_LOG_HEADER_TABLE,
-    BLOCK_HASH_INDEX_TABLE,
-    LOG_DIR_BUCKET_TABLE,
-    LOG_DIR_SUB_BUCKET_TABLE,
-    BITMAP_PAGE_META_TABLE,
-    BLOCK_TRACE_HEADER_TABLE,
-    TRACE_DIR_BUCKET_TABLE,
-    TRACE_DIR_SUB_BUCKET_TABLE,
-    TRACE_BITMAP_PAGE_META_TABLE,
+    BlockRecordSpec::TABLE,
+    BlockLogHeaderSpec::TABLE,
+    BlockHashIndexSpec::TABLE,
+    LogDirBucketSpec::TABLE,
+    LogDirSubBucketSpec::TABLE,
+    BitmapPageMetaSpec::TABLE,
+    BlockTraceHeaderSpec::TABLE,
+    TraceDirBucketSpec::TABLE,
+    TraceDirSubBucketSpec::TABLE,
+    TraceBitmapPageMetaSpec::TABLE,
 ];
 
 pub const REQUIRED_POINT_TABLES: [TableId; 11] = [
@@ -41,12 +42,12 @@ pub const REQUIRED_POINT_TABLES: [TableId; 11] = [
 ];
 
 pub const RUNTIME_SCANNABLE_TABLES: [ScannableTableId; 6] = [
-    LOG_DIR_BY_BLOCK_TABLE,
-    BITMAP_BY_BLOCK_TABLE,
-    OPEN_BITMAP_PAGE_TABLE,
-    TRACE_DIR_BY_BLOCK_TABLE,
-    TRACE_BITMAP_BY_BLOCK_TABLE,
-    TRACE_OPEN_BITMAP_PAGE_TABLE,
+    LogDirByBlockSpec::TABLE,
+    BitmapByBlockSpec::TABLE,
+    OpenBitmapPageSpec::TABLE,
+    TraceDirByBlockSpec::TABLE,
+    TraceBitmapByBlockSpec::TABLE,
+    TraceOpenBitmapPageSpec::TABLE,
 ];
 
 pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 6] = [
@@ -61,8 +62,8 @@ pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 6] = [
 pub const RUNTIME_BLOB_TABLES: [BlobTableId; 4] = [
     BlockLogBlobSpec::TABLE,
     BitmapPageBlobSpec::TABLE,
-    BLOCK_TRACE_BLOB_TABLE,
-    TRACE_BITMAP_PAGE_BLOB_TABLE,
+    BlockTraceBlobSpec::TABLE,
+    TraceBitmapPageBlobSpec::TABLE,
 ];
 
 pub const REQUIRED_BLOB_TABLES: [BlobTableId; 4] = [

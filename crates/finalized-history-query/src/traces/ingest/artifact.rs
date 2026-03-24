@@ -109,9 +109,11 @@ mod tests {
     use super::persist_trace_dir_by_block;
     use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::kernel::codec::StorageCodec;
+    use crate::kernel::table_specs::ScannableTableSpec;
     use crate::kernel::table_specs::u64_key;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
+    use crate::traces::table_specs::TraceDirByBlockSpec;
     use crate::traces::types::DirByBlock;
     use crate::{store::traits::MetaStore, tables::Tables};
 
@@ -130,7 +132,7 @@ mod tests {
             for sub_bucket_start in [0, DIRECTORY_SUB_BUCKET_SIZE] {
                 let fragment = meta
                     .scan_get(
-                        crate::traces::keys::TRACE_DIR_BY_BLOCK_TABLE,
+                        TraceDirByBlockSpec::TABLE,
                         &u64_key(sub_bucket_start),
                         &u64_key(700),
                     )

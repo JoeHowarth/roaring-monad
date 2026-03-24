@@ -10,13 +10,15 @@ use finalized_history_query::core::state::{
 };
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
-use finalized_history_query::kernel::table_specs::{page_stream_key, stream_page_key, u64_key};
+use finalized_history_query::kernel::table_specs::{
+    PointTableSpec, ScannableTableSpec, page_stream_key, stream_page_key, u64_key,
+};
 use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, LOG_DIR_BY_BLOCK_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, OPEN_BITMAP_PAGE_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
-    BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
+    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
+    OpenBitmapPageSpec,
 };
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -138,7 +140,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.meta_store()
                 .get(
-                    BITMAP_PAGE_META_TABLE,
+                    BitmapPageMetaSpec::TABLE,
                     &BitmapPageMetaSpec::key(&sid, page_start),
                 )
                 .await
@@ -204,7 +206,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    LOG_DIR_BY_BLOCK_TABLE,
+                    LogDirByBlockSpec::TABLE,
                     &LogDirByBlockSpec::partition(0),
                     &LogDirByBlockSpec::clustering(2),
                 )
@@ -251,7 +253,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         let mut bitmap = RoaringBitmap::new();
         bitmap.insert(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         meta.scan_put(
-            BITMAP_BY_BLOCK_TABLE,
+            BitmapByBlockSpec::TABLE,
             &stream_page_key(&sid, page_start),
             &u64_key(1),
             encode_bitmap_blob(&BitmapBlob {
@@ -266,7 +268,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         .await
         .expect("seed bitmap fragment");
         meta.scan_put(
-            OPEN_BITMAP_PAGE_TABLE,
+            OpenBitmapPageSpec::TABLE,
             &u64_key(0),
             &page_stream_key(page_start, &sid),
             Bytes::new(),
@@ -283,7 +285,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         assert!(
             svc.meta_store()
                 .get(
-                    BITMAP_PAGE_META_TABLE,
+                    BitmapPageMetaSpec::TABLE,
                     &BitmapPageMetaSpec::key(&sid, page_start),
                 )
                 .await
@@ -293,7 +295,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    OPEN_BITMAP_PAGE_TABLE,
+                    OpenBitmapPageSpec::TABLE,
                     &u64_key(0),
                     &page_stream_key(page_start, &sid),
                 )

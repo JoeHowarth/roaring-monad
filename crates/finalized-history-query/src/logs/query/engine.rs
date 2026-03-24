@@ -3,12 +3,11 @@ use super::clause::{
 };
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, LogLocalId, LogShard};
+use crate::core::ids::{LogId, LogLocalId, LogShard, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
 use crate::logs::materialize::LogMaterializer;
-use crate::logs::table_specs;
 use crate::logs::types::Log;
 use crate::query::engine::{IndexedQueryFamily, IndexedQueryRequest, execute_family_query};
 use crate::query::planner::PreparedClause;
@@ -108,8 +107,7 @@ impl IndexedQueryFamily for LogsQueryFamily {
         to_inclusive: Self::Id,
         shard: Self::Shard,
     ) -> (u32, u32) {
-        let (local_from, local_to) = table_specs::local_range_for_shard(from, to_inclusive, shard);
-        (local_from.get(), local_to.get())
+        family_local_range_for_shard(from, to_inclusive, shard.get())
     }
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(

@@ -4,7 +4,7 @@ pub(crate) mod ingest;
 pub mod keys;
 pub(crate) mod materialize;
 pub(crate) mod query;
-pub(crate) mod table_specs;
+pub mod table_specs;
 pub mod types;
 pub mod view;
 

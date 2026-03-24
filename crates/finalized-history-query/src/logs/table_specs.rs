@@ -1,5 +1,4 @@
-use crate::core::ids::{LogId, LogShard};
-use crate::core::layout::MAX_LOCAL_ID;
+use crate::core::ids::LogId;
 use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::kernel::table_specs::{aligned_u64_start, stream_page_key, u64_key};
@@ -114,24 +113,4 @@ impl BitmapPageBlobSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         stream_page_key(stream_id, page_start_local)
     }
-}
-
-pub fn local_range_for_shard(
-    from: crate::core::ids::LogId,
-    to_inclusive: crate::core::ids::LogId,
-    shard: LogShard,
-) -> (crate::core::ids::LogLocalId, crate::core::ids::LogLocalId) {
-    let from_shard = from.shard();
-    let to_shard = to_inclusive.shard();
-    let local_from = if shard == from_shard {
-        from.local()
-    } else {
-        crate::core::ids::LogLocalId::new(0).expect("0 is a valid local id")
-    };
-    let local_to = if shard == to_shard {
-        to_inclusive.local()
-    } else {
-        crate::core::ids::LogLocalId::new(MAX_LOCAL_ID).expect("MAX_LOCAL_ID is valid")
-    };
-    (local_from, local_to)
 }

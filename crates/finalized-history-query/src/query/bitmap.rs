@@ -141,10 +141,10 @@ mod tests {
 
     use super::load_stream_entries;
     use crate::kernel::codec::StorageCodec;
-    use crate::logs::keys::{BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE};
     use crate::logs::query::LogsStreamFamily;
     use crate::logs::table_specs::{
-        BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
+        BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, PointTableSpec,
+        ScannableTableSpec,
     };
     use crate::logs::types::StreamBitmapMeta;
     use crate::store::blob::InMemoryBlobStore;
@@ -302,7 +302,7 @@ mod tests {
             let partition = BitmapByBlockSpec::partition(stream, page_start);
 
             meta.scan_put(
-                BITMAP_BY_BLOCK_TABLE,
+                BitmapByBlockSpec::TABLE,
                 &partition,
                 &BitmapByBlockSpec::clustering(block_num),
                 encode_bitmap_blob(&fragment_bitmap_blob).expect("encode fragment bitmap blob"),
@@ -312,7 +312,7 @@ mod tests {
             .expect("write stream fragment");
 
             meta.put(
-                BITMAP_PAGE_META_TABLE,
+                BitmapPageMetaSpec::TABLE,
                 &BitmapPageMetaSpec::key(stream, page_start),
                 StreamBitmapMeta {
                     count: 1,
@@ -359,7 +359,7 @@ mod tests {
 
             inner_meta
                 .put(
-                    BITMAP_PAGE_META_TABLE,
+                    BitmapPageMetaSpec::TABLE,
                     &meta_key,
                     StreamBitmapMeta {
                         count: 1,
@@ -382,7 +382,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
-                target_family: BITMAP_PAGE_META_TABLE,
+                target_family: BitmapPageMetaSpec::TABLE,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };
@@ -442,7 +442,7 @@ mod tests {
 
             inner_meta
                 .put(
-                    BITMAP_PAGE_META_TABLE,
+                    BitmapPageMetaSpec::TABLE,
                     &meta_key,
                     StreamBitmapMeta {
                         count: 1,
@@ -465,7 +465,7 @@ mod tests {
 
             let meta = CountingMetaStore {
                 inner: inner_meta,
-                target_family: BITMAP_PAGE_META_TABLE,
+                target_family: BitmapPageMetaSpec::TABLE,
                 target_key: meta_key.clone(),
                 get_count: meta_gets.clone(),
             };
@@ -516,7 +516,7 @@ mod tests {
                     bitmap,
                 };
                 meta.scan_put(
-                    BITMAP_BY_BLOCK_TABLE,
+                    BitmapByBlockSpec::TABLE,
                     &BitmapByBlockSpec::partition(stream, page_start),
                     &BitmapByBlockSpec::clustering(block_num),
                     encode_bitmap_blob(&blob).expect("encode fragment bitmap blob"),

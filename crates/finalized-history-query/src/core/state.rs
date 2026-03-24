@@ -4,17 +4,16 @@ use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::table_specs::{PointTableSpec, u64_key};
-use crate::store::traits::TableId;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-
-pub const BLOCK_RECORD_TABLE: TableId = TableId::new("block_record");
 
 pub struct BlockRecordSpec;
 
 impl PointTableSpec for BlockRecordSpec {
-    const TABLE: TableId = BLOCK_RECORD_TABLE;
+    const TABLE: crate::store::traits::TableId = crate::store::traits::TableId::new("block_record");
 }
+
+pub const BLOCK_RECORD_TABLE: crate::store::traits::TableId = BlockRecordSpec::TABLE;
 
 impl BlockRecordSpec {
     pub fn key(block_num: u64) -> Vec<u8> {

@@ -5,7 +5,7 @@ use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::core::state::{BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec};
 use finalized_history_query::kernel::codec::StorageCodec;
-use finalized_history_query::logs::keys::BLOCK_LOG_HEADER_TABLE;
+use finalized_history_query::kernel::table_specs::PointTableSpec;
 use finalized_history_query::logs::table_specs::{
     BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec,
 };
@@ -170,7 +170,7 @@ fn ingest_block_with_zero_logs_writes_empty_artifacts() {
 
         // block_log_header must exist (sentinel with one offset).
         let header_bytes = meta
-            .get(BLOCK_LOG_HEADER_TABLE, &BlockLogHeaderSpec::key(1))
+            .get(BlockLogHeaderSpec::TABLE, &BlockLogHeaderSpec::key(1))
             .await
             .expect("read header")
             .expect("block_log_header must be present for empty block");

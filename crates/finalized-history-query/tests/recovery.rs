@@ -10,13 +10,14 @@ use finalized_history_query::core::state::{
     BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
 };
 use finalized_history_query::kernel::codec::StorageCodec;
-use finalized_history_query::logs::keys::OPEN_BITMAP_PAGE_TABLE;
+use finalized_history_query::kernel::table_specs::ScannableTableSpec;
+use finalized_history_query::logs::table_specs::OpenBitmapPageSpec;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };
-use finalized_history_query::traces::keys::TRACE_OPEN_BITMAP_PAGE_TABLE;
+use finalized_history_query::traces::table_specs::TraceOpenBitmapPageSpec;
 use futures::executor::block_on;
 
 use helpers::*;
@@ -123,7 +124,10 @@ impl MetaStore for CountingMetaStore {
         cursor: Option<Vec<u8>>,
         limit: usize,
     ) -> finalized_history_query::Result<Page> {
-        if matches!(table, OPEN_BITMAP_PAGE_TABLE | TRACE_OPEN_BITMAP_PAGE_TABLE) {
+        if matches!(
+            table,
+            OpenBitmapPageSpec::TABLE | TraceOpenBitmapPageSpec::TABLE
+        ) {
             self.open_page_scan_lists.fetch_add(1, Ordering::Relaxed);
         }
         self.inner
