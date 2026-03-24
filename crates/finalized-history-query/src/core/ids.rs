@@ -1,12 +1,11 @@
 use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID};
 
-const MAX_LOG_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
-const MAX_TRACE_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
+const MAX_FAMILY_SHARD: u64 = u64::MAX >> LOCAL_ID_BITS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogId(u64);
+pub struct FamilyId(u64);
 
-impl LogId {
+impl FamilyId {
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
@@ -15,12 +14,109 @@ impl LogId {
         self.0
     }
 
+    pub const fn shard_raw(self) -> u64 {
+        self.0 >> LOCAL_ID_BITS
+    }
+
+    pub const fn local_raw(self) -> u32 {
+        (self.0 & LOCAL_ID_MASK) as u32
+    }
+
+    pub const fn compose(shard_raw: u64, local_raw: u32) -> Self {
+        Self((shard_raw << LOCAL_ID_BITS) | (local_raw as u64))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidFamilyShard {
+    raw: u64,
+}
+
+impl InvalidFamilyShard {
+    pub const fn raw(self) -> u64 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidFamilyLocalId {
+    raw: u32,
+}
+
+impl InvalidFamilyLocalId {
+    pub const fn raw(self) -> u32 {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FamilyShard(u64);
+
+impl FamilyShard {
+    pub fn new(raw: u64) -> Result<Self, InvalidFamilyShard> {
+        if raw <= MAX_FAMILY_SHARD {
+            Ok(Self(raw))
+        } else {
+            Err(InvalidFamilyShard { raw })
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) const fn new_masked(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FamilyLocalId(u32);
+
+impl FamilyLocalId {
+    pub fn new(raw: u32) -> Result<Self, InvalidFamilyLocalId> {
+        if raw <= MAX_LOCAL_ID {
+            Ok(Self(raw))
+        } else {
+            Err(InvalidFamilyLocalId { raw })
+        }
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    pub(crate) const fn new_masked(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LogId(FamilyId);
+
+impl LogId {
+    pub const fn new(raw: u64) -> Self {
+        Self(FamilyId::new(raw))
+    }
+
+    pub const fn from_family_id(value: FamilyId) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_id(self) -> FamilyId {
+        self.0
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
     pub const fn shard(self) -> LogShard {
-        LogShard::new_masked(self.0 >> LOCAL_ID_BITS)
+        LogShard::from_family_shard(FamilyShard::new_masked(self.0.shard_raw()))
     }
 
     pub const fn local(self) -> LogLocalId {
-        LogLocalId::new_masked((self.0 & LOCAL_ID_MASK) as u32)
+        LogLocalId::from_family_local_id(FamilyLocalId::new_masked(self.0.local_raw()))
     }
 
     pub const fn split(self) -> (LogShard, LogLocalId) {
@@ -41,23 +137,25 @@ impl From<LogId> for u64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogShard(u64);
+pub struct LogShard(FamilyShard);
 
 impl LogShard {
     pub fn new(raw: u64) -> Result<Self, InvalidLogShard> {
-        if raw <= MAX_LOG_SHARD {
-            Ok(Self(raw))
-        } else {
-            Err(InvalidLogShard { raw })
-        }
+        FamilyShard::new(raw)
+            .map(Self)
+            .map_err(|err| InvalidLogShard { raw: err.raw() })
     }
 
-    pub const fn get(self) -> u64 {
+    pub const fn from_family_shard(value: FamilyShard) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_shard(self) -> FamilyShard {
         self.0
     }
 
-    pub(crate) const fn new_masked(raw: u64) -> Self {
-        Self(raw)
+    pub const fn get(self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -84,48 +182,58 @@ impl InvalidLogLocalId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LogLocalId(u32);
+pub struct LogLocalId(FamilyLocalId);
 
 impl LogLocalId {
     pub fn new(raw: u32) -> Result<Self, InvalidLogLocalId> {
-        if raw <= MAX_LOCAL_ID {
-            Ok(Self(raw))
-        } else {
-            Err(InvalidLogLocalId { raw })
-        }
+        FamilyLocalId::new(raw)
+            .map(Self)
+            .map_err(|err| InvalidLogLocalId { raw: err.raw() })
     }
 
-    pub const fn get(self) -> u32 {
+    pub const fn from_family_local_id(value: FamilyLocalId) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_local_id(self) -> FamilyLocalId {
         self.0
     }
 
-    pub(crate) const fn new_masked(raw: u32) -> Self {
-        Self(raw)
+    pub const fn get(self) -> u32 {
+        self.0.get()
     }
 }
 
 pub const fn compose_log_id(shard: LogShard, local: LogLocalId) -> LogId {
-    LogId::new((shard.get() << LOCAL_ID_BITS) | (local.get() as u64))
+    LogId::from_family_id(FamilyId::compose(shard.get(), local.get()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceId(u64);
+pub struct TraceId(FamilyId);
 
 impl TraceId {
     pub const fn new(raw: u64) -> Self {
-        Self(raw)
+        Self(FamilyId::new(raw))
     }
 
-    pub const fn get(self) -> u64 {
+    pub const fn from_family_id(value: FamilyId) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_id(self) -> FamilyId {
         self.0
     }
 
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
     pub const fn shard(self) -> TraceShard {
-        TraceShard::new_masked(self.0 >> LOCAL_ID_BITS)
+        TraceShard::from_family_shard(FamilyShard::new_masked(self.0.shard_raw()))
     }
 
     pub const fn local(self) -> TraceLocalId {
-        TraceLocalId::new_masked((self.0 & LOCAL_ID_MASK) as u32)
+        TraceLocalId::from_family_local_id(FamilyLocalId::new_masked(self.0.local_raw()))
     }
 
     pub const fn split(self) -> (TraceShard, TraceLocalId) {
@@ -146,23 +254,25 @@ impl From<TraceId> for u64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceShard(u64);
+pub struct TraceShard(FamilyShard);
 
 impl TraceShard {
     pub fn new(raw: u64) -> Result<Self, InvalidTraceShard> {
-        if raw <= MAX_TRACE_SHARD {
-            Ok(Self(raw))
-        } else {
-            Err(InvalidTraceShard { raw })
-        }
+        FamilyShard::new(raw)
+            .map(Self)
+            .map_err(|err| InvalidTraceShard { raw: err.raw() })
     }
 
-    pub const fn get(self) -> u64 {
+    pub const fn from_family_shard(value: FamilyShard) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_shard(self) -> FamilyShard {
         self.0
     }
 
-    pub(crate) const fn new_masked(raw: u64) -> Self {
-        Self(raw)
+    pub const fn get(self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -189,28 +299,30 @@ impl InvalidTraceLocalId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TraceLocalId(u32);
+pub struct TraceLocalId(FamilyLocalId);
 
 impl TraceLocalId {
     pub fn new(raw: u32) -> Result<Self, InvalidTraceLocalId> {
-        if raw <= MAX_LOCAL_ID {
-            Ok(Self(raw))
-        } else {
-            Err(InvalidTraceLocalId { raw })
-        }
+        FamilyLocalId::new(raw)
+            .map(Self)
+            .map_err(|err| InvalidTraceLocalId { raw: err.raw() })
     }
 
-    pub const fn get(self) -> u32 {
+    pub const fn from_family_local_id(value: FamilyLocalId) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_local_id(self) -> FamilyLocalId {
         self.0
     }
 
-    pub(crate) const fn new_masked(raw: u32) -> Self {
-        Self(raw)
+    pub const fn get(self) -> u32 {
+        self.0.get()
     }
 }
 
 pub const fn compose_trace_id(shard: TraceShard, local: TraceLocalId) -> TraceId {
-    TraceId::new((shard.get() << LOCAL_ID_BITS) | (local.get() as u64))
+    TraceId::from_family_id(FamilyId::compose(shard.get(), local.get()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,10 +376,17 @@ impl TraceIdRange {
 #[cfg(test)]
 mod tests {
     use super::{
-        LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId,
-        TraceShard, compose_log_id, compose_trace_id,
+        FamilyId, FamilyLocalId, FamilyShard, LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId,
+        TraceIdRange, TraceLocalId, TraceShard, compose_log_id, compose_trace_id,
     };
     use crate::core::layout::MAX_LOCAL_ID;
+
+    #[test]
+    fn family_id_roundtrips_shard_and_local() {
+        let value = FamilyId::compose(u64::from(u32::MAX) + 1, 7);
+        assert_eq!(value.shard_raw(), u64::from(u32::MAX) + 1);
+        assert_eq!(value.local_raw(), 7);
+    }
 
     #[test]
     fn log_id_roundtrips_at_boundaries() {
@@ -285,6 +404,10 @@ mod tests {
         for value in values {
             let (shard, local) = value.split();
             assert_eq!(compose_log_id(shard, local), value);
+            assert_eq!(
+                value.into_family_id(),
+                FamilyId::compose(shard.get(), local.get())
+            );
         }
     }
 
@@ -326,6 +449,10 @@ mod tests {
         for value in values {
             let (shard, local) = value.split();
             assert_eq!(compose_trace_id(shard, local), value);
+            assert_eq!(
+                value.into_family_id(),
+                FamilyId::compose(shard.get(), local.get())
+            );
         }
     }
 
@@ -341,6 +468,20 @@ mod tests {
                 start: TraceId::new(11),
                 end_inclusive: TraceId::new(12),
             })
+        );
+    }
+
+    #[test]
+    fn family_shard_and_local_validate_bounds() {
+        assert_eq!(
+            FamilyShard::new(u64::MAX).err().map(|err| err.raw()),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            FamilyLocalId::new(MAX_LOCAL_ID.saturating_add(1))
+                .err()
+                .map(|err| err.raw()),
+            Some(MAX_LOCAL_ID.saturating_add(1))
         );
     }
 }
