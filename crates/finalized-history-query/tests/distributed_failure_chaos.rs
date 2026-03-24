@@ -56,7 +56,7 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let keyspace = format!("finalized_history_query_chaos_{}", stamp);
+    let keyspace = format!("fhq_chaos_{stamp:x}");
 
     let meta = ScyllaMetaStore::new(&["127.0.0.1:9042".to_string()], &keyspace)
         .await
