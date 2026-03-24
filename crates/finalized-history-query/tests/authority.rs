@@ -2,6 +2,7 @@
 mod helpers;
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
@@ -23,15 +24,72 @@ use finalized_history_query::logs::table_specs::{
 use finalized_history_query::runtime::Runtime;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
+use finalized_history_query::store::publication::{
+    CasOutcome, MetaPublicationStore, PublicationState, PublicationStore,
+};
 use finalized_history_query::store::publication::{
     PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
 };
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
-use finalized_history_query::{Error, WriteAuthority};
+use finalized_history_query::{Error, WriteAuthority, WriteContinuity, WriteSession};
 use futures::executor::block_on;
 
 use helpers::*;
+
+struct BootstrapRaceStore {
+    state: Mutex<Option<PublicationState>>,
+    losing_owner: PublicationState,
+}
+
+impl BootstrapRaceStore {
+    fn new(losing_owner: PublicationState) -> Self {
+        Self {
+            state: Mutex::new(None),
+            losing_owner,
+        }
+    }
+}
+
+impl PublicationStore for BootstrapRaceStore {
+    async fn load(&self) -> finalized_history_query::Result<Option<PublicationState>> {
+        Ok(self.state.lock().expect("state lock").clone())
+    }
+
+    async fn create_if_absent(
+        &self,
+        _initial: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        let mut guard = self.state.lock().expect("state lock");
+        if guard.is_none() {
+            *guard = Some(self.losing_owner.clone());
+        }
+        Ok(CasOutcome::Failed {
+            current: guard.clone(),
+        })
+    }
+
+    async fn compare_and_set(
+        &self,
+        expected: &PublicationState,
+        next: &PublicationState,
+    ) -> finalized_history_query::Result<CasOutcome<PublicationState>> {
+        let mut guard = self.state.lock().expect("state lock");
+        match guard.as_ref() {
+            Some(current) if current == expected => {
+                *guard = Some(next.clone());
+                Ok(CasOutcome::Applied(next.clone()))
+            }
+            Some(current) => Ok(CasOutcome::Failed {
+                current: Some(current.clone()),
+            }),
+            None => Ok(CasOutcome::Failed { current: None }),
+        }
+    }
+}
+
+fn publication_store(store: &InMemoryMetaStore) -> MetaPublicationStore<InMemoryMetaStore> {
+    MetaPublicationStore::new(store.clone())
+}
 
 #[test]
 fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
@@ -125,6 +183,27 @@ fn first_ingest_bootstraps_publication_ownership() {
 }
 
 #[test]
+fn acquire_publication_does_not_accept_foreign_owner_after_bootstrap_race() {
+    block_on(async {
+        let store = BootstrapRaceStore::new(PublicationState {
+            owner_id: 9,
+            session_id: [9u8; 16],
+            indexed_finalized_head: 0,
+            lease_valid_through_block: 500,
+        });
+        let authority = LeaseAuthority::new(store, 7, 100, 0);
+
+        let session = authority
+            .begin_write(Some(1_000))
+            .await
+            .expect("acquire publication");
+
+        assert_eq!(session.state().indexed_finalized_head, 0);
+        assert_eq!(session.state().continuity, WriteContinuity::Reacquired);
+    });
+}
+
+#[test]
 fn first_ingest_uses_configured_lease_blocks() {
     block_on(async {
         let observed_upstream_finalized_block = 41;
@@ -155,6 +234,21 @@ fn first_ingest_uses_configured_lease_blocks() {
             publication_state.lease_valid_through_block,
             observed_upstream_finalized_block + 6
         );
+    });
+}
+
+#[test]
+fn acquire_fails_closed_without_observed_finalized_block() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+
+        let err = authority
+            .begin_write(None)
+            .await
+            .expect_err("missing observation should fail closed");
+
+        assert!(matches!(err, Error::LeaseObservationUnavailable));
     });
 }
 
@@ -250,6 +344,78 @@ fn acquire_publication_bootstraps_and_takeover_switches_session() {
 }
 
 #[test]
+fn same_owner_restart_after_expiry_uses_new_session() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let first = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+        let second = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+
+        first
+            .begin_write(Some(100))
+            .await
+            .expect("first acquire publication");
+        let first_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+        second
+            .begin_write(Some(151))
+            .await
+            .expect("same owner restart after expiry");
+        let second_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+
+        assert_ne!(second_session, first_session);
+    });
+}
+
+#[test]
+fn same_owner_restart_before_expiry_uses_new_session() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let first = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+        let second = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+
+        first
+            .begin_write(Some(100))
+            .await
+            .expect("first acquire publication");
+        let store_view = publication_store(&store);
+        let first_session = store_view
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+        second
+            .begin_write(Some(120))
+            .await
+            .expect("same owner restart before expiry");
+        let second_session = store_view
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+
+        assert_ne!(second_session, first_session);
+
+        let state = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("publication state");
+        assert_eq!(state.owner_id, 7);
+    });
+}
+
+#[test]
 fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
@@ -284,6 +450,172 @@ fn standby_writer_does_not_take_over_while_primary_lease_is_fresh() {
         let publication_state = publication_state.expect("publication state");
         assert_eq!(publication_state.owner_id, first_state.owner_id);
         assert_eq!(publication_state.session_id, first_state.session_id);
+    });
+}
+
+#[test]
+fn begin_write_returns_lease_lost_after_external_takeover() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 10);
+        authority.begin_write(Some(100)).await.expect("acquire");
+        let takeover = LeaseAuthority::new(publication_store(&store), 8, 50, 10);
+        let _ = takeover.begin_write(Some(151)).await.expect("takeover");
+
+        let err = authority
+            .begin_write(Some(151))
+            .await
+            .expect_err("begin_write should observe takeover");
+
+        assert!(matches!(err, Error::LeaseLost));
+    });
+}
+
+#[test]
+fn publish_returns_lease_lost_on_session_mismatch() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+        let session = authority.begin_write(Some(100)).await.expect("acquire");
+        let takeover = LeaseAuthority::new(publication_store(&store), 8, 50, 0);
+        let _ = takeover.begin_write(Some(151)).await.expect("takeover");
+
+        let err = session
+            .publish(1, Some(151))
+            .await
+            .expect_err("publish should fail after takeover");
+
+        assert!(matches!(err, Error::LeaseLost));
+    });
+}
+
+#[test]
+fn publish_returns_publication_conflict_on_head_mismatch() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+        let session = authority.begin_write(Some(100)).await.expect("acquire");
+        let pub_store = publication_store(&store);
+        let current = pub_store.load().await.expect("load").expect("state");
+        let next = PublicationState {
+            indexed_finalized_head: 9,
+            ..current.clone()
+        };
+        let _ = pub_store
+            .compare_and_set(&current, &next)
+            .await
+            .expect("mutate state");
+
+        let err = session
+            .publish(1, Some(100))
+            .await
+            .expect_err("publish should reject head mismatch");
+
+        assert!(matches!(err, Error::PublicationConflict));
+    });
+}
+
+#[test]
+fn same_session_reacquire_after_expiry_keeps_session() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+
+        let first_continuity = authority
+            .begin_write(Some(100))
+            .await
+            .expect("first acquire")
+            .state()
+            .continuity;
+        assert_eq!(first_continuity, WriteContinuity::Fresh);
+        let first_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+        let second_continuity = authority
+            .begin_write(Some(150))
+            .await
+            .expect("reacquire after expiry")
+            .state()
+            .continuity;
+        assert_eq!(second_continuity, WriteContinuity::Reacquired);
+        let second_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+
+        assert_eq!(second_session, first_session);
+    });
+}
+
+#[test]
+fn same_session_acquire_before_expiry_keeps_session() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let authority = LeaseAuthority::new(publication_store(&store), 7, 50, 0);
+
+        let first_continuity = authority
+            .begin_write(Some(100))
+            .await
+            .expect("first acquire")
+            .state()
+            .continuity;
+        assert_eq!(first_continuity, WriteContinuity::Fresh);
+        let first_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+        let second_continuity = authority
+            .begin_write(Some(140))
+            .await
+            .expect("reuse before expiry")
+            .state()
+            .continuity;
+        assert_eq!(second_continuity, WriteContinuity::Continuous);
+        let second_session = publication_store(&store)
+            .load()
+            .await
+            .expect("load")
+            .expect("state")
+            .session_id;
+
+        assert_eq!(second_session, first_session);
+    });
+}
+
+#[test]
+fn lease_blocks_grants_exact_n_blocks() {
+    block_on(async {
+        let store = InMemoryMetaStore::default();
+        let first = LeaseAuthority::new(publication_store(&store), 7, 10, 0);
+        let second = LeaseAuthority::new(publication_store(&store), 8, 10, 0);
+
+        let _ = first.begin_write(Some(100)).await.expect("bootstrap");
+        let err = second
+            .begin_write(Some(109))
+            .await
+            .expect_err("should be still fresh at last valid block");
+        assert!(matches!(err, Error::LeaseStillFresh));
+
+        second
+            .begin_write(Some(110))
+            .await
+            .expect("takeover at first expired block");
+        assert_eq!(
+            publication_store(&store)
+                .load()
+                .await
+                .expect("load")
+                .expect("state")
+                .owner_id,
+            8
+        );
     });
 }
 
