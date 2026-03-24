@@ -10,7 +10,7 @@ use crate::ingest::bitmap_pages;
 use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::types::BlockTraceHeader;
 use crate::traces::view::BlockTraceIter;
 use alloy_rlp::{Header, PayloadView};

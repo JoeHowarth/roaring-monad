@@ -16,7 +16,6 @@ use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::ScannableTableSpec;
-use finalized_history_query::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use finalized_history_query::logs::table_specs::{
     BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, LogDirByBlockSpec,
 };
@@ -34,6 +33,8 @@ use finalized_history_query::{Error, WriteAuthority, WriteContinuity, WriteSessi
 use futures::executor::block_on;
 
 use helpers::*;
+
+const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 struct BootstrapRaceStore {
     state: Mutex<Option<PublicationState>>,

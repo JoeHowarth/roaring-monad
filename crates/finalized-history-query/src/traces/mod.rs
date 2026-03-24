@@ -1,7 +1,6 @@
 pub(crate) mod codec;
 pub mod filter;
 pub(crate) mod ingest;
-pub mod keys;
 pub(crate) mod materialize;
 pub(crate) mod query;
 pub mod table_specs;
@@ -22,11 +21,12 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
     persist_trace_artifacts, persist_trace_dir_by_block, persist_trace_stream_fragments,
 };
-use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
 pub use types::{Trace, TraceSequencingState};
+
+pub(crate) const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TracesFamily;

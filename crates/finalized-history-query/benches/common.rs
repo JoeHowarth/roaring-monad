@@ -11,6 +11,7 @@ use finalized_history_query::api::{
 use finalized_history_query::config::Config;
 use finalized_history_query::core::directory_resolver::ResolvedPrimaryLocation;
 use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
+use finalized_history_query::core::layout::{DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID};
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::core::state::{
     BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
@@ -18,7 +19,6 @@ use finalized_history_query::core::state::{
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::table_specs::PointTableSpec;
 use finalized_history_query::logs::codec::validate_log;
-use finalized_history_query::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID};
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
     BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
@@ -694,7 +694,7 @@ pub fn seed_materialized_blocks(
                 if bucket_start == last_bucket_start {
                     break;
                 }
-                bucket_start = bucket_start.saturating_add(LOG_DIRECTORY_BUCKET_SIZE);
+                bucket_start = bucket_start.saturating_add(DIRECTORY_BUCKET_SIZE);
             }
         }
 
@@ -778,7 +778,7 @@ async fn put_meta_record(
 }
 
 pub fn spanning_bucket_blocks() -> Vec<SeededLogBlock> {
-    let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
+    let first_log_id = DIRECTORY_BUCKET_SIZE - 3;
     vec![
         SeededLogBlock {
             block_num: 700,

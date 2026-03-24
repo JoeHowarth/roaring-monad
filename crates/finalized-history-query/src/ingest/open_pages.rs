@@ -5,10 +5,10 @@ use crate::core::layout::read_u64_be;
 use crate::error::{Error, Result};
 use crate::ingest::bitmap_pages;
 use crate::kernel::sharded_streams::page_start_local;
-use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{OpenBitmapPageTable, Tables};
-use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {

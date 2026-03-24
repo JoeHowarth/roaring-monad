@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use finalized_history_query::api::FinalizedHistoryService;
+use finalized_history_query::core::layout::{DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID};
 use finalized_history_query::core::state::{
     BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
 };
@@ -12,9 +13,6 @@ use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::{
     PointTableSpec, ScannableTableSpec, page_stream_key, stream_page_key, u64_key,
-};
-use finalized_history_query::logs::keys::{
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
@@ -29,6 +27,8 @@ use futures::executor::block_on;
 use roaring::RoaringBitmap;
 
 use helpers::*;
+
+const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 fn shared_block_record(
     block_hash: [u8; 32],
@@ -181,7 +181,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
             shared_block_record(
                 [1; 32],
                 [0; 32],
-                Some((LOG_DIRECTORY_SUB_BUCKET_SIZE - 2, 0)),
+                Some((DIRECTORY_SUB_BUCKET_SIZE - 2, 0)),
                 Some((0, 0)),
             )
             .encode(),

@@ -7,10 +7,10 @@ use crate::ingest::bitmap_pages;
 use crate::ingest::open_pages::{OpenBitmapPage, collect_newly_sealed_open_bitmap_pages};
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::kernel::sharded_streams::parse_stream_shard;
+use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::ingest::{
     persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
 };
-use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::types::{LogSequencingState, StreamBitmapMeta};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};

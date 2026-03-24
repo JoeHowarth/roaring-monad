@@ -10,7 +10,7 @@ use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::sharded_streams::sharded_stream_id;
-use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::types::BlockLogHeader;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -111,13 +111,11 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
 mod tests {
     use crate::config::Config;
     use crate::core::ids::LogId;
+    use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
     use crate::family::FinalizedBlock;
     use crate::kernel::codec::StorageCodec;
     use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
     use crate::logs::codec::validate_log;
-    use crate::logs::keys::{
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
-    };
     use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
         BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
@@ -136,6 +134,7 @@ mod tests {
     use crate::ingest::bitmap_pages;
     use crate::ingest::primary_dir::compact_sealed_primary_directory;
     use crate::kernel::sharded_streams::page_start_local;
+    use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
     use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {
@@ -204,7 +203,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let first_log_id = crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let first_log_id = DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
@@ -231,7 +230,7 @@ mod tests {
             let fragment1 = meta
                 .scan_get(
                     LogDirByBlockSpec::TABLE,
-                    &LogDirByBlockSpec::partition(crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE),
+                    &LogDirByBlockSpec::partition(DIRECTORY_SUB_BUCKET_SIZE),
                     &LogDirByBlockSpec::clustering(700),
                 )
                 .await
@@ -370,8 +369,8 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
-            let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
+            let first_log_id = DIRECTORY_BUCKET_SIZE - DIRECTORY_SUB_BUCKET_SIZE - 2;
+            let count = (DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await

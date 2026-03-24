@@ -18,7 +18,6 @@ use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
-use finalized_history_query::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use finalized_history_query::logs::table_specs::{BitmapByBlockSpec, BitmapPageMetaSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::status::service_status;
@@ -36,6 +35,8 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use futures::executor::block_on;
+
+const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 #[derive(Clone, Copy)]
 enum FailurePhase {
