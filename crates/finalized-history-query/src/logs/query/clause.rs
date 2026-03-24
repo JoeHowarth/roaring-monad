@@ -221,7 +221,7 @@ impl StreamPlanner for LogsStreamPlanner {
         page_start: u32,
     ) -> Result<Vec<bytes::Bytes>> {
         tables
-            .bitmap_by_block()
+            .log_streams()
             .load_page_fragments(stream_id, page_start)
             .await
     }

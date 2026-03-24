@@ -199,7 +199,7 @@ impl StreamPlanner for TracesStreamPlanner {
         page_start: u32,
     ) -> Result<Vec<bytes::Bytes>> {
         tables
-            .trace_bitmap_by_block()
+            .trace_streams()
             .load_page_fragments(stream_id, page_start)
             .await
     }

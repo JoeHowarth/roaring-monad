@@ -35,8 +35,8 @@ pub(in crate::traces) async fn load_trace_bitmap_page_meta<M: MetaStore, B: Blob
     page_start: u32,
 ) -> Result<Option<crate::traces::types::StreamBitmapMeta>> {
     tables
-        .trace_bitmap_page_meta()
-        .get(stream, page_start)
+        .trace_streams()
+        .get_page_meta(stream, page_start)
         .await
 }
 
@@ -46,8 +46,8 @@ async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
     page_start: u32,
 ) -> Result<Option<Bytes>> {
     tables
-        .trace_bitmap_page_blobs()
-        .get_for_page(stream, page_start)
+        .trace_streams()
+        .get_page_blob(stream, page_start)
         .await
 }
 
@@ -101,7 +101,7 @@ impl StreamBitmapLoader for TracesBitmapLoader {
         page_start: u32,
     ) -> Result<Vec<Bytes>> {
         tables
-            .trace_bitmap_by_block()
+            .trace_streams()
             .load_page_fragments(stream, page_start)
             .await
     }

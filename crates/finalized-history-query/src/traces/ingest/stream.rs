@@ -64,15 +64,10 @@ pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
+        tables.trace_streams(),
         block.block_num,
         grouped_values,
         TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-        |stream, page_start, block_num, bytes| async move {
-            tables
-                .trace_bitmap_by_block()
-                .put(&stream, page_start, block_num, bytes)
-                .await
-        },
     )
     .await
 }
@@ -84,6 +79,7 @@ pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
     next_trace_id: u64,
 ) -> Result<()> {
     bitmap_pages::compact_sealed_touched_stream_pages(
+        tables.trace_streams(),
         touched_pages,
         from_next_trace_id,
         next_trace_id,
@@ -91,8 +87,11 @@ pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
             page_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
             local_id_mask: TRACE_LOCAL_ID_MASK,
         },
-        |stream_id, page_start| async move {
-            compact_trace_stream_page(tables, &stream_id, page_start).await
+        |count, min_local, max_local| StreamBitmapMeta {
+            block_num: 0,
+            count,
+            min_local,
+            max_local,
         },
     )
     .await
@@ -104,26 +103,9 @@ pub async fn compact_trace_stream_page<M: MetaStore, B: BlobStore>(
     page_start: u32,
 ) -> Result<bool> {
     bitmap_pages::compact_stream_page(
+        tables.trace_streams(),
         stream_id,
         page_start,
-        |stream, page_start| async move {
-            tables
-                .trace_bitmap_by_block()
-                .load_page_fragments(&stream, page_start)
-                .await
-        },
-        |stream, page_start, bytes| async move {
-            tables
-                .trace_bitmap_page_blobs()
-                .put(&stream, page_start, bytes)
-                .await
-        },
-        |stream, page_start, meta| async move {
-            tables
-                .trace_bitmap_page_meta()
-                .put(&stream, page_start, &meta)
-                .await
-        },
         |count, min_local, max_local| StreamBitmapMeta {
             block_num: 0,
             count,

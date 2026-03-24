@@ -35,7 +35,7 @@ pub(in crate::logs) async fn load_bitmap_page_meta<M: MetaStore, B: BlobStore>(
     stream: &str,
     page_start: u32,
 ) -> Result<Option<crate::logs::types::StreamBitmapMeta>> {
-    tables.bitmap_page_meta().get(stream, page_start).await
+    tables.log_streams().get_page_meta(stream, page_start).await
 }
 
 async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
@@ -43,10 +43,7 @@ async fn load_bitmap_page_blob<M: MetaStore, B: BlobStore>(
     stream: &str,
     page_start: u32,
 ) -> Result<Option<Bytes>> {
-    tables
-        .bitmap_page_blobs()
-        .get_for_page(stream, page_start)
-        .await
+    tables.log_streams().get_page_blob(stream, page_start).await
 }
 
 struct LogsBitmapLoader;
@@ -99,7 +96,7 @@ impl StreamBitmapLoader for LogsBitmapLoader {
         page_start: u32,
     ) -> Result<Vec<Bytes>> {
         tables
-            .bitmap_by_block()
+            .log_streams()
             .load_page_fragments(stream, page_start)
             .await
     }
@@ -510,7 +507,7 @@ mod tests {
 
             let tables = Tables::without_cache(meta, blob);
             let fragments = tables
-                .bitmap_by_block()
+                .log_streams()
                 .load_page_fragments(stream, page_start)
                 .await
                 .expect("load page fragments");

@@ -13,13 +13,14 @@ use crate::config::Config;
 use crate::core::ids::TraceId;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
+use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
-    compact_newly_sealed_trace_directory, compact_sealed_trace_stream_pages,
-    persist_trace_artifacts, persist_trace_block_record, persist_trace_dir_by_block,
-    persist_trace_stream_fragments,
+    compact_sealed_trace_stream_pages, persist_trace_artifacts, persist_trace_block_record,
+    persist_trace_dir_by_block, persist_trace_stream_fragments,
 };
+use crate::traces::keys::TRACE_PRIMARY_DIR_LAYOUT;
 
 pub use filter::TraceFilter;
 pub use types::{Trace, TraceSequencingState, TraceStartupState};
@@ -70,8 +71,13 @@ impl TracesFamily {
 
         let touched_pages =
             persist_trace_stream_fragments(runtime.tables(), block, from_next_trace_id).await?;
-        compact_newly_sealed_trace_directory(runtime.tables(), from_next_trace_id, next_trace_id)
-            .await?;
+        compact_newly_sealed_primary_directory(
+            runtime.tables().trace_dir(),
+            from_next_trace_id,
+            next_trace_id,
+            TRACE_PRIMARY_DIR_LAYOUT,
+        )
+        .await?;
         compact_sealed_trace_stream_pages(
             runtime.tables(),
             &touched_pages,

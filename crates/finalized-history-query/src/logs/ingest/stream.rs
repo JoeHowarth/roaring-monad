@@ -58,15 +58,10 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
+        tables.log_streams(),
         block.block_num,
         grouped_values,
         STREAM_PAGE_LOCAL_ID_SPAN,
-        |stream, page_start, block_num, bytes| async move {
-            tables
-                .bitmap_by_block()
-                .put(&stream, page_start, block_num, bytes)
-                .await
-        },
     )
     .await
 }
@@ -92,26 +87,9 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     page_start: u32,
 ) -> Result<bool> {
     bitmap_pages::compact_stream_page(
+        tables.log_streams(),
         stream_id,
         page_start,
-        |stream, page_start| async move {
-            tables
-                .bitmap_by_block()
-                .load_page_fragments(&stream, page_start)
-                .await
-        },
-        |stream, page_start, bytes| async move {
-            tables
-                .bitmap_page_blobs()
-                .put(&stream, page_start, bytes)
-                .await
-        },
-        |stream, page_start, meta| async move {
-            tables
-                .bitmap_page_meta()
-                .put(&stream, page_start, &meta)
-                .await
-        },
         |count, min_local, max_local| StreamBitmapMeta {
             block_num: 0,
             count,

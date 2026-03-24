@@ -1,4 +1,5 @@
 use crate::core::layout::LOCAL_ID_BITS;
+use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
@@ -72,3 +73,14 @@ pub fn trace_local_range_for_shard(
     };
     (local_from, local_to)
 }
+
+pub(super) const TRACE_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout =
+    PrimaryDirCompactionLayout {
+        sub_bucket_span: TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+        bucket_span: TRACE_DIRECTORY_BUCKET_SIZE,
+        sub_bucket_start: crate::traces::keys::trace_sub_bucket_start,
+        bucket_start: crate::traces::keys::trace_bucket_start,
+        missing_sentinel_error: "trace directory bucket missing sentinel",
+        inconsistent_bucket_error: "inconsistent trace directory bucket boundary across sub-buckets",
+        missing_bucket_start_error: "missing trace directory bucket start block",
+    };

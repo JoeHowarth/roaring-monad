@@ -36,6 +36,12 @@ pub struct PrimaryDirTables<M: MetaStore> {
     fragments: PrimaryDirFragmentTable<M>,
 }
 
+pub struct StreamTables<M: MetaStore, B: BlobStore, T> {
+    fragments: StreamFragmentsTable<M>,
+    page_meta: StreamPageMetaTable<M, T>,
+    page_blobs: StreamPageBlobTable<B>,
+}
+
 #[derive(Clone, Copy)]
 pub struct PrimaryDirFragmentLayout {
     pub sub_bucket_start: fn(u64) -> u64,
@@ -132,14 +138,10 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     block_trace_headers: BlockTraceHeaderTable<M>,
     log_dir: PrimaryDirTables<M>,
     trace_dir: PrimaryDirTables<M>,
+    log_streams: StreamTables<M, B, StreamBitmapMeta>,
+    trace_streams: StreamTables<M, B, TraceStreamBitmapMeta>,
     point_log_payloads: PointLogPayloadTable<M, B>,
     block_trace_blobs: BlockTraceBlobTable<M, B>,
-    bitmap_by_block: BitmapByBlockTable<M>,
-    bitmap_page_meta: BitmapPageMetaTable<M>,
-    bitmap_page_blobs: BitmapPageBlobTable<B>,
-    trace_bitmap_by_block: TraceBitmapByBlockTable<M>,
-    trace_bitmap_page_meta: TraceBitmapPageMetaTable<M>,
-    trace_bitmap_page_blobs: TraceBitmapPageBlobTable<B>,
     open_bitmap_pages: OpenBitmapPageTable<M>,
     trace_payloads: TracePayloadTable<M, B>,
 }
@@ -206,6 +208,40 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                     TraceDirByBlockSpec::clustering,
                 ),
             },
+            log_streams: StreamTables {
+                fragments: StreamFragmentsTable::new(
+                    meta_store.scannable_table(BitmapByBlockSpec::TABLE),
+                    BitmapByBlockSpec::partition,
+                    BitmapByBlockSpec::clustering,
+                ),
+                page_meta: StreamPageMetaTable::new(
+                    meta_store.table(BitmapPageMetaSpec::TABLE),
+                    cache_for(config.bitmap_page_meta.max_bytes),
+                    BitmapPageMetaSpec::key,
+                ),
+                page_blobs: StreamPageBlobTable::new(
+                    blob_store.table(BitmapPageBlobSpec::TABLE),
+                    cache_for(config.bitmap_page_blobs.max_bytes),
+                    BitmapPageBlobSpec::key,
+                ),
+            },
+            trace_streams: StreamTables {
+                fragments: StreamFragmentsTable::new(
+                    meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
+                    TraceBitmapByBlockSpec::partition,
+                    TraceBitmapByBlockSpec::clustering,
+                ),
+                page_meta: StreamPageMetaTable::new(
+                    meta_store.table(TraceBitmapPageMetaSpec::TABLE),
+                    no_cache(),
+                    TraceBitmapPageMetaSpec::key,
+                ),
+                page_blobs: StreamPageBlobTable::new(
+                    blob_store.table(TraceBitmapPageBlobSpec::TABLE),
+                    no_cache(),
+                    TraceBitmapPageBlobSpec::key,
+                ),
+            },
             point_log_payloads: PointLogPayloadTable {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: cache_for(config.point_log_payloads.max_bytes),
@@ -215,28 +251,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
                 block_trace_headers: block_trace_headers.clone(),
             },
-            bitmap_by_block: BitmapByBlockTable::new(
-                meta_store.scannable_table(BitmapByBlockSpec::TABLE),
-            ),
-            bitmap_page_meta: BitmapPageMetaTable::new(
-                meta_store.table(BitmapPageMetaSpec::TABLE),
-                cache_for(config.bitmap_page_meta.max_bytes),
-            ),
-            bitmap_page_blobs: BitmapPageBlobTable::new(
-                blob_store.table(BitmapPageBlobSpec::TABLE),
-                cache_for(config.bitmap_page_blobs.max_bytes),
-            ),
-            trace_bitmap_by_block: TraceBitmapByBlockTable::new(
-                meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
-            ),
-            trace_bitmap_page_meta: TraceBitmapPageMetaTable::new(
-                meta_store.table(TraceBitmapPageMetaSpec::TABLE),
-                no_cache(),
-            ),
-            trace_bitmap_page_blobs: TraceBitmapPageBlobTable::new(
-                blob_store.table(TraceBitmapPageBlobSpec::TABLE),
-                no_cache(),
-            ),
             open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
             ),
@@ -283,32 +297,16 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
         &self.point_log_payloads
     }
 
+    pub fn log_streams(&self) -> &StreamTables<M, B, StreamBitmapMeta> {
+        &self.log_streams
+    }
+
+    pub fn trace_streams(&self) -> &StreamTables<M, B, TraceStreamBitmapMeta> {
+        &self.trace_streams
+    }
+
     pub fn block_trace_blobs(&self) -> &BlockTraceBlobTable<M, B> {
         &self.block_trace_blobs
-    }
-
-    pub fn bitmap_by_block(&self) -> &BitmapByBlockTable<M> {
-        &self.bitmap_by_block
-    }
-
-    pub fn bitmap_page_meta(&self) -> &BitmapPageMetaTable<M> {
-        &self.bitmap_page_meta
-    }
-
-    pub fn bitmap_page_blobs(&self) -> &BitmapPageBlobTable<B> {
-        &self.bitmap_page_blobs
-    }
-
-    pub fn trace_bitmap_by_block(&self) -> &TraceBitmapByBlockTable<M> {
-        &self.trace_bitmap_by_block
-    }
-
-    pub fn trace_bitmap_page_meta(&self) -> &TraceBitmapPageMetaTable<M> {
-        &self.trace_bitmap_page_meta
-    }
-
-    pub fn trace_bitmap_page_blobs(&self) -> &TraceBitmapPageBlobTable<B> {
-        &self.trace_bitmap_page_blobs
     }
 
     pub fn open_bitmap_pages(&self) -> &OpenBitmapPageTable<M> {
@@ -326,8 +324,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             log_dir_buckets: self.log_dir.buckets.metrics(),
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
             point_log_payloads: self.point_log_payloads.cache.metrics_snapshot(),
-            bitmap_page_meta: self.bitmap_page_meta.metrics(),
-            bitmap_page_blobs: self.bitmap_page_blobs.metrics(),
+            bitmap_page_meta: self.log_streams.page_meta.metrics(),
+            bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
         }
     }
 }
@@ -536,20 +534,28 @@ impl<M: MetaStore> PrimaryDirFragmentTable<M> {
     }
 }
 
-pub struct BitmapByBlockTable<M: MetaStore> {
+pub struct StreamFragmentsTable<M: MetaStore> {
     inner: ScannableFragmentTable<M>,
+    partition: fn(&str, u32) -> Vec<u8>,
+    clustering: fn(u64) -> Vec<u8>,
 }
 
-impl<M: MetaStore> BitmapByBlockTable<M> {
-    fn new(table: ScannableKvTable<M>) -> Self {
+impl<M: MetaStore> StreamFragmentsTable<M> {
+    fn new(
+        table: ScannableKvTable<M>,
+        partition: fn(&str, u32) -> Vec<u8>,
+        clustering: fn(u64) -> Vec<u8>,
+    ) -> Self {
         Self {
             inner: ScannableFragmentTable::new(table),
+            partition,
+            clustering,
         }
     }
 
     pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
         self.inner
-            .load_partition_values(&BitmapByBlockSpec::partition(stream, page_start))
+            .load_partition_values(&(self.partition)(stream, page_start))
             .await
     }
 
@@ -560,110 +566,65 @@ impl<M: MetaStore> BitmapByBlockTable<M> {
         block_num: u64,
         bytes: Bytes,
     ) -> Result<()> {
-        let partition = BitmapByBlockSpec::partition(stream, page_start);
-        let clustering = BitmapByBlockSpec::clustering(block_num);
+        let partition = (self.partition)(stream, page_start);
+        let clustering = (self.clustering)(block_num);
         self.inner.put_value(&partition, &clustering, bytes).await
     }
 }
 
-pub struct TraceBitmapByBlockTable<M: MetaStore> {
-    inner: ScannableFragmentTable<M>,
+pub struct StreamPageMetaTable<M: MetaStore, T> {
+    inner: CachedPointTable<M, T>,
+    key: fn(&str, u32) -> Vec<u8>,
 }
 
-impl<M: MetaStore> TraceBitmapByBlockTable<M> {
-    fn new(table: ScannableKvTable<M>) -> Self {
+impl<M: MetaStore, T: StorageCodec> StreamPageMetaTable<M, T> {
+    fn new(
+        table: KvTable<M>,
+        cache: HashMapTableBytesCache,
+        key: fn(&str, u32) -> Vec<u8>,
+    ) -> Self {
         Self {
-            inner: ScannableFragmentTable::new(table),
+            inner: CachedPointTable::new(table, cache),
+            key,
         }
     }
 
-    pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
+    pub async fn get(&self, stream: &str, page_start: u32) -> Result<Option<T>> {
         self.inner
-            .load_partition_values(&TraceBitmapByBlockSpec::partition(stream, page_start))
+            .get_decoded(&(self.key)(stream, page_start))
             .await
     }
 
-    pub async fn put(
-        &self,
-        stream: &str,
-        page_start: u32,
-        block_num: u64,
-        bytes: Bytes,
-    ) -> Result<()> {
-        let partition = TraceBitmapByBlockSpec::partition(stream, page_start);
-        let clustering = TraceBitmapByBlockSpec::clustering(block_num);
-        self.inner.put_value(&partition, &clustering, bytes).await
-    }
-}
-
-pub struct BitmapPageMetaTable<M: MetaStore>(CachedPointTable<M, StreamBitmapMeta>);
-
-impl<M: MetaStore> BitmapPageMetaTable<M> {
-    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
-        Self(CachedPointTable::new(table, cache))
-    }
-
-    pub async fn get(&self, stream: &str, page_start: u32) -> Result<Option<StreamBitmapMeta>> {
-        self.0
-            .get_decoded(&BitmapPageMetaSpec::key(stream, page_start))
-            .await
-    }
-
-    pub async fn put(&self, stream: &str, page_start: u32, meta: &StreamBitmapMeta) -> Result<()> {
-        self.0
-            .put_encoded(&BitmapPageMetaSpec::key(stream, page_start), meta)
+    pub async fn put(&self, stream: &str, page_start: u32, meta: &T) -> Result<()> {
+        self.inner
+            .put_encoded(&(self.key)(stream, page_start), meta)
             .await
     }
 
     fn metrics(&self) -> TableCacheMetrics {
-        self.0.metrics()
+        self.inner.metrics()
     }
 }
 
-pub struct TraceBitmapPageMetaTable<M: MetaStore>(CachedPointTable<M, TraceStreamBitmapMeta>);
-
-impl<M: MetaStore> TraceBitmapPageMetaTable<M> {
-    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
-        Self(CachedPointTable::new(table, cache))
-    }
-
-    pub async fn get(
-        &self,
-        stream: &str,
-        page_start: u32,
-    ) -> Result<Option<TraceStreamBitmapMeta>> {
-        self.0
-            .get_decoded(&TraceBitmapPageMetaSpec::key(stream, page_start))
-            .await
-    }
-
-    pub async fn put(
-        &self,
-        stream: &str,
-        page_start: u32,
-        meta: &TraceStreamBitmapMeta,
-    ) -> Result<()> {
-        self.0
-            .put_encoded(&TraceBitmapPageMetaSpec::key(stream, page_start), meta)
-            .await
-    }
-}
-
-pub struct BitmapPageBlobTable<B: BlobStore> {
+pub struct StreamPageBlobTable<B: BlobStore> {
     inner: CachedBlobTable<B>,
+    key: fn(&str, u32) -> Vec<u8>,
 }
 
-impl<B: BlobStore> BitmapPageBlobTable<B> {
-    fn new(table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
+impl<B: BlobStore> StreamPageBlobTable<B> {
+    fn new(
+        table: BlobTable<B>,
+        cache: HashMapTableBytesCache,
+        key: fn(&str, u32) -> Vec<u8>,
+    ) -> Self {
         Self {
             inner: CachedBlobTable::new(table, cache),
+            key,
         }
     }
 
     pub async fn get_for_page(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
-        self.inner
-            .get_by_key(&BitmapPageBlobSpec::key(stream, page_start))
-            .await
+        self.inner.get_by_key(&(self.key)(stream, page_start)).await
     }
 
     pub async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {
@@ -672,7 +633,7 @@ impl<B: BlobStore> BitmapPageBlobTable<B> {
 
     pub async fn put(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
         self.inner
-            .put_by_key(&BitmapPageBlobSpec::key(stream, page_start), bytes)
+            .put_by_key(&(self.key)(stream, page_start), bytes)
             .await
     }
 
@@ -681,31 +642,37 @@ impl<B: BlobStore> BitmapPageBlobTable<B> {
     }
 }
 
-pub struct TraceBitmapPageBlobTable<B: BlobStore> {
-    inner: CachedBlobTable<B>,
-}
-
-impl<B: BlobStore> TraceBitmapPageBlobTable<B> {
-    fn new(table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
-        Self {
-            inner: CachedBlobTable::new(table, cache),
-        }
+impl<M: MetaStore, B: BlobStore, T: StorageCodec> StreamTables<M, B, T> {
+    pub async fn load_page_fragments(&self, stream: &str, page_start: u32) -> Result<Vec<Bytes>> {
+        self.fragments.load_page_fragments(stream, page_start).await
     }
 
-    pub async fn get_for_page(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
-        self.inner
-            .get_by_key(&TraceBitmapPageBlobSpec::key(stream, page_start))
+    pub async fn put_fragment(
+        &self,
+        stream: &str,
+        page_start: u32,
+        block_num: u64,
+        bytes: Bytes,
+    ) -> Result<()> {
+        self.fragments
+            .put(stream, page_start, block_num, bytes)
             .await
     }
 
-    pub async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        self.inner.get_by_key(key).await
+    pub async fn get_page_meta(&self, stream: &str, page_start: u32) -> Result<Option<T>> {
+        self.page_meta.get(stream, page_start).await
     }
 
-    pub async fn put(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
-        self.inner
-            .put_by_key(&TraceBitmapPageBlobSpec::key(stream, page_start), bytes)
-            .await
+    pub async fn put_page_meta(&self, stream: &str, page_start: u32, meta: &T) -> Result<()> {
+        self.page_meta.put(stream, page_start, meta).await
+    }
+
+    pub async fn get_page_blob(&self, stream: &str, page_start: u32) -> Result<Option<Bytes>> {
+        self.page_blobs.get_for_page(stream, page_start).await
+    }
+
+    pub async fn put_page_blob(&self, stream: &str, page_start: u32, bytes: Bytes) -> Result<()> {
+        self.page_blobs.put(stream, page_start, bytes).await
     }
 }
 
