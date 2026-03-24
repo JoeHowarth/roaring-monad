@@ -96,22 +96,3 @@ pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
     )
     .await
 }
-
-pub async fn compact_trace_stream_page<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream_id: &str,
-    page_start: u32,
-) -> Result<bool> {
-    bitmap_pages::compact_stream_page(
-        tables.trace_streams(),
-        stream_id,
-        page_start,
-        |count, min_local, max_local| StreamBitmapMeta {
-            block_num: 0,
-            count,
-            min_local,
-            max_local,
-        },
-    )
-    .await
-}
