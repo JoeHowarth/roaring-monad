@@ -1,36 +1,138 @@
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+
 use roaring::RoaringBitmap;
 
+use crate::core::ids::{LogId, TraceId, compose_log_id, compose_trace_id};
+use crate::core::layout::MAX_LOCAL_ID;
 use crate::core::page::{QueryPage, QueryPageMeta};
-use crate::core::range::ResolvedBlockRange;
+use crate::core::range::{ResolvedBlockRange, load_block_ref};
 use crate::core::refs::BlockRef;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 use super::planner::PreparedClause;
 use super::types::PrimaryId;
 
+pub type ShardBitmapSet = BTreeMap<u64, RoaringBitmap>;
+
+pub trait QueryId: Copy + Ord {
+    fn new(raw: u64) -> Self;
+    fn get(self) -> u64;
+    fn shard_raw(self) -> u64;
+    fn local_raw(self) -> u32;
+    fn compose(shard_raw: u64, local_raw: u32) -> Self;
+}
+
+impl QueryId for LogId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+
+    fn shard_raw(self) -> u64 {
+        self.shard().get()
+    }
+
+    fn local_raw(self) -> u32 {
+        self.local().get()
+    }
+
+    fn compose(shard_raw: u64, local_raw: u32) -> Self {
+        compose_log_id(
+            crate::core::ids::LogShard::new(shard_raw).expect("query shard must fit LogShard"),
+            crate::core::ids::LogLocalId::new(local_raw)
+                .expect("query local id must fit LogLocalId"),
+        )
+    }
+}
+
+impl QueryId for TraceId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+
+    fn shard_raw(self) -> u64 {
+        self.shard().get()
+    }
+
+    fn local_raw(self) -> u32 {
+        self.local().get()
+    }
+
+    fn compose(shard_raw: u64, local_raw: u32) -> Self {
+        compose_trace_id(
+            crate::core::ids::TraceShard::new(shard_raw).expect("query shard must fit TraceShard"),
+            crate::core::ids::TraceLocalId::new(local_raw)
+                .expect("query local id must fit TraceLocalId"),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryIdRange<I> {
+    pub start: I,
+    pub end_inclusive: I,
+}
+
+impl<I: QueryId> QueryIdRange<I> {
+    pub fn new(start: I, end_inclusive: I) -> Option<Self> {
+        (start <= end_inclusive).then_some(Self {
+            start,
+            end_inclusive,
+        })
+    }
+
+    pub fn contains(&self, id: I) -> bool {
+        self.start <= id && id <= self.end_inclusive
+    }
+
+    pub fn resume_strictly_after(&self, id: I) -> Option<Self> {
+        let next_start = id.get().checked_add(1).map(I::new)?;
+        Self::new(next_start, self.end_inclusive)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MatchedQueryItem<I, T> {
+pub struct MatchedQueryItem<I, T> {
     pub id: I,
     pub item: T,
     pub block_ref: BlockRef,
 }
 
-pub(crate) trait CandidateLocation: Copy {
+pub trait CandidateLocation: Copy {
     fn block_num(self) -> u64;
     fn local_ordinal(self) -> usize;
 }
 
 #[allow(async_fn_in_trait)]
-pub(crate) trait QueryMaterializer {
-    type Id: PrimaryId;
+pub trait QueryMaterializer {
+    type Id: QueryId;
     type Location: CandidateLocation;
     type Item;
     type Filter;
     type Output;
 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>>;
+    async fn load_by_id(&mut self, id: Self::Id) -> Result<Option<Self::Item>> {
+        let Some(location) = self.resolve_id(id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .load_run(&[(id, location)])
+            .await?
+            .into_iter()
+            .next()
+            .map(|(_, item)| item))
+    }
     async fn load_run(
         &mut self,
         run: &[(Self::Id, Self::Location)],
@@ -38,6 +140,80 @@ pub(crate) trait QueryMaterializer {
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef>;
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool;
     fn into_output(item: Self::Item) -> Self::Output;
+}
+
+pub async fn execute_candidates<I, M>(
+    clause_sets: Vec<ShardBitmapSet>,
+    id_range: QueryIdRange<I>,
+    filter: &M::Filter,
+    materializer: &mut M,
+    take: usize,
+) -> Result<Vec<MatchedQueryItem<I, M::Item>>>
+where
+    I: QueryId,
+    M: QueryMaterializer<Id = I>,
+{
+    let mut out = Vec::new();
+
+    if clause_sets.is_empty() {
+        for raw_id in id_range.start.get()..=id_range.end_inclusive.get() {
+            let id = I::new(raw_id);
+            let Some(item) = materializer.load_by_id(id).await? else {
+                continue;
+            };
+            if !materializer.exact_match(&item, filter) {
+                continue;
+            }
+
+            let block_ref = materializer.block_ref_for(&item).await?;
+            out.push(MatchedQueryItem {
+                id,
+                item,
+                block_ref,
+            });
+            if out.len() >= take {
+                break;
+            }
+        }
+        return Ok(out);
+    }
+
+    for (shard_raw, bitmap) in intersect_sets(clause_sets, id_range) {
+        let mut locals = bitmap.into_iter().peekable();
+        while let Some(local_raw) = locals.next() {
+            let id = I::compose(shard_raw, local_raw);
+            let Some(location) = materializer.resolve_id(id).await? else {
+                continue;
+            };
+
+            let run = collect_candidate_chunk(
+                &mut locals,
+                shard_raw,
+                (id, location),
+                remaining_needed_for_chunk(take, out.len()),
+                materializer,
+            )
+            .await?;
+
+            for (run_id, item) in materializer.load_run(&run).await? {
+                if !materializer.exact_match(&item, filter) {
+                    continue;
+                }
+
+                let block_ref = materializer.block_ref_for(&item).await?;
+                out.push(MatchedQueryItem {
+                    id: run_id,
+                    item,
+                    block_ref,
+                });
+                if out.len() >= take {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 #[allow(async_fn_in_trait)]
@@ -125,6 +301,38 @@ pub(crate) fn build_page<M: QueryMaterializer>(
             next_resume_id,
         },
     }
+}
+
+pub async fn cached_block_ref_with_fallback<M, B, Fut>(
+    cache: &mut HashMap<u64, BlockRef>,
+    tables: &Tables<M, B>,
+    block_num: u64,
+    block_hash: [u8; 32],
+    fallback_parent_hash: Fut,
+) -> Result<BlockRef>
+where
+    M: MetaStore,
+    B: BlobStore,
+    Fut: Future<Output = Result<Option<[u8; 32]>>>,
+{
+    if let Some(block_ref) = cache.get(&block_num).copied() {
+        return Ok(block_ref);
+    }
+
+    let block_ref = if let Some(block_ref) = load_block_ref(tables, block_num).await? {
+        block_ref
+    } else {
+        let Some(parent_hash) = fallback_parent_hash.await? else {
+            return Err(Error::NotFound);
+        };
+        BlockRef {
+            number: block_num,
+            hash: block_hash,
+            parent_hash,
+        }
+    };
+    cache.insert(block_num, block_ref);
+    Ok(block_ref)
 }
 
 pub(crate) async fn execute_indexed_query<M, B, D, Q>(
@@ -260,6 +468,92 @@ where
         run.push((next_id, next_location));
     }
     Ok(run)
+}
+
+async fn collect_candidate_chunk<I, Iter, M>(
+    locals: &mut std::iter::Peekable<Iter>,
+    shard_raw: u64,
+    first: (I, M::Location),
+    max_len: usize,
+    materializer: &mut M,
+) -> Result<Vec<(I, M::Location)>>
+where
+    I: QueryId,
+    Iter: Iterator<Item = u32>,
+    M: QueryMaterializer<Id = I>,
+{
+    let target_len = max_len.max(1);
+    let mut run = vec![first];
+    while run.len() < target_len {
+        let Some(&next_local_raw) = locals.peek() else {
+            break;
+        };
+        let next_id = I::compose(shard_raw, next_local_raw);
+        let Some(next_location) = materializer.resolve_id(next_id).await? else {
+            let _ = locals.next();
+            continue;
+        };
+        let previous = run.last().expect("run must be non-empty").1;
+        if next_location.block_num() != previous.block_num()
+            || next_location.local_ordinal() != previous.local_ordinal() + 1
+        {
+            break;
+        }
+
+        let _ = locals.next();
+        run.push((next_id, next_location));
+    }
+    Ok(run)
+}
+
+fn intersect_sets<I: QueryId>(
+    sets: Vec<ShardBitmapSet>,
+    id_range: QueryIdRange<I>,
+) -> ShardBitmapSet {
+    let mut it = sets.into_iter();
+    let mut acc = it.next().unwrap_or_default();
+    for set in it {
+        acc.retain(|shard_raw, bitmap| {
+            let Some(other) = set.get(shard_raw) else {
+                return false;
+            };
+            *bitmap &= other;
+            !bitmap.is_empty()
+        });
+        if acc.is_empty() {
+            break;
+        }
+    }
+    clip_shard_bitmaps_to_range(acc, id_range)
+}
+
+fn clip_shard_bitmaps_to_range<I: QueryId>(
+    mut bitmaps: ShardBitmapSet,
+    id_range: QueryIdRange<I>,
+) -> ShardBitmapSet {
+    let from_shard = id_range.start.shard_raw();
+    let to_shard = id_range.end_inclusive.shard_raw();
+    bitmaps.retain(|shard_raw, bitmap| {
+        if *shard_raw < from_shard || *shard_raw > to_shard {
+            return false;
+        }
+        if from_shard == to_shard {
+            bitmap.remove_range(0..id_range.start.local_raw());
+            bitmap.remove_range(
+                id_range.end_inclusive.local_raw().saturating_add(1)
+                    ..MAX_LOCAL_ID.saturating_add(1),
+            );
+        } else if *shard_raw == from_shard {
+            bitmap.remove_range(0..id_range.start.local_raw());
+        } else if *shard_raw == to_shard {
+            bitmap.remove_range(
+                id_range.end_inclusive.local_raw().saturating_add(1)
+                    ..MAX_LOCAL_ID.saturating_add(1),
+            );
+        }
+        !bitmap.is_empty()
+    });
+    bitmaps
 }
 
 fn remaining_needed_for_chunk(take: usize, matched_len: usize) -> usize {

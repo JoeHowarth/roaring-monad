@@ -339,7 +339,7 @@ The crate intentionally does not implement:
 11. `src/core/refs.rs` — shared `BlockRef` type
 12. `src/core/state.rs` — shared state projections
 13. `src/core/range.rs` — block-range validation and clipping
-14. `src/logs/query/execution.rs` — matched-primary vocabulary and log execution seam
+14. `src/query/runner.rs` — shared matched-item vocabulary, public candidate runner, and indexed query runner
 15. `src/core/layout.rs` — shared finalized-history ID layout constants
 16. `src/store/publication.rs` — shared publication/session state and storage key
 17. `src/streams/bitmap_blob.rs` — roaring bitmap blob format

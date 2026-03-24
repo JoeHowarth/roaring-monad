@@ -1,7 +1,7 @@
 mod common;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use finalized_history_query::logs::query::execution::PrimaryMaterializer;
+use finalized_history_query::query::runner::QueryMaterializer;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use futures::executor::block_on;
@@ -36,7 +36,7 @@ fn bench_cache_shapes(c: &mut Criterion) {
         b.iter_batched(
             || materializer(&meta, &blob),
             |mut materializer| {
-                block_on(PrimaryMaterializer::load_by_id(
+                block_on(QueryMaterializer::load_by_id(
                     &mut materializer,
                     black_box(target_id),
                 ))
@@ -48,13 +48,13 @@ fn bench_cache_shapes(c: &mut Criterion) {
 
     group.bench_function("warm_bucket_cold_header", |b| {
         let mut materializer = materializer(&meta, &blob);
-        block_on(PrimaryMaterializer::load_by_id(
+        block_on(QueryMaterializer::load_by_id(
             &mut materializer,
             same_bucket_other_block_id,
         ))
         .expect("prime same bucket");
         b.iter(|| {
-            block_on(PrimaryMaterializer::load_by_id(
+            block_on(QueryMaterializer::load_by_id(
                 &mut materializer,
                 black_box(target_id),
             ))
@@ -64,13 +64,10 @@ fn bench_cache_shapes(c: &mut Criterion) {
 
     group.bench_function("warm_bucket_warm_header", |b| {
         let mut materializer = materializer(&meta, &blob);
-        block_on(PrimaryMaterializer::load_by_id(
-            &mut materializer,
-            target_id,
-        ))
-        .expect("prime same block");
+        block_on(QueryMaterializer::load_by_id(&mut materializer, target_id))
+            .expect("prime same block");
         b.iter(|| {
-            block_on(PrimaryMaterializer::load_by_id(
+            block_on(QueryMaterializer::load_by_id(
                 &mut materializer,
                 black_box(target_id),
             ))
@@ -109,7 +106,7 @@ fn bench_locality(c: &mut Criterion) {
             let mut materializer = materializer(&meta, &blob);
             b.iter(|| {
                 for &id in ids {
-                    block_on(PrimaryMaterializer::load_by_id(
+                    block_on(QueryMaterializer::load_by_id(
                         &mut materializer,
                         black_box(id),
                     ))
@@ -135,13 +132,13 @@ fn bench_bucket_boundaries_and_high_shard(c: &mut Criterion) {
 
     group.bench_function("block_spans_multiple_directory_buckets_warm", |b| {
         let mut materializer = materializer(&spanning_meta, &spanning_blob);
-        block_on(PrimaryMaterializer::load_by_id(
+        block_on(QueryMaterializer::load_by_id(
             &mut materializer,
             spanning_target,
         ))
         .expect("prime spanning block");
         b.iter(|| {
-            block_on(PrimaryMaterializer::load_by_id(
+            block_on(QueryMaterializer::load_by_id(
                 &mut materializer,
                 black_box(spanning_target),
             ))
@@ -158,7 +155,7 @@ fn bench_bucket_boundaries_and_high_shard(c: &mut Criterion) {
         b.iter_batched(
             || materializer(&high_meta, &high_blob),
             |mut materializer| {
-                block_on(PrimaryMaterializer::load_by_id(
+                block_on(QueryMaterializer::load_by_id(
                     &mut materializer,
                     black_box(high_target),
                 ))

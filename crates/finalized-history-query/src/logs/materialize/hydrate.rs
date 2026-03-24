@@ -3,9 +3,8 @@ use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
-use crate::logs::query::execution::PrimaryMaterializer;
 use crate::logs::state::load_log_block_record;
-use crate::query::runner::QueryMaterializer;
+use crate::query::runner::{QueryMaterializer, cached_block_ref_with_fallback};
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::LogMaterializer;
@@ -24,11 +23,18 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     }
 }
 
-impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, B> {
-    type Primary = LogRef;
+impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B> {
+    type Id = LogId;
+    type Location = super::ResolvedLogLocation;
+    type Item = LogRef;
     type Filter = LogFilter;
+    type Output = crate::logs::types::Log;
 
-    async fn load_by_id(&mut self, id: LogId) -> Result<Option<Self::Primary>> {
+    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
+        self.resolve_log_id(id).await
+    }
+
+    async fn load_by_id(&mut self, id: Self::Id) -> Result<Option<Self::Item>> {
         let Some(location) = self.resolve_log_id(id).await? else {
             return Ok(None);
         };
@@ -41,46 +47,6 @@ impl<M: MetaStore, B: BlobStore> PrimaryMaterializer for LogMaterializer<'_, M, 
             .await?
             .into_iter()
             .next())
-    }
-
-    async fn block_ref_for(&mut self, item: &Self::Primary) -> Result<BlockRef> {
-        let block_num = item.block_num();
-        if let Some(block_ref) = self.block_ref_cache.get(&block_num).copied() {
-            return Ok(block_ref);
-        }
-
-        let block_ref = if let Some(block_ref) =
-            crate::core::range::load_block_ref(self.tables, block_num).await?
-        {
-            block_ref
-        } else {
-            let Some(block_record) = load_log_block_record(self.tables, block_num).await? else {
-                return Err(Error::NotFound);
-            };
-            BlockRef {
-                number: block_num,
-                hash: *item.block_hash(),
-                parent_hash: block_record.parent_hash,
-            }
-        };
-        self.block_ref_cache.insert(block_num, block_ref);
-        Ok(block_ref)
-    }
-
-    fn exact_match(&self, item: &Self::Primary, filter: &Self::Filter) -> bool {
-        exact_match(item, filter)
-    }
-}
-
-impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B> {
-    type Id = LogId;
-    type Location = super::ResolvedLogLocation;
-    type Item = LogRef;
-    type Filter = LogFilter;
-    type Output = crate::logs::types::Log;
-
-    async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<Self::Location>> {
-        self.resolve_log_id(id).await
     }
 
     async fn load_run(
@@ -106,11 +72,24 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
-        PrimaryMaterializer::block_ref_for(self, item).await
+        let tables = self.tables;
+        let block_num = item.block_num();
+        cached_block_ref_with_fallback(
+            &mut self.block_ref_cache,
+            tables,
+            block_num,
+            *item.block_hash(),
+            async {
+                Ok(load_log_block_record(tables, block_num)
+                    .await?
+                    .map(|record| record.parent_hash))
+            },
+        )
+        .await
     }
 
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
-        PrimaryMaterializer::exact_match(self, item, filter)
+        exact_match(item, filter)
     }
 
     fn into_output(item: Self::Item) -> Self::Output {

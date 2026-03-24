@@ -10,7 +10,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResolvedLogLocation {
+pub struct ResolvedLogLocation {
     pub block_num: u64,
     pub local_ordinal: usize,
 }
@@ -57,12 +57,12 @@ mod tests {
     use crate::core::ids::LogId;
     use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
-    use crate::logs::query::execution::PrimaryMaterializer;
     use crate::logs::table_specs::{
         BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
     };
     use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log};
+    use crate::query::runner::QueryMaterializer;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, BlobTableId, MetaStore, Page, PutCond};
@@ -304,11 +304,11 @@ mod tests {
                 },
             );
             let mut materializer = LogMaterializer::new(&tables);
-            let first = PrimaryMaterializer::load_by_id(&mut materializer, log_id)
+            let first = QueryMaterializer::load_by_id(&mut materializer, log_id)
                 .await
                 .expect("first load")
                 .expect("first log");
-            let second = PrimaryMaterializer::load_by_id(&mut materializer, log_id)
+            let second = QueryMaterializer::load_by_id(&mut materializer, log_id)
                 .await
                 .expect("second load")
                 .expect("second log");

@@ -1,6 +1,6 @@
 # Query Execution
 
-This document describes the query execution model: shard-streaming, LogId types, pagination, clause filtering, and materialization.
+This document describes the shared query execution model used by logs and traces: normalized block/ID windows, shard-streaming planning, bitmap intersection, materialization, and pagination.
 
 ## Core Terms
 
@@ -28,6 +28,18 @@ Composition: `global_log_id = (shard << 24) | local_id`
 The shard determines which stream pages and bitmaps are relevant. The local ID is the position within a shard's bitmap space.
 
 Stream pages span 4,096 local IDs within a shard (see [storage-model.md](storage-model.md) for the stream layout).
+
+## Query Layers
+
+The execution stack is split into shared substrate plus family-owned boundaries:
+
+1. `query::normalized` computes the effective limit, validates resume IDs, and narrows the primary-ID window.
+2. `query::window` resolves the first and last non-empty primary IDs inside the resolved block range.
+3. `query::planner` turns family clause vocabularies into shared logical stream selectors and shard-local prepared clauses.
+4. `query::bitmap` loads the prepared clause bitmaps from compacted pages or frontier fragments.
+5. `query::runner` executes the shard loop, intersects bitmaps, batches contiguous same-block candidates, materializes outputs, and assembles the page.
+
+Logs and traces still own request validation, indexed clause vocabularies, exact-match semantics, physical table lookups, and output materialization.
 
 ## Query Flow
 
@@ -60,7 +72,7 @@ async def query_logs(request, budget):
         if log_window.is_empty():
             return empty_page(block_window)
 
-    matching = await logs.shard_streaming_executor.execute(
+    matching = await query.runner.execute_indexed_query(
         filter=request.filter,
         id_window=log_window,
         take=effective_limit + 1,
@@ -89,12 +101,12 @@ Key steps:
 4. **Shard-streaming execution** — fetch `effective_limit + 1` matches to determine `has_more`
 5. **Page assembly** — preserve primary IDs through assembly for exact pagination metadata
 
-## Shard-Streaming Executor
+## Shared Runner
 
-The indexed executor works on one shard at a time in ascending `log_id` order, preserving primary IDs for exact pagination metadata.
+The indexed runner works on one shard at a time in ascending primary-ID order, preserving IDs for exact pagination metadata.
 
 ```python
-async def execute(filter, id_window, take):
+async def execute_indexed_query(filter, id_window, take):
     out = []
 
     for shard in overlapping_shards(id_window):
@@ -113,23 +125,29 @@ async def execute(filter, id_window, take):
                 break
 
         for local_id in shard_accumulator:
-            id = compose_global_log_id(shard, local_id)
-            item = await materializer.load_by_id(id)
-            if item is None:
-                continue
-            if not materializer.exact_match(item, filter):
+            id = compose_primary_id(shard, local_id)
+            location = await materializer.resolve_id(id)
+            if location is None:
                 continue
 
-            out.append(
-                MatchedPrimary(
-                    id=id,
-                    item=item,
-                    block_ref=await materializer.block_ref_for(item),
-                )
+            run = collect_contiguous_same_block_prefix(
+                shard, local_id, location, remaining_needed(take, out)
             )
 
-            if len(out) >= take:
-                return out
+            for id, item in await materializer.load_run(run):
+                if not materializer.exact_match(item, filter):
+                    continue
+
+                out.append(
+                    MatchedQueryItem(
+                        id=id,
+                        item=item,
+                        block_ref=await materializer.block_ref_for(item),
+                    )
+                )
+
+                if len(out) >= take:
+                    return out
 
     return out
 ```
@@ -148,13 +166,24 @@ Stream scans prefer compacted `stream_page_*` blobs and fall back to `stream_fra
 
 ## Materialization
 
-After bitmap intersection identifies candidate `log_id`s, each is materialized:
+After bitmap intersection identifies candidate primary IDs, each family materializer resolves and hydrates them:
 
-1. **Directory lookup** — resolve `log_id -> block_num` using the 3-tier directory (bucket → sub-bucket → fragment fallback). See [storage-model.md](storage-model.md) for the lookup flow and worked example.
-2. **Range blob read** — load the byte range from the `block_log_blob` blob table using key `<block_num>` and the block header's offset table
-3. **Coalesced runs** — contiguous same-block candidates are discovered and materialized in bounded prefixes, stopping once exact filtering and `limit + 1` pagination have enough items
+1. **Directory lookup** — resolve `primary_id -> (block_num, local_ordinal)` using the family directory structures.
+2. **Coalesced runs** — contiguous same-block candidates are discovered and materialized in bounded prefixes so one block-range read or a tight trace loop can serve several matches.
+3. **Shared block refs** — `query::runner::cached_block_ref_with_fallback(...)` owns the cache + canonical block-ref lookup path, while each family only supplies its fallback parent-hash source when the canonical block-ref row is absent.
 
-Materialized logs are checked against the filter for exact match (the bitmap index is an approximation within the page span).
+Materialized items are checked against the family filter for exact match because the bitmap index remains a candidate filter rather than a full predicate evaluation.
+
+## Public Runner API
+
+`query::runner` is also the public execution seam for low-level benchmarks and experiments:
+
+- `QueryId` and `QueryIdRange<I>` model generic monotonic query IDs such as `LogId` and `TraceId`
+- `QueryMaterializer` provides the generic resolve/load/exact-match/materialize hooks
+- `ShardBitmapSet` is the generic shard-to-bitmap input shape for candidate execution
+- `execute_candidates(...)` runs bitmap intersection and exact filtering for precomputed shard bitmaps
+
+The higher-level family query engines build on the same module through the internal descriptor-based indexed runner.
 
 ## Pagination
 

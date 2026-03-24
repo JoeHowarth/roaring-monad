@@ -9,9 +9,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
-use finalized_history_query::core::ids::{
-    LogId, LogLocalId, LogShard, PrimaryIdRange, compose_log_id,
-};
+use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::codec::validate_log;
@@ -20,11 +18,11 @@ use finalized_history_query::logs::keys::{
     MAX_LOCAL_ID,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
-use finalized_history_query::logs::query::execution::{PrimaryMaterializer, ShardBitmapSet};
 use finalized_history_query::logs::table_specs::{
     self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
 };
 use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord, DirBucket, Log};
+use finalized_history_query::query::runner::{QueryIdRange, QueryMaterializer, ShardBitmapSet};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
@@ -160,10 +158,20 @@ pub struct SeededLogBlock {
     pub logs: Vec<Log>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StubPrimary {
     pub id: LogId,
     pub block_ref: BlockRef,
+}
+
+impl finalized_history_query::query::runner::CandidateLocation for StubPrimary {
+    fn block_num(self) -> u64 {
+        self.block_ref.number
+    }
+
+    fn local_ordinal(self) -> usize {
+        self.id.local().get() as usize
+    }
 }
 
 #[derive(Debug, Default)]
@@ -179,11 +187,14 @@ impl PassThroughMaterializer {
     }
 }
 
-impl PrimaryMaterializer for PassThroughMaterializer {
-    type Primary = StubPrimary;
+impl QueryMaterializer for PassThroughMaterializer {
     type Filter = ();
+    type Id = LogId;
+    type Location = StubPrimary;
+    type Item = StubPrimary;
+    type Output = StubPrimary;
 
-    async fn load_by_id(&mut self, id: LogId) -> Result<Option<Self::Primary>> {
+    async fn resolve_id(&mut self, id: LogId) -> Result<Option<Self::Location>> {
         let block_num = (id.get() / self.block_span).saturating_add(1);
         Ok(Some(StubPrimary {
             id,
@@ -195,12 +206,23 @@ impl PrimaryMaterializer for PassThroughMaterializer {
         }))
     }
 
-    async fn block_ref_for(&mut self, item: &Self::Primary) -> Result<BlockRef> {
+    async fn load_run(
+        &mut self,
+        run: &[(Self::Id, Self::Location)],
+    ) -> Result<Vec<(Self::Id, Self::Item)>> {
+        Ok(run.to_vec())
+    }
+
+    async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
         Ok(item.block_ref)
     }
 
-    fn exact_match(&self, _item: &Self::Primary, _filter: &Self::Filter) -> bool {
+    fn exact_match(&self, _item: &Self::Item, _filter: &Self::Filter) -> bool {
         true
+    }
+
+    fn into_output(item: Self::Item) -> Self::Output {
+        item
     }
 }
 
@@ -558,8 +580,8 @@ pub fn primary_range(
     start_local: u32,
     end_shard: u64,
     end_local: u32,
-) -> PrimaryIdRange {
-    PrimaryIdRange::new(
+) -> QueryIdRange<LogId> {
+    QueryIdRange::new(
         log_id(start_shard, start_local),
         log_id(end_shard, end_local),
     )
@@ -585,12 +607,7 @@ pub fn patterned_bitmap(start: u32, step: u32, count: u32) -> RoaringBitmap {
 pub fn shard_bitmap_set(shards: &[u64], bitmap: &RoaringBitmap) -> ShardBitmapSet {
     shards
         .iter()
-        .map(|&shard| {
-            (
-                LogShard::new(shard).expect("valid log shard"),
-                bitmap.clone(),
-            )
-        })
+        .map(|&shard| (shard, bitmap.clone()))
         .collect()
 }
 

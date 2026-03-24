@@ -3,10 +3,9 @@ use std::collections::HashMap;
 use alloy_rlp::Header;
 
 use crate::core::ids::TraceId;
-use crate::core::range::load_block_ref;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::query::runner::{CandidateLocation, QueryMaterializer};
+use crate::query::runner::{CandidateLocation, QueryMaterializer, cached_block_ref_with_fallback};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
@@ -14,7 +13,7 @@ use crate::traces::table_specs::{TraceDirBucketSpec, TraceDirSubBucketSpec};
 use crate::traces::types::{DirBucket, Trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResolvedTraceLocation {
+pub struct ResolvedTraceLocation {
     pub block_num: u64,
     pub local_ordinal: usize,
 }
@@ -42,32 +41,6 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
             directory_fragment_cache: HashMap::new(),
             block_ref_cache: HashMap::new(),
         }
-    }
-
-    pub(crate) async fn block_ref_for_trace(&mut self, item: &Trace) -> Result<BlockRef> {
-        if let Some(block_ref) = self.block_ref_cache.get(&item.block_num).copied() {
-            return Ok(block_ref);
-        }
-        let block_ref = if let Some(block_ref) = load_block_ref(self.tables, item.block_num).await?
-        {
-            block_ref
-        } else {
-            let Some(block_record) = self
-                .tables
-                .trace_block_records()
-                .get(item.block_num)
-                .await?
-            else {
-                return Err(Error::NotFound);
-            };
-            BlockRef {
-                number: item.block_num,
-                hash: item.block_hash,
-                parent_hash: block_record.parent_hash,
-            }
-        };
-        self.block_ref_cache.insert(item.block_num, block_ref);
-        Ok(block_ref)
     }
 
     pub(crate) fn exact_match_trace(&self, item: &Trace, filter: &TraceFilter) -> bool {
@@ -180,7 +153,22 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
-        self.block_ref_for_trace(item).await
+        let tables = self.tables;
+        let block_num = item.block_num;
+        cached_block_ref_with_fallback(
+            &mut self.block_ref_cache,
+            tables,
+            block_num,
+            item.block_hash,
+            async {
+                Ok(tables
+                    .trace_block_records()
+                    .get(block_num)
+                    .await?
+                    .map(|record| record.parent_hash))
+            },
+        )
+        .await
     }
 
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
