@@ -168,8 +168,8 @@ spirit to the logs payload blob plus offset header pattern.
 
 The authoritative transaction storage should look like:
 
-- one raw transaction blob per block or chunk
-- one compact offset/length header for random access
+- one block-keyed transaction blob per block
+- one compact offset header for random access
 - optional small block/chunk metadata for counts and lookup
 
 This should be the only full-fidelity transaction storage.
@@ -179,9 +179,15 @@ that blob.
 
 Instead, transaction-specific persisted state should be limited to:
 
-- block/chunk metadata
+- block metadata
 - query indexes
 - any tiny sidecars that are proven necessary for performance
+
+The block tx blob is expected to store one RLP transaction envelope per tx:
+
+- `tx_hash`
+- `sender`
+- `signed_tx_bytes`
 
 Examples of transaction indexes:
 

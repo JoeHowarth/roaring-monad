@@ -23,6 +23,13 @@ pub struct BlockTxHeader {
     pub offsets: BucketedOffsets,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StoredTxEnvelope {
+    pub tx_hash: Hash32,
+    pub sender: Address20,
+    pub signed_tx_bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct TxLocation {
     pub block_num: u64,

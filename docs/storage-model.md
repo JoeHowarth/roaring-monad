@@ -226,8 +226,14 @@ Transactions follow the same block-keyed artifact model as logs and traces.
 
 Each block with transactions is expected to persist:
 
-- `block_tx_blob`, keyed by `<block_num>`, containing authoritative transaction bytes in block order
+- `block_tx_blob`, keyed by `<block_num>`, containing authoritative transaction envelopes in block order
 - `block_tx_header`, keyed by `<block_num>`, containing `BucketedOffsets` for `tx_idx -> byte range`
+
+Each transaction envelope is RLP-encoded as:
+
+- `tx_hash`
+- `sender`
+- `signed_tx_bytes`
 
 Transaction point lookup by hash should be handled by a metadata index:
 
