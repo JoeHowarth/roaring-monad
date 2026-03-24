@@ -1,9 +1,9 @@
 use bytes::Bytes;
 
 use crate::config::Config;
+use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
-use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{LogDirByBlockSpec, LogDirSubBucketSpec};
 use crate::logs::types::{BlockLogHeader, Log};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -37,7 +37,7 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
             count,
             PrimaryDirFragmentLayout {
                 sub_bucket_start: LogDirSubBucketSpec::sub_bucket_start,
-                sub_bucket_span: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
                 partition: LogDirByBlockSpec::partition,
                 clustering: LogDirByBlockSpec::clustering,
             },
@@ -56,10 +56,4 @@ fn encode_block_log_blob(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {
     }
     offsets.push(u32::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?);
     Ok((Bytes::from(out), BlockLogHeader { offsets }))
-}
-
-pub fn parse_stream_shard(stream_id: &str) -> Option<crate::core::ids::LogShard> {
-    let (_, shard_hex) = stream_id.rsplit_once('/')?;
-    let raw = u64::from_str_radix(shard_hex, 16).ok()?;
-    crate::core::ids::LogShard::new(raw).ok()
 }

@@ -28,6 +28,11 @@ pub fn sharded_stream_id(index_kind: &str, value: &[u8], shard: u64) -> String {
     out
 }
 
+pub fn parse_stream_shard(stream_id: &str) -> Option<u64> {
+    let (_, shard_hex) = stream_id.rsplit_once('/')?;
+    u64::from_str_radix(shard_hex, 16).ok()
+}
+
 pub fn page_start_local(local_id: u32, page_span: u32) -> u32 {
     (local_id / page_span) * page_span
 }

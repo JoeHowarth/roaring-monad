@@ -138,7 +138,8 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub trace_streams: StreamTables<M, B, TraceStreamBitmapMeta>,
     pub point_log_payloads: PointLogPayloadTable<M, B>,
     pub block_trace_blobs: BlockTraceBlobTable<M, B>,
-    pub open_bitmap_pages: OpenBitmapPageTable<M>,
+    pub log_open_bitmap_pages: OpenBitmapPageTable<M>,
+    pub trace_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub trace_payloads: TracePayloadTable<M, B>,
 }
 
@@ -243,8 +244,12 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
                 block_trace_headers: block_trace_headers.clone(),
             },
-            open_bitmap_pages: OpenBitmapPageTable::new(
+            log_open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
+            ),
+            trace_open_bitmap_pages: OpenBitmapPageTable::new(
+                meta_store
+                    .scannable_table(crate::traces::table_specs::TraceOpenBitmapPageSpec::TABLE),
             ),
             trace_payloads: TracePayloadTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
@@ -601,7 +606,7 @@ pub struct OpenBitmapPageTable<M: MetaStore> {
 }
 
 impl<M: MetaStore> OpenBitmapPageTable<M> {
-    fn new(table: ScannableKvTable<M>) -> Self {
+    pub fn new(table: ScannableKvTable<M>) -> Self {
         Self { table }
     }
 
@@ -609,11 +614,9 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
         &self,
         page: &crate::ingest::open_pages::OpenBitmapPage,
     ) -> Result<()> {
-        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(page.shard);
-        let clustering = crate::logs::table_specs::OpenBitmapPageSpec::clustering(
-            page.page_start_local,
-            &page.stream_id,
-        );
+        let partition = crate::kernel::table_specs::u64_key(page.shard);
+        let clustering =
+            crate::kernel::table_specs::page_stream_key(page.page_start_local, &page.stream_id);
         let _ = self
             .table
             .put(
@@ -627,11 +630,9 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
     }
 
     pub async fn delete(&self, page: &crate::ingest::open_pages::OpenBitmapPage) -> Result<()> {
-        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(page.shard);
-        let clustering = crate::logs::table_specs::OpenBitmapPageSpec::clustering(
-            page.page_start_local,
-            &page.stream_id,
-        );
+        let partition = crate::kernel::table_specs::u64_key(page.shard);
+        let clustering =
+            crate::kernel::table_specs::page_stream_key(page.page_start_local, &page.stream_id);
         self.table
             .delete(&partition, &clustering, crate::store::traits::DelCond::Any)
             .await
@@ -639,29 +640,29 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
 
     pub async fn list_for_shard(
         &self,
-        shard: crate::core::ids::LogShard,
+        shard: u64,
     ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
         self.list_in_partition(shard, b"").await
     }
 
     pub async fn list_for_shard_page(
         &self,
-        shard: crate::core::ids::LogShard,
+        shard: u64,
         page_start_local: u32,
     ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
         self.list_in_partition(
             shard,
-            &crate::logs::table_specs::OpenBitmapPageSpec::page_prefix(page_start_local),
+            &crate::kernel::table_specs::page_prefix(page_start_local),
         )
         .await
     }
 
     async fn list_in_partition(
         &self,
-        shard: crate::core::ids::LogShard,
+        shard: u64,
         prefix: &[u8],
     ) -> Result<Vec<crate::ingest::open_pages::OpenBitmapPage>> {
-        let partition = crate::logs::table_specs::OpenBitmapPageSpec::partition(shard);
+        let partition = crate::kernel::table_specs::u64_key(shard);
         let mut cursor = None;
         let mut out = Vec::new();
         loop {

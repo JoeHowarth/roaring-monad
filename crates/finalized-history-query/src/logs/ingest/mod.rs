@@ -1,7 +1,7 @@
 mod artifact;
 mod stream;
 
-pub use artifact::{parse_stream_shard, persist_log_artifacts, persist_log_dir_by_block};
+pub use artifact::{persist_log_artifacts, persist_log_dir_by_block};
 pub use stream::persist_stream_fragments;
 
 #[cfg(test)]
@@ -13,8 +13,8 @@ mod tests {
     use crate::logs::codec::validate_log;
     use crate::logs::keys::{
         BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE,
-        LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
-        LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
+        DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE, LOG_DIR_BUCKET_TABLE,
+        LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
     };
     use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
@@ -101,7 +101,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let first_log_id = crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let first_log_id = crate::logs::keys::DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 8u32;
 
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
@@ -129,7 +129,7 @@ mod tests {
             let fragment1 = meta
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
-                    &LogDirByBlockSpec::partition(crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE),
+                    &LogDirByBlockSpec::partition(crate::logs::keys::DIRECTORY_SUB_BUCKET_SIZE),
                     &LogDirByBlockSpec::clustering(700),
                 )
                 .await
@@ -268,8 +268,8 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - LOG_DIRECTORY_SUB_BUCKET_SIZE - 2;
-            let count = (LOG_DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
+            let first_log_id = DIRECTORY_BUCKET_SIZE - DIRECTORY_SUB_BUCKET_SIZE - 2;
+            let count = (DIRECTORY_SUB_BUCKET_SIZE + 5) as u32;
 
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await

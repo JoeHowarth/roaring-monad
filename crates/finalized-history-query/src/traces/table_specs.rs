@@ -1,4 +1,5 @@
 use crate::core::ids::TraceId;
+use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
 use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::kernel::table_specs::{aligned_u64_start, stream_page_key, u64_key};
@@ -6,14 +7,13 @@ use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
     TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_DIR_BUCKET_TABLE,
-    TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE, TRACE_DIRECTORY_BUCKET_SIZE,
-    TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+    TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE, TRACE_OPEN_BITMAP_PAGE_TABLE,
 };
 
 pub(super) const TRACE_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout =
     PrimaryDirCompactionLayout {
-        sub_bucket_span: TRACE_DIRECTORY_SUB_BUCKET_SIZE,
-        bucket_span: TRACE_DIRECTORY_BUCKET_SIZE,
+        sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
+        bucket_span: DIRECTORY_BUCKET_SIZE,
         sub_bucket_start: crate::traces::table_specs::TraceDirSubBucketSpec::sub_bucket_start,
         bucket_start: crate::traces::table_specs::TraceDirBucketSpec::bucket_start,
         missing_sentinel_error: "trace directory bucket missing sentinel",
@@ -37,7 +37,7 @@ impl PointTableSpec for TraceDirBucketSpec {
 }
 impl TraceDirBucketSpec {
     pub fn bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        aligned_u64_start(global_trace_id.into().get(), TRACE_DIRECTORY_BUCKET_SIZE)
+        aligned_u64_start(global_trace_id.into().get(), DIRECTORY_BUCKET_SIZE)
     }
 
     pub fn key(bucket_start_trace_id: u64) -> Vec<u8> {
@@ -51,10 +51,7 @@ impl PointTableSpec for TraceDirSubBucketSpec {
 }
 impl TraceDirSubBucketSpec {
     pub fn sub_bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        aligned_u64_start(
-            global_trace_id.into().get(),
-            TRACE_DIRECTORY_SUB_BUCKET_SIZE,
-        )
+        aligned_u64_start(global_trace_id.into().get(), DIRECTORY_SUB_BUCKET_SIZE)
     }
 
     pub fn key(sub_bucket_start_trace_id: u64) -> Vec<u8> {
@@ -98,6 +95,11 @@ impl TraceBitmapByBlockSpec {
     pub fn clustering(block_num: u64) -> Vec<u8> {
         u64_key(block_num)
     }
+}
+
+pub struct TraceOpenBitmapPageSpec;
+impl ScannableTableSpec for TraceOpenBitmapPageSpec {
+    const TABLE: ScannableTableId = TRACE_OPEN_BITMAP_PAGE_TABLE;
 }
 
 pub struct BlockTraceBlobSpec;

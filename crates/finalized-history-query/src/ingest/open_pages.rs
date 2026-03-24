@@ -1,44 +1,44 @@
 use std::collections::BTreeSet;
 
-use crate::core::ids::{LogId, LogShard};
+use crate::core::ids::FamilyId;
 use crate::core::layout::read_u64_be;
 use crate::error::{Error, Result};
+use crate::ingest::bitmap_pages;
 use crate::kernel::sharded_streams::page_start_local;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::tables::{OpenBitmapPageTable, Tables};
+use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {
-    pub shard: LogShard,
+    pub shard: u64,
     pub page_start_local: u32,
     pub stream_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FrontierPosition {
-    shard: LogShard,
+    shard: u64,
     page_start_local: u32,
 }
 
 impl FrontierPosition {
-    fn from_next_log_id(next_log_id: u64) -> Self {
-        let frontier_id = LogId::new(next_log_id);
-        let shard = frontier_id.shard();
-        let local = frontier_id.local().get();
+    fn from_next_primary_id(next_primary_id: u64, page_span: u32) -> Self {
+        let id = FamilyId::new(next_primary_id);
         Self {
-            shard,
-            page_start_local: page_start_local(local, STREAM_PAGE_LOCAL_ID_SPAN),
+            shard: id.shard_raw(),
+            page_start_local: page_start_local(id.local_raw(), page_span),
         }
     }
 }
 
 impl OpenBitmapPage {
-    pub fn is_sealed_at(&self, next_log_id: u64) -> bool {
-        let frontier_id = LogId::new(next_log_id);
-        let frontier_shard = frontier_id.shard();
-        let frontier_local = frontier_id.local().get();
-        let frontier_open_page = page_start_local(frontier_local, STREAM_PAGE_LOCAL_ID_SPAN);
+    pub fn is_sealed_at(&self, next_primary_id: u64, page_span: u32) -> bool {
+        let id = FamilyId::new(next_primary_id);
+        let frontier_shard = id.shard_raw();
+        let frontier_local = id.local_raw();
+        let frontier_open_page = page_start_local(frontier_local, page_span);
 
         if self.shard < frontier_shard {
             return true;
@@ -48,79 +48,72 @@ impl OpenBitmapPage {
         }
 
         self.page_start_local < frontier_open_page
-            || (next_log_id > 0
-                && self
-                    .page_start_local
-                    .saturating_add(STREAM_PAGE_LOCAL_ID_SPAN)
-                    <= frontier_local)
+            || (next_primary_id > 0
+                && self.page_start_local.saturating_add(page_span) <= frontier_local)
     }
 }
 
-pub async fn mark_open_bitmap_page_if_absent<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
+pub async fn mark_open_bitmap_page_if_absent<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    tables.open_bitmap_pages.mark_if_absent(page).await
+    table.mark_if_absent(page).await
 }
 
-pub async fn delete_open_bitmap_page<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
+pub async fn delete_open_bitmap_page<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    tables.open_bitmap_pages.delete(page).await
+    table.delete(page).await
 }
 
-pub async fn list_open_bitmap_pages_for_shard<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    shard: LogShard,
+async fn list_open_bitmap_pages_for_shard<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
+    shard: u64,
 ) -> Result<Vec<OpenBitmapPage>> {
-    tables.open_bitmap_pages.list_for_shard(shard).await
+    table.list_for_shard(shard).await
 }
 
-pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    shard: LogShard,
+async fn list_open_bitmap_pages_for_shard_page<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
+    shard: u64,
     page_start_local: u32,
 ) -> Result<Vec<OpenBitmapPage>> {
-    tables
-        .open_bitmap_pages
-        .list_for_shard_page(shard, page_start_local)
-        .await
+    table.list_for_shard_page(shard, page_start_local).await
 }
 
-pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
+pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
     opened_during: &[OpenBitmapPage],
-    from_next_log_id: u64,
-    to_next_log_id: u64,
+    from_next_primary_id: u64,
+    to_next_primary_id: u64,
+    page_span: u32,
 ) -> Result<Vec<OpenBitmapPage>> {
     let mut sealed = opened_during
         .iter()
-        .filter(|page| page.is_sealed_at(to_next_log_id))
+        .filter(|page| page.is_sealed_at(to_next_primary_id, page_span))
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    if to_next_log_id <= from_next_log_id {
+    if to_next_primary_id <= from_next_primary_id {
         return Ok(sealed.into_iter().collect());
     }
 
-    let from = FrontierPosition::from_next_log_id(from_next_log_id);
-    let to = FrontierPosition::from_next_log_id(to_next_log_id);
+    let from = FrontierPosition::from_next_primary_id(from_next_primary_id, page_span);
+    let to = FrontierPosition::from_next_primary_id(to_next_primary_id, page_span);
 
     if from.shard == to.shard {
         let affected_pages =
-            (to.page_start_local.saturating_sub(from.page_start_local)) / STREAM_PAGE_LOCAL_ID_SPAN;
+            (to.page_start_local.saturating_sub(from.page_start_local)) / page_span;
         if affected_pages <= 32 {
-            let mut page_start = from.page_start_local;
-            while page_start < to.page_start_local {
-                sealed.extend(
-                    list_open_bitmap_pages_for_shard_page(tables, from.shard, page_start).await?,
-                );
-                page_start = page_start.saturating_add(STREAM_PAGE_LOCAL_ID_SPAN);
+            let mut ps = from.page_start_local;
+            while ps < to.page_start_local {
+                sealed.extend(list_open_bitmap_pages_for_shard_page(table, from.shard, ps).await?);
+                ps = ps.saturating_add(page_span);
             }
         } else {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(tables, from.shard)
+                list_open_bitmap_pages_for_shard(table, from.shard)
                     .await?
                     .into_iter()
                     .filter(|page| {
@@ -131,23 +124,21 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
         }
     } else {
         sealed.extend(
-            list_open_bitmap_pages_for_shard(tables, from.shard)
+            list_open_bitmap_pages_for_shard(table, from.shard)
                 .await?
                 .into_iter()
                 .filter(|page| page.page_start_local >= from.page_start_local),
         );
 
-        let mut shard_raw = from.shard.get().saturating_add(1);
-        while shard_raw < to.shard.get() {
-            let shard =
-                LogShard::new(shard_raw).map_err(|_| Error::Decode("invalid shard range"))?;
-            sealed.extend(list_open_bitmap_pages_for_shard(tables, shard).await?);
+        let mut shard_raw = from.shard.saturating_add(1);
+        while shard_raw < to.shard {
+            sealed.extend(list_open_bitmap_pages_for_shard(table, shard_raw).await?);
             shard_raw = shard_raw.saturating_add(1);
         }
 
         if to.page_start_local > 0 {
             sealed.extend(
-                list_open_bitmap_pages_for_shard(tables, to.shard)
+                list_open_bitmap_pages_for_shard(table, to.shard)
                     .await?
                     .into_iter()
                     .filter(|page| page.page_start_local < to.page_start_local),
@@ -157,8 +148,83 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
 
     Ok(sealed
         .into_iter()
-        .filter(|page| page.is_sealed_at(to_next_log_id))
+        .filter(|page| page.is_sealed_at(to_next_primary_id, page_span))
         .collect())
+}
+
+/// Scan the tracking table for markers that are sealed at the current frontier
+/// and return them. Called at startup to repair stale markers left by a crashed writer.
+pub async fn collect_all_sealed_open_bitmap_pages<M: MetaStore>(
+    table: &OpenBitmapPageTable<M>,
+    next_primary_id: u64,
+    page_span: u32,
+) -> Result<Vec<OpenBitmapPage>> {
+    let frontier = FrontierPosition::from_next_primary_id(next_primary_id, page_span);
+    let mut sealed = Vec::new();
+
+    for shard in 0..=frontier.shard {
+        let pages = list_open_bitmap_pages_for_shard(table, shard).await?;
+        sealed.extend(
+            pages
+                .into_iter()
+                .filter(|page| page.is_sealed_at(next_primary_id, page_span)),
+        );
+    }
+
+    Ok(sealed)
+}
+
+/// Repair stale open bitmap page markers at startup. For each family, scans the
+/// tracking table for markers that are sealed at the current frontier, compacts
+/// them (idempotent), and deletes the markers.
+pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    next_log_id: u64,
+    next_trace_id: u64,
+) -> Result<()> {
+    for page in collect_all_sealed_open_bitmap_pages(
+        &tables.log_open_bitmap_pages,
+        next_log_id,
+        STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await?
+    {
+        let _ = bitmap_pages::compact_stream_page(
+            &tables.log_streams,
+            &page.stream_id,
+            page.page_start_local,
+            |count, min_local, max_local| crate::logs::types::StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
+        )
+        .await?;
+        delete_open_bitmap_page(&tables.log_open_bitmap_pages, &page).await?;
+    }
+
+    for page in collect_all_sealed_open_bitmap_pages(
+        &tables.trace_open_bitmap_pages,
+        next_trace_id,
+        TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await?
+    {
+        let _ = bitmap_pages::compact_stream_page(
+            &tables.trace_streams,
+            &page.stream_id,
+            page.page_start_local,
+            |count, min_local, max_local| crate::traces::types::StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
+        )
+        .await?;
+        delete_open_bitmap_page(&tables.trace_open_bitmap_pages, &page).await?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn decode_open_bitmap_page_key(
@@ -176,9 +242,7 @@ pub(crate) fn decode_open_bitmap_page_key(
         return Err(Error::Decode("invalid open_bitmap_page separator"));
     }
 
-    let shard = read_u64_be(partition)
-        .and_then(|raw| LogShard::new(raw).ok())
-        .ok_or(Error::Decode("invalid open_bitmap_page shard"))?;
+    let shard = read_u64_be(partition).ok_or(Error::Decode("invalid open_bitmap_page shard"))?;
     let page_start_local = read_u64_be(&clustering[..8])
         .and_then(|raw| u32::try_from(raw).ok())
         .ok_or(Error::Decode("invalid open_bitmap_page page"))?;

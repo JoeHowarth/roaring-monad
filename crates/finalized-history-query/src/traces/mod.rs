@@ -13,14 +13,19 @@ use crate::config::Config;
 use crate::core::ids::TraceId;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
-use crate::ingest::bitmap_pages::{self, StreamPageLayout};
+use crate::ingest::bitmap_pages;
+use crate::ingest::open_pages::{
+    OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
+    mark_open_bitmap_page_if_absent,
+};
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
+use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
     persist_trace_artifacts, persist_trace_dir_by_block, persist_trace_stream_fragments,
 };
-use crate::traces::keys::{TRACE_LOCAL_ID_MASK, TRACE_STREAM_PAGE_LOCAL_ID_SPAN};
+use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::table_specs::TRACE_PRIMARY_DIR_LAYOUT;
 use crate::traces::types::StreamBitmapMeta;
 
@@ -71,6 +76,27 @@ impl TracesFamily {
 
         let touched_pages =
             persist_trace_stream_fragments(&runtime.tables, block, from_next_trace_id).await?;
+
+        let mut opened_during = Vec::<OpenBitmapPage>::new();
+        opened_during.extend(
+            touched_pages
+                .into_iter()
+                .filter_map(|(stream_id, page_start)| {
+                    parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
+                        shard,
+                        page_start_local: page_start,
+                        stream_id,
+                    })
+                }),
+        );
+
+        for page in opened_during
+            .iter()
+            .filter(|page| !page.is_sealed_at(next_trace_id, TRACE_STREAM_PAGE_LOCAL_ID_SPAN))
+        {
+            mark_open_bitmap_page_if_absent(&runtime.tables.trace_open_bitmap_pages, page).await?;
+        }
+
         compact_newly_sealed_primary_directory(
             &runtime.tables.trace_dir,
             from_next_trace_id,
@@ -78,22 +104,29 @@ impl TracesFamily {
             TRACE_PRIMARY_DIR_LAYOUT,
         )
         .await?;
-        bitmap_pages::compact_sealed_touched_stream_pages(
-            &runtime.tables.trace_streams,
-            &touched_pages,
+
+        for page in collect_newly_sealed_open_bitmap_pages(
+            &runtime.tables.trace_open_bitmap_pages,
+            &opened_during,
             from_next_trace_id,
             next_trace_id,
-            StreamPageLayout {
-                page_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-                local_id_mask: TRACE_LOCAL_ID_MASK,
-            },
-            |count, min_local, max_local| StreamBitmapMeta {
-                count,
-                min_local,
-                max_local,
-            },
+            TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
         )
-        .await?;
+        .await?
+        {
+            let _ = bitmap_pages::compact_stream_page(
+                &runtime.tables.trace_streams,
+                &page.stream_id,
+                page.page_start_local,
+                |count, min_local, max_local| StreamBitmapMeta {
+                    count,
+                    min_local,
+                    max_local,
+                },
+            )
+            .await?;
+            delete_open_bitmap_page(&runtime.tables.trace_open_bitmap_pages, &page).await?;
+        }
 
         state.next_trace_id = TraceId::new(next_trace_id);
         Ok(trace_count)

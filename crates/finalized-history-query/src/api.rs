@@ -187,13 +187,22 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
-        startup_plan_from_head(
+        let plan = startup_plan_from_head(
             &self.runtime,
             &self.ingest.families,
             indexed_finalized_head,
             0,
         )
-        .await
+        .await?;
+
+        crate::ingest::open_pages::repair_sealed_open_bitmap_pages(
+            &self.runtime.tables,
+            plan.log_state.next_log_id.get(),
+            plan.trace_state.next_trace_id.get(),
+        )
+        .await?;
+
+        Ok(plan)
     }
 }
 

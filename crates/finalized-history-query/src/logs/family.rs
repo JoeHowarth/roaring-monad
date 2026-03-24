@@ -9,10 +9,11 @@ use crate::ingest::open_pages::{
     mark_open_bitmap_page_if_absent,
 };
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
+use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::logs::ingest::{
-    parse_stream_shard, persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
+    persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
 };
-use crate::logs::keys::LOG_PRIMARY_DIR_LAYOUT;
+use crate::logs::keys::{LOG_PRIMARY_DIR_LAYOUT, STREAM_PAGE_LOCAL_ID_SPAN};
 use crate::logs::types::LogSequencingState;
 use crate::logs::types::StreamBitmapMeta;
 use crate::runtime::Runtime;
@@ -75,9 +76,9 @@ impl LogsFamily {
         let next_log_id = from_next_log_id.saturating_add(block.logs.len() as u64);
         for page in opened_during
             .iter()
-            .filter(|page| !page.is_sealed_at(next_log_id))
+            .filter(|page| !page.is_sealed_at(next_log_id, STREAM_PAGE_LOCAL_ID_SPAN))
         {
-            mark_open_bitmap_page_if_absent(&runtime.tables, page).await?;
+            mark_open_bitmap_page_if_absent(&runtime.tables.log_open_bitmap_pages, page).await?;
         }
 
         compact_newly_sealed_primary_directory(
@@ -89,10 +90,11 @@ impl LogsFamily {
         .await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
-            &runtime.tables,
+            &runtime.tables.log_open_bitmap_pages,
             &opened_during,
             from_next_log_id,
             next_log_id,
+            STREAM_PAGE_LOCAL_ID_SPAN,
         )
         .await?
         {
@@ -107,7 +109,7 @@ impl LogsFamily {
                 },
             )
             .await?;
-            delete_open_bitmap_page(&runtime.tables, &page).await?;
+            delete_open_bitmap_page(&runtime.tables.log_open_bitmap_pages, &page).await?;
         }
 
         state.next_log_id = LogId::new(next_log_id);
