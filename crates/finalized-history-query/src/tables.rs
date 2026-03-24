@@ -922,11 +922,11 @@ mod tests {
 
     use super::*;
     use crate::store::manifest::{
-        REQUIRED_BLOB_TABLES, REQUIRED_POINT_TABLES, REQUIRED_SCANNABLE_TABLES,
+        RUNTIME_BLOB_TABLES, RUNTIME_POINT_TABLES, RUNTIME_SCANNABLE_TABLES,
     };
     use crate::store::traits::{
-        BlobTable, DelCond, Page, PutCond, PutResult, Record, ScannableKvTable,
-        ScannableTableId, TableId,
+        BlobTable, DelCond, Page, PutCond, PutResult, Record, ScannableKvTable, ScannableTableId,
+        TableId,
     };
 
     #[derive(Clone, Default)]
@@ -1078,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn tables_new_uses_exactly_the_manifest_declared_tables() {
+    fn tables_new_uses_exactly_the_runtime_manifest_tables() {
         let meta = RecordingMetaStore::default();
         let blob = RecordingBlobStore::default();
 
@@ -1091,7 +1091,10 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>(),
-            REQUIRED_POINT_TABLES.iter().copied().collect::<BTreeSet<_>>()
+            RUNTIME_POINT_TABLES
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
         );
         assert_eq!(
             meta.scannable_tables
@@ -1100,7 +1103,7 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>(),
-            REQUIRED_SCANNABLE_TABLES
+            RUNTIME_SCANNABLE_TABLES
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>()
@@ -1112,7 +1115,7 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>(),
-            REQUIRED_BLOB_TABLES.iter().copied().collect::<BTreeSet<_>>()
+            RUNTIME_BLOB_TABLES.iter().copied().collect::<BTreeSet<_>>()
         );
     }
 }

@@ -1,9 +1,8 @@
 #[allow(dead_code, unused_imports)]
 mod helpers;
 
-use std::sync::Arc;
-use finalized_history_query::Error;
 use finalized_history_query::Config;
+use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::core::state::{
     BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
@@ -19,6 +18,7 @@ use finalized_history_query::store::publication::{
 };
 use finalized_history_query::store::traits::{MetaStore, PutCond};
 use futures::executor::block_on;
+use std::sync::Arc;
 
 use helpers::*;
 

@@ -319,7 +319,9 @@ impl ScannableTableSchema {
 }
 
 fn point_table_schemas() -> impl Iterator<Item = PointTableSchema> {
-    REQUIRED_POINT_TABLES.into_iter().map(PointTableSchema::named)
+    REQUIRED_POINT_TABLES
+        .into_iter()
+        .map(PointTableSchema::named)
 }
 
 fn scannable_table_schemas() -> impl Iterator<Item = ScannableTableSchema> {
@@ -795,25 +797,6 @@ impl MetaStore for ScyllaMetaStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scylla_schema_iterators_cover_the_required_manifest_tables() {
-        assert_eq!(
-            point_table_schemas().map(|schema| schema.id).collect::<Vec<_>>(),
-            REQUIRED_POINT_TABLES.to_vec()
-        );
-        assert_eq!(
-            scannable_table_schemas()
-                .map(|schema| schema.id)
-                .collect::<Vec<_>>(),
-            REQUIRED_SCANNABLE_TABLES.to_vec()
-        );
-    }
-}
-
 impl ScyllaMetaStore {
     async fn with_retry<T, F, Fut>(&self, op: &str, mut f: F) -> Result<T>
     where
@@ -920,4 +903,25 @@ fn is_retryable_backend_error(err: &Error) -> bool {
         || s.contains("unavailable")
         || s.contains("overloaded")
         || s.contains("failed to perform a connection setup request")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scylla_schema_iterators_cover_the_required_manifest_tables() {
+        assert_eq!(
+            point_table_schemas()
+                .map(|schema| schema.id)
+                .collect::<Vec<_>>(),
+            REQUIRED_POINT_TABLES.to_vec()
+        );
+        assert_eq!(
+            scannable_table_schemas()
+                .map(|schema| schema.id)
+                .collect::<Vec<_>>(),
+            REQUIRED_SCANNABLE_TABLES.to_vec()
+        );
+    }
 }

@@ -118,13 +118,19 @@ impl FaultInjector {
 fn matches_phase(a: FailurePhase, b: FailurePhase) -> bool {
     matches!(
         (a, b),
-        (FailurePhase::ArtifactMetaWrite, FailurePhase::ArtifactMetaWrite)
-            | (FailurePhase::ArtifactBlobWrite, FailurePhase::ArtifactBlobWrite)
-            | (FailurePhase::PublicationStateCas, FailurePhase::PublicationStateCas)
-            | (
-                FailurePhase::PublishHeadAdvance,
-                FailurePhase::PublishHeadAdvance
-            )
+        (
+            FailurePhase::ArtifactMetaWrite,
+            FailurePhase::ArtifactMetaWrite
+        ) | (
+            FailurePhase::ArtifactBlobWrite,
+            FailurePhase::ArtifactBlobWrite
+        ) | (
+            FailurePhase::PublicationStateCas,
+            FailurePhase::PublicationStateCas
+        ) | (
+            FailurePhase::PublishHeadAdvance,
+            FailurePhase::PublishHeadAdvance
+        )
     )
 }
 
@@ -269,8 +275,10 @@ impl FaultyBlobStore {
 
 impl BlobStore for FaultyBlobStore {
     async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
-        self.injector
-            .maybe_fail(FailurePhase::ArtifactBlobWrite, &Self::logical_key(table, key))?;
+        self.injector.maybe_fail(
+            FailurePhase::ArtifactBlobWrite,
+            &Self::logical_key(table, key),
+        )?;
         self.inner.put_blob(table, key, value).await
     }
 
