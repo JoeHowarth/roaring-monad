@@ -73,20 +73,19 @@ fn decode_sender(field: &[u8]) -> Result<&Address20> {
 }
 
 fn decode_payload_bytes(field: &[u8]) -> Result<&[u8]> {
-    if let Some(payload) = decode_rlp_string_payload(field)? {
-        return Ok(payload);
-    }
-    Ok(field)
+    decode_rlp_string_payload(field)
 }
 
-fn decode_rlp_string_payload(field: &[u8]) -> Result<Option<&[u8]>> {
+fn decode_rlp_string_payload(field: &[u8]) -> Result<&[u8]> {
     let mut buf = field;
     match Header::decode_raw(&mut buf) {
-        Ok(PayloadView::String(payload)) if buf.is_empty() => Ok(Some(payload)),
-        Ok(PayloadView::List(_)) if buf.is_empty() => Ok(None),
-        Ok(_) if buf.is_empty() => Ok(None),
+        Ok(PayloadView::String(payload)) if buf.is_empty() => Ok(payload),
+        Ok(PayloadView::List(_)) if buf.is_empty() => {
+            Err(Error::Decode("tx envelope field must be bytes"))
+        }
+        Ok(_) if buf.is_empty() => Err(Error::Decode("tx envelope field must be bytes")),
         Ok(_) => Err(Error::Decode("tx envelope field has trailing bytes")),
-        Err(_) => Ok(None),
+        Err(_) => Err(Error::Decode("invalid tx envelope field")),
     }
 }
 

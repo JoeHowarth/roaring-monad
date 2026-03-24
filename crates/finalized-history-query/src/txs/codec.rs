@@ -100,20 +100,19 @@ fn decode_fixed<const N: usize>(field: &[u8], message: &'static str) -> Result<[
 }
 
 fn decode_bytes<'a>(field: &'a [u8], _message: &'static str) -> Result<&'a [u8]> {
-    if let Some(payload) = decode_rlp_string_payload(field)? {
-        return Ok(payload);
-    }
-    Ok(field)
+    decode_rlp_string_payload(field)
 }
 
-fn decode_rlp_string_payload(field: &[u8]) -> Result<Option<&[u8]>> {
+fn decode_rlp_string_payload(field: &[u8]) -> Result<&[u8]> {
     let mut buf = field;
     match Header::decode_raw(&mut buf) {
-        Ok(PayloadView::String(payload)) if buf.is_empty() => Ok(Some(payload)),
-        Ok(PayloadView::List(_)) if buf.is_empty() => Ok(None),
-        Ok(_) if buf.is_empty() => Ok(None),
+        Ok(PayloadView::String(payload)) if buf.is_empty() => Ok(payload),
+        Ok(PayloadView::List(_)) if buf.is_empty() => {
+            Err(Error::Decode("tx envelope field must be bytes"))
+        }
+        Ok(_) if buf.is_empty() => Err(Error::Decode("tx envelope field must be bytes")),
         Ok(_) => Err(Error::Decode("tx envelope field has trailing bytes")),
-        Err(_) => Ok(None),
+        Err(_) => Err(Error::Decode("invalid tx envelope field")),
     }
 }
 

@@ -35,7 +35,14 @@ pub async fn persist_tx_artifacts<M: MetaStore, B: BlobStore>(
     let mut offsets = BucketedOffsets::new();
     let mut out = Vec::<u8>::new();
 
-    for tx in &block.txs {
+    for (expected_tx_idx, tx) in block.txs.iter().enumerate() {
+        let expected_tx_idx =
+            u32::try_from(expected_tx_idx).map_err(|_| Error::Decode("tx_idx overflow"))?;
+        if tx.tx_idx != expected_tx_idx {
+            return Err(Error::InvalidParams(
+                "tx_idx must match tx position within block",
+            ));
+        }
         offsets.push(
             u64::try_from(out.len()).map_err(|_| Error::Decode("block tx offset overflow"))?,
         )?;
