@@ -209,6 +209,45 @@ pub const fn compose_log_id(shard: LogShard, local: LogLocalId) -> LogId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TxId(FamilyId);
+
+impl TxId {
+    pub const fn new(raw: u64) -> Self {
+        Self(FamilyId::new(raw))
+    }
+
+    pub const fn from_family_id(value: FamilyId) -> Self {
+        Self(value)
+    }
+
+    pub const fn into_family_id(self) -> FamilyId {
+        self.0
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl From<u64> for TxId {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<TxId> for u64 {
+    fn from(value: TxId) -> Self {
+        value.get()
+    }
+}
+
+impl Default for TxId {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceId(FamilyId);
 
 impl TraceId {
@@ -360,6 +399,16 @@ impl FamilyIdValue for LogId {
     }
 }
 
+impl FamilyIdValue for TxId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+}
+
 impl FamilyIdValue for TraceId {
     fn new(raw: u64) -> Self {
         Self::new(raw)
@@ -401,7 +450,7 @@ pub type TraceIdRange = FamilyIdRange<TraceId>;
 mod tests {
     use super::{
         FamilyId, FamilyIdRange, FamilyLocalId, FamilyShard, LogId, LogLocalId, LogShard,
-        PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId, TraceShard, compose_log_id,
+        PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId, TraceShard, TxId, compose_log_id,
         compose_trace_id,
     };
     use crate::core::layout::MAX_LOCAL_ID;
@@ -515,8 +564,10 @@ mod tests {
         let log_range = FamilyIdRange::new(LogId::new(20), LogId::new(22)).expect("log range");
         let trace_range =
             FamilyIdRange::new(TraceId::new(30), TraceId::new(32)).expect("trace range");
+        let tx_range = FamilyIdRange::new(TxId::new(40), TxId::new(42)).expect("tx range");
         assert!(log_range.contains(LogId::new(21)));
         assert!(trace_range.contains(TraceId::new(31)));
+        assert!(tx_range.contains(TxId::new(41)));
     }
 
     #[test]

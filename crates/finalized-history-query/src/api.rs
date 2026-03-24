@@ -19,6 +19,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::filter::TraceFilter;
 use crate::traces::query::TracesQueryEngine;
 use crate::traces::types::Trace;
+use crate::txs::{Tx, TxFilter, TxsQueryEngine};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedQueryRequest<F> {
@@ -33,6 +34,7 @@ pub struct IndexedQueryRequest<F> {
 }
 
 pub type QueryLogsRequest = IndexedQueryRequest<LogFilter>;
+pub type QueryTransactionsRequest = IndexedQueryRequest<TxFilter>;
 pub type QueryTracesRequest = IndexedQueryRequest<TraceFilter>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     publication_store: MetaPublicationStore<M>,
     blocks_query: BlocksQueryEngine,
     logs_query: LogsQueryEngine,
+    txs_query: TxsQueryEngine,
     traces_query: TracesQueryEngine,
     pub(crate) runtime: Runtime<M, B>,
     allows_writes: bool,
@@ -78,6 +81,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     ) -> Self {
         let blocks_query = BlocksQueryEngine;
         let logs_query = LogsQueryEngine::from_config(&config);
+        let txs_query = TxsQueryEngine::from_config(&config);
         let traces_query = TracesQueryEngine::from_config(&config);
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
         let publication_store = MetaPublicationStore::new(runtime.meta_store.clone());
@@ -87,6 +91,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             publication_store,
             blocks_query,
             logs_query,
+            txs_query,
             traces_query,
             runtime,
             allows_writes,
@@ -131,6 +136,24 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     ) -> Result<crate::core::page::QueryPage<Log>> {
         self.logs_query
             .query_logs(
+                &self.runtime.tables,
+                &self.publication_store,
+                request,
+                budget,
+            )
+            .await
+    }
+
+    /// Resolves the finalized block window for a transactions request and
+    /// executes the indexed query pipeline, returning a resumable page of
+    /// matching transactions once the tx family is implemented.
+    pub async fn query_transactions(
+        &self,
+        request: QueryTransactionsRequest,
+        budget: ExecutionBudget,
+    ) -> Result<crate::core::page::QueryPage<Tx>> {
+        self.txs_query
+            .query_transactions(
                 &self.runtime.tables,
                 &self.publication_store,
                 request,

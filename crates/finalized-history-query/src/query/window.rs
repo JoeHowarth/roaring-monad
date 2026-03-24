@@ -140,6 +140,7 @@ mod tests {
                     first_primary_id: first_log_id,
                     count,
                 }),
+                txs: None,
                 traces: None,
             }
             .encode(),

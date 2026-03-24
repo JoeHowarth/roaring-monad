@@ -73,6 +73,10 @@ fn shared_block_record(
             first_primary_id,
             count,
         }),
+        txs: Some(PrimaryWindowRecord {
+            first_primary_id: 0,
+            count: 0,
+        }),
         traces: traces.map(|(first_primary_id, count)| PrimaryWindowRecord {
             first_primary_id,
             count,

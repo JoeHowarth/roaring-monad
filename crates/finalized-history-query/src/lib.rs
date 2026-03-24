@@ -18,7 +18,7 @@ pub mod txs;
 
 pub use api::{
     ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryBlocksRequest, QueryLogsRequest,
-    QueryTracesRequest,
+    QueryTracesRequest, QueryTransactionsRequest,
 };
 pub use blocks::Block;
 pub use config::Config;
@@ -35,4 +35,4 @@ pub use logs::filter::LogFilter;
 pub use logs::types::Log;
 pub use traces::filter::TraceFilter;
 pub use traces::types::Trace;
-pub use txs::Tx;
+pub use txs::{Tx, TxFilter};

@@ -642,6 +642,10 @@ fn readers_use_only_publication_state() {
                     first_primary_id: 9,
                     count: 1,
                 }),
+                txs: Some(PrimaryWindowRecord {
+                    first_primary_id: 0,
+                    count: 0,
+                }),
                 traces: Some(PrimaryWindowRecord {
                     first_primary_id: 0,
                     count: 0,

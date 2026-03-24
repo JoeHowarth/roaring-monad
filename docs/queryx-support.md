@@ -50,12 +50,13 @@ Current family status:
 - `logs`: real family, with storage layout, codecs, indexing, query execution,
   materialization, and ingest
 - `txs`: scaffold family slot only
+- `txs`: shared-state participation plus transport-free request/service stubs; non-empty ingest and tx queries still return unsupported
 - `traces`: real family, with trace-owned storage, indexing, query execution,
   materialization, and ingest
 
 The current public surface is still narrower than the reference:
 
-- blocks, logs, and traces only
+- blocks, logs, traces, and stubbed transactions
 - finalized history only
 - no descending traversal
 - no field selection

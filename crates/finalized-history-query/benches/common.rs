@@ -656,6 +656,10 @@ pub fn seed_materialized_blocks(
                         count: u32::try_from(block.logs.len())
                             .expect("block log count fits in u32"),
                     }),
+                    txs: Some(PrimaryWindowRecord {
+                        first_primary_id: 0,
+                        count: 0,
+                    }),
                     traces: None,
                 }
                 .encode(),

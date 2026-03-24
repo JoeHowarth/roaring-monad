@@ -88,10 +88,12 @@ The public query surface is transport-free:
 
 - `QueryBlocksRequest`
 - `QueryLogsRequest`
+- `QueryTransactionsRequest`
 - `QueryTracesRequest`
 - `ExecutionBudget`
 - `QueryPage<Block>`
 - `QueryPage<Log>`
+- `QueryPage<Tx>`
 - `QueryPage<Trace>`
 - `QueryPageMeta`
 - `FinalizedHistoryService`
@@ -192,6 +194,17 @@ class QueryTracesRequest:
     filter: TraceFilter
 
 
+class QueryTransactionsRequest:
+    from_block: int | None
+    to_block: int | None
+    from_block_hash: bytes32 | None
+    to_block_hash: bytes32 | None
+    order: QueryOrder
+    resume_id: int | None
+    limit: int
+    filter: TxFilter
+
+
 class ExecutionBudget:
     max_results: int | None
 
@@ -224,6 +237,8 @@ class Block:
 class Tx:
     tx_idx: int
     tx_hash: bytes32
+    block_num: int
+    block_hash: bytes32
 
 
 class Trace:
@@ -267,6 +282,7 @@ class BlockRecord:
     block_hash: bytes32
     parent_hash: bytes32
     logs: PrimaryWindowRecord | None
+    txs: PrimaryWindowRecord | None
     traces: PrimaryWindowRecord | None
 
 
@@ -277,6 +293,10 @@ class PrimaryWindowRecord:
 
 class LogSequencingState:
     next_log_id: LogId
+
+
+class TxFamilyState:
+    next_tx_id: TxId
 
 
 class LogBlockWindow:
@@ -298,7 +318,7 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 Shared metadata:
 
 - `publication_state` table, key `state` -> `PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
-- `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, logs: Option<PrimaryWindowRecord>, traces: Option<PrimaryWindowRecord> }`
+- `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, logs: Option<PrimaryWindowRecord>, txs: Option<PrimaryWindowRecord>, traces: Option<PrimaryWindowRecord> }`
 - `block_hash_index` table, key `<block_hash>` -> `block_num`
 - `block_log_header` table, key `<block_num>` -> `BlockLogHeader { offsets }`
 - `block_trace_header` table, key `<block_num>` -> `BlockTraceHeader { encoding_version, offsets, tx_starts }`
@@ -341,6 +361,7 @@ Today the logs and traces families persist finalized-history artifacts. The shar
 class FinalizedHistoryService:
     async def status(self) -> ServiceStatus
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
+    async def query_transactions(self, request: QueryTransactionsRequest, budget: ExecutionBudget) -> QueryPage[Tx]
     async def query_traces(self, request: QueryTracesRequest, budget: ExecutionBudget) -> QueryPage[Trace]
     async def ingest_finalized_block(self, block: FinalizedBlock) -> IngestOutcome
     async def ingest_finalized_blocks(self, blocks: list[FinalizedBlock]) -> IngestOutcome

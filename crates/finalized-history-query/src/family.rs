@@ -87,6 +87,7 @@ impl Families {
         B: BlobStore,
     {
         let first_log_id = states.logs.next_log_id.get();
+        let first_tx_id = states.txs.next_tx_id.get();
         let first_trace_id = states.traces.next_trace_id.get();
 
         runtime
@@ -121,6 +122,10 @@ impl Families {
                     logs: Some(PrimaryWindowRecord {
                         first_primary_id: first_log_id,
                         count: writes.logs as u32,
+                    }),
+                    txs: Some(PrimaryWindowRecord {
+                        first_primary_id: first_tx_id,
+                        count: writes.txs as u32,
                     }),
                     traces: Some(PrimaryWindowRecord {
                         first_primary_id: first_trace_id,
