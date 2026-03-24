@@ -6,7 +6,7 @@ use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::{TraceSequencingState, TracesFamily};
-use crate::txs::{Tx, TxFamilyState, TxsFamily};
+use crate::txs::{IngestTx, TxFamilyState, TxsFamily};
 
 pub type Hash32 = [u8; 32];
 
@@ -16,7 +16,7 @@ pub struct FinalizedBlock {
     pub block_hash: Hash32,
     pub parent_hash: Hash32,
     pub logs: Vec<Log>,
-    pub txs: Vec<Tx>,
+    pub txs: Vec<IngestTx>,
     pub trace_rlp: Vec<u8>,
 }
 

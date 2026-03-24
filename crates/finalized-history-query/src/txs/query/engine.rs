@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::txs::types::Tx;
+use crate::txs::view::Tx;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TxsQueryEngine;

@@ -11,4 +11,5 @@ pub mod view;
 pub use family::TxsFamily;
 pub use filter::TxFilter;
 pub(crate) use query::TxsQueryEngine;
-pub use types::{Tx, TxFamilyState};
+pub use types::{IngestTx, TxFamilyState};
+pub use view::Tx;

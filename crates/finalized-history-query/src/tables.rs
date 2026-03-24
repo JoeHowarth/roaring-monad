@@ -32,6 +32,7 @@ use crate::txs::table_specs::{
     TxHashIndexSpec,
 };
 use crate::txs::types::{BlockTxHeader, TxLocation};
+use crate::txs::view::Tx;
 
 pub struct PrimaryDirTables<M: MetaStore> {
     pub(crate) buckets: PrimaryDirBucketTable<M>,
@@ -133,7 +134,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             tx_hash_index: TxHashIndexTable {
                 table: meta_store.table(TxHashIndexSpec::TABLE),
             },
-            block_records,
+            block_records: block_records.clone(),
             block_log_headers: block_log_headers.clone(),
             block_tx_headers: block_tx_headers.clone(),
             block_trace_headers: block_trace_headers.clone(),
@@ -218,6 +219,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_tx_blobs: BlockTxBlobTable {
                 blob_table: blob_store.table(BlockTxBlobSpec::TABLE),
                 block_tx_headers,
+                block_records,
             },
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
@@ -273,6 +275,12 @@ impl<M: MetaStore> BlockRecordTable<M> {
 
     fn metrics(&self) -> TableCacheMetrics {
         self.0.metrics()
+    }
+}
+
+impl<M: MetaStore> Clone for BlockRecordTable<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
@@ -799,11 +807,36 @@ impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
 pub struct BlockTxBlobTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
     block_tx_headers: BlockTxHeaderTable<M>,
+    block_records: BlockRecordTable<M>,
 }
 
 impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
     pub async fn get(&self, block_num: u64) -> Result<Option<Bytes>> {
         self.blob_table.get(&BlockTxBlobSpec::key(block_num)).await
+    }
+
+    pub async fn load_tx_at(&self, block_num: u64, tx_idx: u32) -> Result<Option<Tx>> {
+        let Some(header) = self.block_tx_headers.get(block_num).await? else {
+            return Ok(None);
+        };
+        let Some(envelope_bytes) = load_offset_item_range(
+            &self.blob_table,
+            &BlockTxBlobSpec::key(block_num),
+            &header.offsets,
+            tx_idx as usize,
+            "tx",
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let block_hash = self
+            .block_records
+            .get(block_num)
+            .await?
+            .map(|record| record.block_hash)
+            .ok_or(Error::NotFound)?;
+        Tx::new(block_num, block_hash, tx_idx, envelope_bytes).map(Some)
     }
 
     pub async fn put_block(
@@ -870,8 +903,15 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
             return Ok(Vec::new());
         }
 
-        let start = header.offset(start_local_ordinal)?;
-        let end = header.offset(end_local_ordinal_inclusive + 1)?;
+        let Some((start, end)) = offset_window(
+            &header.offsets,
+            start_local_ordinal,
+            end_local_ordinal_inclusive + 1,
+            "log",
+        )?
+        else {
+            return Ok(Vec::new());
+        };
         let Some(run_bytes) = self
             .blob_table
             .read_range(&BlockLogBlobSpec::key(block_num), start, end)
@@ -933,6 +973,46 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
 
         Ok(())
     }
+}
+
+async fn load_offset_item_range<B: BlobStore>(
+    blob_table: &BlobTable<B>,
+    key: &[u8],
+    offsets: &crate::core::offsets::BucketedOffsets,
+    local_ordinal: usize,
+    item_kind: &'static str,
+) -> Result<Option<Bytes>> {
+    let Some((start, end)) = offset_window(offsets, local_ordinal, local_ordinal + 1, item_kind)?
+    else {
+        return Ok(None);
+    };
+    blob_table.read_range(key, start, end).await
+}
+
+fn offset_window(
+    offsets: &crate::core::offsets::BucketedOffsets,
+    start_local_ordinal: usize,
+    end_local_ordinal_exclusive: usize,
+    item_kind: &'static str,
+) -> Result<Option<(u64, u64)>> {
+    if start_local_ordinal >= end_local_ordinal_exclusive {
+        return Ok(None);
+    }
+
+    let Some(start) = offsets.get(start_local_ordinal) else {
+        return Ok(None);
+    };
+    let Some(end) = offsets.get(end_local_ordinal_exclusive) else {
+        return Ok(None);
+    };
+    if end < start {
+        return Err(Error::Decode(match item_kind {
+            "log" => "invalid block log range",
+            "tx" => "invalid block tx range",
+            _ => "invalid block blob range",
+        }));
+    }
+    Ok(Some((start, end)))
 }
 
 fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {

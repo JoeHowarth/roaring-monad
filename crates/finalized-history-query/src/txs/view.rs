@@ -1,8 +1,75 @@
 use alloy_rlp::{Header, PayloadView};
+use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::family::Hash32;
 use crate::txs::types::{Address20, Selector4};
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Tx {
+    block_num: u64,
+    block_hash: Hash32,
+    tx_idx: u32,
+    envelope_bytes: Bytes,
+}
+
+impl Tx {
+    pub fn new(
+        block_num: u64,
+        block_hash: Hash32,
+        tx_idx: u32,
+        envelope_bytes: Bytes,
+    ) -> Result<Self> {
+        TxEnvelopeView::decode(envelope_bytes.as_ref())?;
+        Ok(Self {
+            block_num,
+            block_hash,
+            tx_idx,
+            envelope_bytes,
+        })
+    }
+
+    pub fn block_num(&self) -> u64 {
+        self.block_num
+    }
+
+    pub fn block_hash(&self) -> &Hash32 {
+        &self.block_hash
+    }
+
+    pub fn tx_idx(&self) -> u32 {
+        self.tx_idx
+    }
+
+    pub fn envelope(&self) -> Result<TxEnvelopeView<'_>> {
+        TxEnvelopeView::decode(self.envelope_bytes.as_ref())
+    }
+
+    pub fn tx_hash(&self) -> Result<&Hash32> {
+        Ok(self.envelope()?.tx_hash())
+    }
+
+    pub fn sender(&self) -> Result<&Address20> {
+        Ok(self.envelope()?.sender())
+    }
+
+    pub fn signed_tx_bytes(&self) -> Result<&[u8]> {
+        Ok(self.envelope()?.signed_tx_bytes())
+    }
+
+    pub fn signed_tx(&self) -> Result<TxView<'_>> {
+        self.envelope()?.signed_tx()
+    }
+}
+
+impl std::fmt::Debug for Tx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tx")
+            .field("block_num", &self.block_num)
+            .field("tx_idx", &self.tx_idx)
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct TxEnvelopeView<'a> {
@@ -109,6 +176,23 @@ mod tests {
         assert_eq!(view.tx_hash(), &[1u8; 32]);
         assert_eq!(view.sender(), &[2u8; 20]);
         assert_eq!(view.signed_tx_bytes(), &[3, 4, 5]);
+    }
+
+    #[test]
+    fn tx_wraps_envelope_bytes_zero_copy() {
+        let envelope = StoredTxEnvelope {
+            tx_hash: [1u8; 32],
+            sender: [2u8; 20],
+            signed_tx_bytes: vec![3, 4, 5],
+        };
+        let tx = Tx::new(7, [9u8; 32], 4, envelope.encode()).expect("tx");
+
+        assert_eq!(tx.block_num(), 7);
+        assert_eq!(tx.block_hash(), &[9u8; 32]);
+        assert_eq!(tx.tx_idx(), 4);
+        assert_eq!(tx.tx_hash().expect("tx_hash"), &[1u8; 32]);
+        assert_eq!(tx.sender().expect("sender"), &[2u8; 20]);
+        assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[3, 4, 5]);
     }
 }
 

@@ -35,4 +35,4 @@ pub use logs::filter::LogFilter;
 pub use logs::types::Log;
 pub use traces::filter::TraceFilter;
 pub use traces::types::Trace;
-pub use txs::{Tx, TxFilter};
+pub use txs::{IngestTx, Tx, TxFilter};

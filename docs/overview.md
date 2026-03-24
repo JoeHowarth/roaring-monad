@@ -155,6 +155,7 @@ The txs layer already participates in the shared family boundary:
 - `src/txs/*`
 
 Txs now persist authoritative block tx blobs, block tx headers, hash lookup rows, and shared directory fragments during ingest. Transaction query execution, stream indexing, and signed-tx variant materialization remain incomplete.
+The public tx query item is a zero-copy bytes-backed view over one stored tx envelope rather than an eagerly owned decoded struct.
 
 ## Main Types
 
@@ -234,13 +235,20 @@ class Block:
     parent_hash: bytes32
 
 
-class Tx:
+class IngestTx:
     tx_idx: int
     tx_hash: bytes32
     sender: bytes20
     signed_tx_bytes: bytes
-    block_num: int
-    block_hash: bytes32
+
+
+class Tx:
+    def block_num(self) -> int: ...
+    def block_hash(self) -> bytes32: ...
+    def tx_idx(self) -> int: ...
+    def tx_hash(self) -> bytes32: ...
+    def sender(self) -> bytes20: ...
+    def signed_tx_bytes(self) -> bytes: ...
 
 
 class Trace:
@@ -266,7 +274,7 @@ class FinalizedBlock:
     block_hash: bytes32
     parent_hash: bytes32
     logs: list[Log]
-    txs: list[Tx]
+    txs: list[IngestTx]
     trace_rlp: bytes
 
 
