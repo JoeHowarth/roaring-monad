@@ -154,7 +154,7 @@ The txs layer already participates in the shared family boundary:
 
 - `src/txs/*`
 
-Today txs still provide state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
+Txs now persist authoritative block tx blobs, block tx headers, hash lookup rows, and shared directory fragments during ingest. Transaction query execution, stream indexing, and signed-tx variant materialization remain incomplete.
 
 ## Main Types
 
@@ -237,6 +237,8 @@ class Block:
 class Tx:
     tx_idx: int
     tx_hash: bytes32
+    sender: bytes20
+    signed_tx_bytes: bytes
     block_num: int
     block_hash: bytes32
 

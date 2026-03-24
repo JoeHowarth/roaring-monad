@@ -11,6 +11,8 @@ pub type Selector4 = [u8; 4];
 pub struct Tx {
     pub tx_idx: u32,
     pub tx_hash: Hash32,
+    pub sender: Address20,
+    pub signed_tx_bytes: Vec<u8>,
     pub block_num: u64,
     pub block_hash: Hash32,
 }

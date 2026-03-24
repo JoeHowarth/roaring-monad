@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::txs::ingest::persist_tx_artifacts;
 use crate::txs::types::TxFamilyState;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -31,14 +32,24 @@ impl TxsFamily {
 
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
-        _config: &Config,
-        _runtime: &Runtime<M, B>,
-        _state: &mut TxFamilyState,
+        config: &Config,
+        runtime: &Runtime<M, B>,
+        state: &mut TxFamilyState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
-        if !block.txs.is_empty() {
-            return Err(Error::Unsupported("tx ingest not implemented"));
-        }
-        Ok(0)
+        let from_next_tx_id = state.next_tx_id.get();
+        let tx_count =
+            persist_tx_artifacts(config, &runtime.tables, block, from_next_tx_id).await?;
+        let tx_count_u32 =
+            u32::try_from(tx_count).map_err(|_| Error::Decode("tx count overflow"))?;
+
+        runtime
+            .tables
+            .tx_dir
+            .persist_block_fragment(block.block_num, from_next_tx_id, tx_count_u32)
+            .await?;
+
+        state.next_tx_id = TxId::new(from_next_tx_id.saturating_add(tx_count as u64));
+        Ok(tx_count)
     }
 }

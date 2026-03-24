@@ -50,7 +50,7 @@ Current family status:
 - `logs`: real family, with storage layout, codecs, indexing, query execution,
   materialization, and ingest
 - `txs`: scaffold family slot only
-- `txs`: shared-state participation plus transport-free request/service stubs; non-empty ingest and tx queries still return unsupported
+- `txs`: shared-state participation plus real ingest-side storage artifacts; tx queries still return unsupported
 - `traces`: real family, with trace-owned storage, indexing, query execution,
   materialization, and ingest
 

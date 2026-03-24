@@ -27,6 +27,11 @@ use crate::traces::table_specs::{
     TraceBitmapPageMetaSpec, TraceDirBucketSpec, TraceDirByBlockSpec, TraceDirSubBucketSpec,
 };
 use crate::traces::types::BlockTraceHeader;
+use crate::txs::table_specs::{
+    BlockTxBlobSpec, BlockTxHeaderSpec, TxDirBucketSpec, TxDirByBlockSpec, TxDirSubBucketSpec,
+    TxHashIndexSpec,
+};
+use crate::txs::types::{BlockTxHeader, TxLocation};
 
 pub struct PrimaryDirTables<M: MetaStore> {
     pub(crate) buckets: PrimaryDirBucketTable<M>,
@@ -84,14 +89,18 @@ impl<M: MetaStore> PrimaryDirTables<M> {
 
 pub struct Tables<M: MetaStore, B: BlobStore> {
     pub block_hash_index: BlockHashIndexTable<M>,
+    pub tx_hash_index: TxHashIndexTable<M>,
     pub block_records: BlockRecordTable<M>,
     pub block_log_headers: BlockLogHeaderTable<M>,
+    pub block_tx_headers: BlockTxHeaderTable<M>,
     pub block_trace_headers: BlockTraceHeaderTable<M>,
     pub log_dir: PrimaryDirTables<M>,
+    pub tx_dir: PrimaryDirTables<M>,
     pub trace_dir: PrimaryDirTables<M>,
     pub log_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub trace_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub point_log_payloads: PointLogPayloadTable<M, B>,
+    pub block_tx_blobs: BlockTxBlobTable<M, B>,
     pub block_trace_blobs: BlockTraceBlobTable<M, B>,
     pub log_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub trace_open_bitmap_pages: OpenBitmapPageTable<M>,
@@ -112,6 +121,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             meta_store.table(BlockLogHeaderSpec::TABLE),
             cache_for(config.block_log_header.max_bytes),
         );
+        let block_tx_headers =
+            BlockTxHeaderTable::new(meta_store.table(BlockTxHeaderSpec::TABLE), no_cache());
         let block_trace_headers =
             BlockTraceHeaderTable::new(meta_store.table(BlockTraceHeaderSpec::TABLE), no_cache());
 
@@ -119,8 +130,12 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_hash_index: BlockHashIndexTable {
                 table: meta_store.table(BlockHashIndexSpec::TABLE),
             },
+            tx_hash_index: TxHashIndexTable {
+                table: meta_store.table(TxHashIndexSpec::TABLE),
+            },
             block_records,
             block_log_headers: block_log_headers.clone(),
+            block_tx_headers: block_tx_headers.clone(),
             block_trace_headers: block_trace_headers.clone(),
             log_dir: PrimaryDirTables {
                 buckets: PrimaryDirBucketTable::new(
@@ -133,6 +148,19 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(LogDirByBlockSpec::TABLE),
+                ),
+            },
+            tx_dir: PrimaryDirTables {
+                buckets: PrimaryDirBucketTable::new(
+                    meta_store.table(TxDirBucketSpec::TABLE),
+                    no_cache(),
+                ),
+                sub_buckets: PrimaryDirBucketTable::new(
+                    meta_store.table(TxDirSubBucketSpec::TABLE),
+                    no_cache(),
+                ),
+                fragments: PrimaryDirFragmentTable::new(
+                    meta_store.scannable_table(TxDirByBlockSpec::TABLE),
                 ),
             },
             trace_dir: PrimaryDirTables {
@@ -186,6 +214,10 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: cache_for(config.point_log_payloads.max_bytes),
                 block_log_headers,
+            },
+            block_tx_blobs: BlockTxBlobTable {
+                blob_table: blob_store.table(BlockTxBlobSpec::TABLE),
+                block_tx_headers,
             },
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
@@ -271,6 +303,31 @@ impl<M: MetaStore> BlockHashIndexTable<M> {
     }
 }
 
+pub struct TxHashIndexTable<M> {
+    table: KvTable<M>,
+}
+
+impl<M: MetaStore> TxHashIndexTable<M> {
+    pub async fn get(&self, tx_hash: &[u8; 32]) -> Result<Option<TxLocation>> {
+        let Some(record) = self.table.get(&TxHashIndexSpec::key(tx_hash)).await? else {
+            return Ok(None);
+        };
+        TxLocation::decode(&record.value).map(Some)
+    }
+
+    pub async fn put(&self, tx_hash: &[u8; 32], location: &TxLocation) -> Result<()> {
+        let _ = self
+            .table
+            .put(
+                &TxHashIndexSpec::key(tx_hash),
+                location.encode(),
+                crate::store::traits::PutCond::Any,
+            )
+            .await?;
+        Ok(())
+    }
+}
+
 pub struct BlockLogHeaderTable<M: MetaStore>(
     CachedPointTable<M, crate::logs::types::BlockLogHeader>,
 );
@@ -302,6 +359,30 @@ impl<M: MetaStore> BlockLogHeaderTable<M> {
 }
 
 impl<M: MetaStore> Clone for BlockLogHeaderTable<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+pub struct BlockTxHeaderTable<M: MetaStore>(CachedPointTable<M, BlockTxHeader>);
+
+impl<M: MetaStore> BlockTxHeaderTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, block_num: u64) -> Result<Option<BlockTxHeader>> {
+        self.0.get_decoded(&BlockTxHeaderSpec::key(block_num)).await
+    }
+
+    pub async fn put(&self, block_num: u64, header: &BlockTxHeader) -> Result<()> {
+        self.0
+            .put_encoded(&BlockTxHeaderSpec::key(block_num), header)
+            .await
+    }
+}
+
+impl<M: MetaStore> Clone for BlockTxHeaderTable<M> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
@@ -712,6 +793,31 @@ impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
                 .await?;
         }
         self.block_trace_headers.put(block_num, header).await
+    }
+}
+
+pub struct BlockTxBlobTable<M: MetaStore, B: BlobStore> {
+    blob_table: BlobTable<B>,
+    block_tx_headers: BlockTxHeaderTable<M>,
+}
+
+impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
+    pub async fn get(&self, block_num: u64) -> Result<Option<Bytes>> {
+        self.blob_table.get(&BlockTxBlobSpec::key(block_num)).await
+    }
+
+    pub async fn put_block(
+        &self,
+        block_num: u64,
+        block_blob: Bytes,
+        header: &BlockTxHeader,
+    ) -> Result<()> {
+        if !block_blob.is_empty() {
+            self.blob_table
+                .put(&BlockTxBlobSpec::key(block_num), block_blob)
+                .await?;
+        }
+        self.block_tx_headers.put(block_num, header).await
     }
 }
 
