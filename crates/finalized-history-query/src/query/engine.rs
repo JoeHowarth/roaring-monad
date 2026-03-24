@@ -60,6 +60,8 @@ pub(crate) async fn resolve_request_block_bounds<M: MetaStore, B: BlobStore, F: 
     Ok((from_block, to_block))
 }
 
+/// Drives the shared indexed-query pipeline for one family by resolving block
+/// bounds, mapping them to primary IDs, executing bitmap search, and building a page.
 pub(crate) async fn execute_family_query<M, P, B, F, Q, W>(
     family_tables: FamilyQueryTables<'_, M, B>,
     publication_store: &P,

@@ -50,6 +50,8 @@ impl TracesFamily {
         })
     }
 
+    /// Persists one finalized block's trace artifacts, updates trace-side
+    /// indexing state, and seals any directories or bitmap pages that closed.
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
         _config: &Config,

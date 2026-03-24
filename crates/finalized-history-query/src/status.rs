@@ -15,6 +15,8 @@ pub struct ServiceStatus {
     pub trace_state: TraceSequencingState,
 }
 
+/// Loads the published finalized head and derives the per-family sequencing
+/// state that a caller needs to understand the service's current ingest position.
 pub async fn service_status<M: MetaStore, P: PublicationStore, B: BlobStore>(
     runtime: &Runtime<M, B>,
     publication_store: &P,

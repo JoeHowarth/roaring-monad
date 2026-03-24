@@ -50,6 +50,8 @@ pub struct Families {
 }
 
 impl Families {
+    /// Reconstructs each family's sequencing state from the current published
+    /// finalized head so ingest can resume with the next primary IDs.
     pub async fn load_state_from_head<M, B>(
         &self,
         runtime: &Runtime<M, B>,
@@ -71,6 +73,8 @@ impl Families {
         })
     }
 
+    /// Runs the shared per-block ingest envelope around the family adapters by
+    /// updating block indexes first and persisting the block record last.
     pub async fn ingest_block<M, B>(
         &self,
         config: &Config,

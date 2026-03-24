@@ -5,6 +5,8 @@ use crate::error::Result;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
+/// Maps a resolved finalized block range onto the inclusive primary-ID window
+/// that contains the family's first and last non-empty blocks in that range.
 pub(crate) async fn resolve_primary_window<M, B, I, F>(
     tables: &Tables<M, B>,
     block_range: &ResolvedBlockRange,

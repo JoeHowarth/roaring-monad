@@ -91,6 +91,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self.runtime.blob_store
     }
 
+    /// Resolves the finalized block window for a logs request and executes the
+    /// indexed query pipeline, returning a resumable page of matching logs.
     pub async fn query_logs(
         &self,
         request: QueryLogsRequest,
@@ -106,6 +108,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .await
     }
 
+    /// Resolves the finalized block window for a traces request and executes
+    /// the indexed query pipeline, returning a resumable page of matching traces.
     pub async fn query_traces(
         &self,
         request: QueryTracesRequest,
@@ -125,11 +129,19 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         self.ingest_finalized_blocks(vec![block]).await
     }
 
+    /// Ingests a contiguous batch of finalized blocks and advances publication
+    /// only after all participating families have written their authoritative artifacts.
     pub async fn ingest_finalized_blocks(
         &self,
         blocks: Vec<FinalizedBlock>,
     ) -> Result<IngestOutcome> {
-        self.ingest_blocks(blocks).await
+        if !self.allows_writes {
+            return Err(reader_only_mode_error());
+        }
+
+        self.ingest
+            .ingest_finalized_blocks(&self.runtime, &blocks)
+            .await
     }
 
     pub async fn indexed_finalized_head(&self) -> Result<u64> {
@@ -147,16 +159,6 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         )
         .await
     }
-
-    async fn ingest_blocks(&self, blocks: Vec<FinalizedBlock>) -> Result<IngestOutcome> {
-        if !self.allows_writes {
-            return Err(reader_only_mode_error());
-        }
-
-        self.ingest
-            .ingest_finalized_blocks(&self.runtime, &blocks)
-            .await
-    }
 }
 
 fn reader_only_mode_error() -> Error {
@@ -168,6 +170,8 @@ where
     M: MetaStore + Clone,
     B: BlobStore,
 {
+    /// Builds a read-write service that acquires lease-based write authority
+    /// over publication while sharing the same runtime for query and ingest.
     pub fn new_reader_writer(config: Config, meta_store: M, blob_store: B, owner_id: u64) -> Self {
         let authority = LeaseAuthority::new(
             MetaPublicationStore::new(meta_store.clone()),
@@ -184,6 +188,8 @@ where
     M: MetaStore + Clone,
     B: BlobStore,
 {
+    /// Builds a query-only service that shares the normal runtime but refuses
+    /// any ingest call that would require write authority.
     pub fn new_reader_only(config: Config, meta_store: M, blob_store: B) -> Self {
         Self::with_authority(config, meta_store, blob_store, ReadOnlyAuthority, false)
     }

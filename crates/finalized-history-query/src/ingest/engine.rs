@@ -96,6 +96,8 @@ where
             .await
     }
 
+    /// Coordinates writer-state preparation, finalized-sequence validation,
+    /// per-family ingest, and the single publication step for a block batch.
     pub async fn ingest_finalized_blocks<M, B>(
         &self,
         runtime: &Runtime<M, B>,

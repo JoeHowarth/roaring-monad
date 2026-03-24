@@ -14,6 +14,8 @@ use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Receiver;
 
+/// Drains a live message stream into a validated dataset, computes aggregate
+/// stats, and writes the dataset artifacts plus run summary to disk.
 pub async fn run_collect(
     config: GeneratorConfig,
     receiver: Receiver<crate::types::Message>,
@@ -49,6 +51,8 @@ pub async fn run_collect(
     Ok(summary)
 }
 
+/// Runs collection and then offline trace generation, but only if the
+/// collected dataset passed validation and is safe to generate from.
 pub async fn run_collect_and_generate(
     config: GeneratorConfig,
     receiver: Receiver<crate::types::Message>,
@@ -65,6 +69,8 @@ pub async fn run_collect_and_generate(
     Ok(trace_summary)
 }
 
+/// Reopens an existing dataset, records the chosen seed, generates trace
+/// query workloads from the stored stats, and updates the run summary.
 pub async fn run_offline_generate(
     config: GeneratorConfig,
     dataset_path: &Path,

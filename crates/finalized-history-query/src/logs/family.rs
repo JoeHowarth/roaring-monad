@@ -37,6 +37,8 @@ impl LogsFamily {
         })
     }
 
+    /// Persists one finalized block's logs, updates log-side indexing state,
+    /// and seals any directories or bitmap pages that became complete in the process.
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
         config: &Config,
