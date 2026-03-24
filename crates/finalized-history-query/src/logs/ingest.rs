@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::sharded_streams::sharded_stream_id;
+use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::types::BlockLogHeader;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -19,21 +19,16 @@ pub fn collect_stream_appends(
     block: &FinalizedBlock,
     first_log_id: u64,
 ) -> BTreeMap<String, Vec<u32>> {
-    let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-
-    for (index, log) in block.logs.iter().enumerate() {
+    group_stream_values(block.logs.iter().enumerate().flat_map(|(index, log)| {
         let global_log_id = LogId::new(first_log_id + index as u64);
-        let shard = global_log_id.shard();
+        let shard = global_log_id.shard().get();
         let local = global_log_id.local().get();
 
-        out.entry(sharded_stream_id("addr", &log.address, shard.get()))
-            .or_default()
-            .insert(local);
+        let mut entries = Vec::with_capacity(5);
+        entries.push((sharded_stream_id("addr", &log.address, shard), local));
 
         if let Some(topic0) = log.topics.first() {
-            out.entry(sharded_stream_id("topic0", topic0, shard.get()))
-                .or_default()
-                .insert(local);
+            entries.push((sharded_stream_id("topic0", topic0, shard), local));
         }
 
         for (topic_index, topic) in log.topics.iter().enumerate().skip(1).take(3) {
@@ -43,15 +38,11 @@ pub fn collect_stream_appends(
                 3 => "topic3",
                 _ => continue,
             };
-            out.entry(sharded_stream_id(kind, topic, shard.get()))
-                .or_default()
-                .insert(local);
+            entries.push((sharded_stream_id(kind, topic, shard), local));
         }
-    }
 
-    out.into_iter()
-        .map(|(stream, values)| (stream, values.into_iter().collect()))
-        .collect()
+        entries
+    }))
 }
 
 pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(

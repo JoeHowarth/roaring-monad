@@ -41,10 +41,7 @@ pub fn group_stream_values_into_pages(
     values: impl IntoIterator<Item = (String, u32)>,
     page_span: u32,
 ) -> BTreeMap<String, BTreeMap<u32, RoaringBitmap>> {
-    let mut grouped = BTreeMap::<String, BTreeSet<u32>>::new();
-    for (stream, value) in values {
-        grouped.entry(stream).or_default().insert(value);
-    }
+    let grouped = group_stream_values(values);
 
     let mut pages = BTreeMap::<String, BTreeMap<u32, RoaringBitmap>>::new();
     for (stream, values) in grouped {
@@ -55,6 +52,20 @@ pub fn group_stream_values_into_pages(
         }
     }
     pages
+}
+
+pub fn group_stream_values(
+    values: impl IntoIterator<Item = (String, u32)>,
+) -> BTreeMap<String, Vec<u32>> {
+    let mut grouped = BTreeMap::<String, BTreeSet<u32>>::new();
+    for (stream, value) in values {
+        grouped.entry(stream).or_default().insert(value);
+    }
+
+    grouped
+        .into_iter()
+        .map(|(stream, values)| (stream, values.into_iter().collect()))
+        .collect()
 }
 
 pub fn overlaps(min_local: u32, max_local: u32, local_from: u32, local_to: u32) -> bool {

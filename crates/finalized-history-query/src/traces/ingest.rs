@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
@@ -7,7 +7,7 @@ use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
-use crate::kernel::sharded_streams::sharded_stream_id;
+use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
@@ -39,42 +39,31 @@ pub fn collect_trace_stream_appends(
     block: &FinalizedBlock,
     first_trace_id: u64,
 ) -> Result<BTreeMap<String, Vec<u32>>> {
-    let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    let mut values = Vec::new();
 
     for (index, iterated) in BlockTraceIter::new(&block.trace_rlp)?.enumerate() {
         let iterated = iterated?;
         let global_trace_id = TraceId::new(first_trace_id + index as u64);
-        let shard = global_trace_id.shard();
+        let shard = global_trace_id.shard().get();
         let local = global_trace_id.local().get();
         let view = iterated.view;
 
-        out.entry(sharded_stream_id("from", view.from_addr()?, shard.get()))
-            .or_default()
-            .insert(local);
+        values.push((sharded_stream_id("from", view.from_addr()?, shard), local));
 
         if let Some(to_addr) = view.to_addr()? {
-            out.entry(sharded_stream_id("to", to_addr, shard.get()))
-                .or_default()
-                .insert(local);
+            values.push((sharded_stream_id("to", to_addr, shard), local));
         }
 
         if let Some(selector) = view.selector()? {
-            out.entry(sharded_stream_id("selector", selector, shard.get()))
-                .or_default()
-                .insert(local);
+            values.push((sharded_stream_id("selector", selector, shard), local));
         }
 
         if view.has_value()? {
-            out.entry(sharded_stream_id("has_value", b"\x01", shard.get()))
-                .or_default()
-                .insert(local);
+            values.push((sharded_stream_id("has_value", b"\x01", shard), local));
         }
     }
 
-    Ok(out
-        .into_iter()
-        .map(|(stream, values)| (stream, values.into_iter().collect()))
-        .collect())
+    Ok(group_stream_values(values))
 }
 
 pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
