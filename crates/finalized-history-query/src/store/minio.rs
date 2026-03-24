@@ -134,6 +134,50 @@ impl BlobStore for MinioBlobStore {
         .await
     }
 
+    async fn read_range(
+        &self,
+        table: BlobTableId,
+        key: &[u8],
+        start: u64,
+        end_exclusive: u64,
+    ) -> Result<Option<Bytes>> {
+        if start >= end_exclusive {
+            return Ok(Some(Bytes::new()));
+        }
+        let object_key = self.object_key(table, key);
+        let range = format!("bytes={}-{}", start, end_exclusive - 1);
+        self.with_retry("read_range", || async {
+            let res = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&object_key)
+                .range(&range)
+                .send()
+                .await;
+
+            match res {
+                Ok(resp) => {
+                    let aggregated = resp
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|e| Error::Backend(format!("minio read_range body: {e}")))?;
+                    Ok(Some(aggregated.into_bytes()))
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    if msg.contains("NoSuchKey") || msg.contains("not found") {
+                        Ok(None)
+                    } else {
+                        Err(Error::Backend(format!("minio read_range: {err}")))
+                    }
+                }
+            }
+        })
+        .await
+    }
+
     async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
         let _ = self
             .client
