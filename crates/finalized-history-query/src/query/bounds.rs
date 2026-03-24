@@ -1,63 +1,15 @@
-use crate::api::{IndexedQueryRequest, QueryBlocksRequest};
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
-pub(crate) trait BlockBoundsRequest {
-    fn requested_from_block(&self) -> Option<u64>;
-    fn requested_to_block(&self) -> Option<u64>;
-    fn requested_from_block_hash(&self) -> Option<[u8; 32]>;
-    fn requested_to_block_hash(&self) -> Option<[u8; 32]>;
-}
-
-impl<F> BlockBoundsRequest for IndexedQueryRequest<F> {
-    fn requested_from_block(&self) -> Option<u64> {
-        self.from_block
-    }
-
-    fn requested_to_block(&self) -> Option<u64> {
-        self.to_block
-    }
-
-    fn requested_from_block_hash(&self) -> Option<[u8; 32]> {
-        self.from_block_hash
-    }
-
-    fn requested_to_block_hash(&self) -> Option<[u8; 32]> {
-        self.to_block_hash
-    }
-}
-
-impl BlockBoundsRequest for QueryBlocksRequest {
-    fn requested_from_block(&self) -> Option<u64> {
-        self.from_block
-    }
-
-    fn requested_to_block(&self) -> Option<u64> {
-        self.to_block
-    }
-
-    fn requested_from_block_hash(&self) -> Option<[u8; 32]> {
-        self.from_block_hash
-    }
-
-    fn requested_to_block_hash(&self) -> Option<[u8; 32]> {
-        self.to_block_hash
-    }
-}
-
-pub(crate) async fn resolve_request_block_bounds<
-    M: MetaStore,
-    B: BlobStore,
-    R: BlockBoundsRequest,
->(
+pub(crate) async fn resolve_request_block_bounds<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
-    request: &R,
+    from_block: Option<u64>,
+    to_block: Option<u64>,
+    from_block_hash: Option<[u8; 32]>,
+    to_block_hash: Option<[u8; 32]>,
 ) -> Result<(u64, u64)> {
-    let from_block = match (
-        request.requested_from_block(),
-        request.requested_from_block_hash(),
-    ) {
+    let from_block = match (from_block, from_block_hash) {
         (Some(number), None) => number,
         (None, Some(hash)) => tables
             .block_hash_index
@@ -70,10 +22,7 @@ pub(crate) async fn resolve_request_block_bounds<
             ));
         }
     };
-    let to_block = match (
-        request.requested_to_block(),
-        request.requested_to_block_hash(),
-    ) {
+    let to_block = match (to_block, to_block_hash) {
         (Some(number), None) => number,
         (None, Some(hash)) => tables
             .block_hash_index

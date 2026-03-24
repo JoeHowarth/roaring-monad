@@ -166,6 +166,67 @@ fn query_blocks_budget_clamps_effective_limit() {
 }
 
 #[test]
+fn query_blocks_rejects_zero_limit_even_when_range_is_empty() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        svc.ingest_finalized_block(mk_block(1, [0; 32], Vec::new()))
+            .await
+            .expect("ingest block 1");
+
+        let err = query_block_page(&svc, 10, 20, 0)
+            .await
+            .expect_err("zero limit should be rejected");
+
+        assert!(matches!(
+            err,
+            Error::InvalidParams("limit must be at least 1")
+        ));
+    });
+}
+
+#[test]
+fn query_blocks_rejects_zero_budget_even_when_range_is_empty() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        svc.ingest_finalized_block(mk_block(1, [0; 32], Vec::new()))
+            .await
+            .expect("ingest block 1");
+
+        let err = svc
+            .query_blocks(
+                QueryBlocksRequest {
+                    from_block: Some(10),
+                    to_block: Some(20),
+                    from_block_hash: None,
+                    to_block_hash: None,
+                    order: QueryOrder::Ascending,
+                    limit: 5,
+                },
+                ExecutionBudget {
+                    max_results: Some(0),
+                },
+            )
+            .await
+            .expect_err("zero budget should be rejected");
+
+        assert!(matches!(
+            err,
+            Error::InvalidParams("budget.max_results must be at least 1 when set")
+        ));
+    });
+}
+
+#[test]
 fn query_blocks_resolves_block_hash_bounds() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(

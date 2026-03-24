@@ -61,7 +61,15 @@ where
         });
     }
 
-    let (from_block, to_block) = resolve_request_block_bounds(tables, request).await?;
+    let (from_block, to_block) = resolve_request_block_bounds(
+        tables,
+        request.from_block,
+        request.to_block,
+        request.from_block_hash,
+        request.to_block_hash,
+    )
+    .await?;
+    let effective_limit = effective_limit(request.limit, limits.budget)?;
     let block_range = resolve_block_range(
         tables,
         publication_store,
@@ -83,7 +91,7 @@ where
         &block_range,
         id_window,
         request.resume_id.map(Q::Id::new),
-        effective_limit(request.limit, limits.budget)?,
+        effective_limit,
         "resume_id outside resolved block window",
     )?
     else {

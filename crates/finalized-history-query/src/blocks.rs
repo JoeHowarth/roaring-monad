@@ -39,7 +39,15 @@ impl BlocksQueryEngine {
         request: QueryBlocksRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Block>> {
-        let (from_block, to_block) = resolve_request_block_bounds(tables, &request).await?;
+        let (from_block, to_block) = resolve_request_block_bounds(
+            tables,
+            request.from_block,
+            request.to_block,
+            request.from_block_hash,
+            request.to_block_hash,
+        )
+        .await?;
+        let effective_limit = effective_limit(request.limit, budget)?;
         let block_range = resolve_block_range(
             tables,
             publication_store,
@@ -51,7 +59,6 @@ impl BlocksQueryEngine {
         if block_range.is_empty() {
             return Ok(empty_page(&block_range));
         }
-        let effective_limit = effective_limit(request.limit, budget)?;
 
         let mut items = Vec::with_capacity(effective_limit.saturating_add(1));
         let take = effective_limit.saturating_add(1);
