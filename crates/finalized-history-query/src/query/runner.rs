@@ -567,7 +567,7 @@ mod tests {
     use futures::executor::block_on;
     use roaring::RoaringBitmap;
 
-    use super::{CandidateLocation, QueryDescriptor, QueryMaterializer, collect_contiguous_chunk};
+    use super::{QueryDescriptor, QueryMaterializer, collect_contiguous_chunk};
     use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
     use crate::core::refs::BlockRef;
@@ -575,7 +575,6 @@ mod tests {
     use crate::query::planner::PreparedClause;
     use crate::store::traits::{BlobStore, MetaStore};
     use crate::tables::Tables;
-
 
     struct StubDescriptor;
 
