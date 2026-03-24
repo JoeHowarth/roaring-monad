@@ -217,28 +217,23 @@ where
 #[allow(async_fn_in_trait)]
 pub(crate) trait QueryDescriptor {
     type Id: QueryId;
-    type Shard: Copy;
     type ClauseKind: Copy;
     type ClauseSpec: Clone;
     type Filter;
 
     fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<Self::ClauseSpec>;
-    fn first_shard_raw(&self, id: Self::Id) -> u64;
-    fn last_shard_raw(&self, id: Self::Id) -> u64;
-    fn shard_from_raw(&self, shard_raw: u64) -> Self::Shard;
     fn local_range_for_shard(
         &self,
         from: Self::Id,
         to_inclusive: Self::Id,
-        shard: Self::Shard,
+        shard_raw: u64,
     ) -> (u32, u32);
-    fn compose_id(&self, shard: Self::Shard, local_raw: u32) -> Self::Id;
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
         clause_specs: &[Self::ClauseSpec],
-        shard: Self::Shard,
+        shard_raw: u64,
         local_from: u32,
         local_to: u32,
     ) -> Result<Vec<PreparedClause<Self::ClauseKind>>>;
@@ -351,14 +346,11 @@ where
     let clause_specs = descriptor.build_clause_specs(filter);
     let mut matched = Vec::new();
 
-    for shard_raw in
-        descriptor.first_shard_raw(from_id)..=descriptor.last_shard_raw(to_id_inclusive)
-    {
-        let shard = descriptor.shard_from_raw(shard_raw);
+    for shard_raw in from_id.shard_raw()..=to_id_inclusive.shard_raw() {
         let (local_from, local_to) =
-            descriptor.local_range_for_shard(from_id, to_id_inclusive, shard);
+            descriptor.local_range_for_shard(from_id, to_id_inclusive, shard_raw);
         let shard_clauses = descriptor
-            .prepare_shard_clauses(tables, &clause_specs, shard, local_from, local_to)
+            .prepare_shard_clauses(tables, &clause_specs, shard_raw, local_from, local_to)
             .await?;
 
         if shard_clauses.is_empty() {
@@ -395,15 +387,14 @@ where
 
         let mut locals = shard_accumulator.into_iter().peekable();
         while let Some(local_raw) = locals.next() {
-            let id = descriptor.compose_id(shard, local_raw);
+            let id = D::Id::compose(shard_raw, local_raw);
             let Some(location) = materializer.resolve_id(id).await? else {
                 continue;
             };
 
             let run = collect_contiguous_chunk(
                 &mut locals,
-                descriptor,
-                shard,
+                shard_raw,
                 (id, location),
                 remaining_needed_for_chunk(take, matched.len()),
                 materializer,
@@ -431,18 +422,16 @@ where
     Ok(matched)
 }
 
-async fn collect_contiguous_chunk<I, D, Q>(
-    locals: &mut std::iter::Peekable<I>,
-    descriptor: &D,
-    shard: D::Shard,
-    first: (D::Id, ResolvedPrimaryLocation),
+async fn collect_contiguous_chunk<Iter, Q>(
+    locals: &mut std::iter::Peekable<Iter>,
+    shard_raw: u64,
+    first: (Q::Id, ResolvedPrimaryLocation),
     max_len: usize,
     materializer: &mut Q,
-) -> Result<Vec<(D::Id, ResolvedPrimaryLocation)>>
+) -> Result<Vec<(Q::Id, ResolvedPrimaryLocation)>>
 where
-    I: Iterator<Item = u32>,
-    D: QueryDescriptor,
-    Q: QueryMaterializer<Id = D::Id>,
+    Iter: Iterator<Item = u32>,
+    Q: QueryMaterializer,
 {
     let target_len = max_len.max(1);
     let mut run = vec![first];
@@ -450,7 +439,7 @@ where
         let Some(&next_local_raw) = locals.peek() else {
             break;
         };
-        let next_id = descriptor.compose_id(shard, next_local_raw);
+        let next_id = Q::Id::compose(shard_raw, next_local_raw);
         let Some(next_location) = materializer.resolve_id(next_id).await? else {
             let _ = locals.next();
             continue;
@@ -563,77 +552,12 @@ mod tests {
     use std::collections::VecDeque;
 
     use futures::executor::block_on;
-    use roaring::RoaringBitmap;
 
-    use super::{QueryDescriptor, QueryMaterializer, collect_contiguous_chunk};
+    use super::{QueryMaterializer, collect_contiguous_chunk};
     use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
     use crate::core::refs::BlockRef;
     use crate::error::Result;
-    use crate::query::planner::PreparedClause;
-    use crate::store::traits::{BlobStore, MetaStore};
-    use crate::tables::Tables;
-
-    struct StubDescriptor;
-
-    impl QueryDescriptor for StubDescriptor {
-        type Id = LogId;
-        type Shard = LogShard;
-        type ClauseKind = ();
-        type ClauseSpec = ();
-        type Filter = ();
-
-        fn build_clause_specs(&self, _filter: &Self::Filter) -> Vec<Self::ClauseSpec> {
-            Vec::new()
-        }
-
-        fn first_shard_raw(&self, id: Self::Id) -> u64 {
-            id.shard().get()
-        }
-
-        fn last_shard_raw(&self, id: Self::Id) -> u64 {
-            id.shard().get()
-        }
-
-        fn shard_from_raw(&self, shard_raw: u64) -> Self::Shard {
-            LogShard::new(shard_raw).expect("test shard")
-        }
-
-        fn local_range_for_shard(
-            &self,
-            _from: Self::Id,
-            _to_inclusive: Self::Id,
-            _shard: Self::Shard,
-        ) -> (u32, u32) {
-            (0, 0)
-        }
-
-        fn compose_id(&self, shard: Self::Shard, local_raw: u32) -> Self::Id {
-            compose_log_id(shard, LogLocalId::new(local_raw).expect("test local id"))
-        }
-
-        async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
-            &self,
-            _tables: &Tables<M, B>,
-            _clause_specs: &[Self::ClauseSpec],
-            _shard: Self::Shard,
-            _local_from: u32,
-            _local_to: u32,
-        ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
-            unreachable!("not used in these tests")
-        }
-
-        async fn load_prepared_clause_bitmap<M: MetaStore, B: BlobStore>(
-            &self,
-            _tables: &Tables<M, B>,
-            _prepared_clause: &PreparedClause<Self::ClauseKind>,
-            _local_from: u32,
-            _local_to: u32,
-        ) -> Result<RoaringBitmap> {
-            unreachable!("not used in these tests")
-        }
-    }
-
     struct StubMaterializer {
         planned: VecDeque<(LogId, Result<Option<ResolvedPrimaryLocation>>)>,
     }
@@ -673,8 +597,8 @@ mod tests {
     #[test]
     fn collect_contiguous_chunk_does_not_resolve_past_requested_prefix() {
         block_on(async {
-            let descriptor = StubDescriptor;
             let shard = LogShard::new(0).expect("shard");
+            let shard_raw = shard.get();
             let mut locals = vec![1u32, 2u32].into_iter().peekable();
             let first = (
                 compose_log_id(shard, LogLocalId::new(0).expect("local")),
@@ -703,16 +627,10 @@ mod tests {
                 ]),
             };
 
-            let chunk = collect_contiguous_chunk(
-                &mut locals,
-                &descriptor,
-                shard,
-                first,
-                2,
-                &mut materializer,
-            )
-            .await
-            .expect("collect chunk");
+            let chunk =
+                collect_contiguous_chunk(&mut locals, shard_raw, first, 2, &mut materializer)
+                    .await
+                    .expect("collect chunk");
 
             assert_eq!(chunk.len(), 2);
             assert_eq!(locals.next(), Some(2));
@@ -722,8 +640,8 @@ mod tests {
     #[test]
     fn collect_contiguous_chunk_leaves_remaining_run_for_following_iterations() {
         block_on(async {
-            let descriptor = StubDescriptor;
             let shard = LogShard::new(0).expect("shard");
+            let shard_raw = shard.get();
             let mut locals = vec![1u32, 2u32, 3u32].into_iter().peekable();
             let first = (
                 compose_log_id(shard, LogLocalId::new(0).expect("local")),
@@ -753,22 +671,15 @@ mod tests {
                 ]),
             };
 
-            let first_chunk = collect_contiguous_chunk(
-                &mut locals,
-                &descriptor,
-                shard,
-                first,
-                2,
-                &mut materializer,
-            )
-            .await
-            .expect("first chunk");
+            let first_chunk =
+                collect_contiguous_chunk(&mut locals, shard_raw, first, 2, &mut materializer)
+                    .await
+                    .expect("first chunk");
             let next_local =
                 LogLocalId::new(locals.next().expect("remaining local")).expect("local");
             let second_chunk = collect_contiguous_chunk(
                 &mut locals,
-                &descriptor,
-                shard,
+                shard_raw,
                 (
                     compose_log_id(shard, next_local),
                     ResolvedPrimaryLocation {

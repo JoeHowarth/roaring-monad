@@ -4,7 +4,7 @@ use super::clause::{
 };
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
+use crate::core::ids::{LogId, LogLocalId, LogShard};
 use crate::core::page::QueryPage;
 use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
@@ -105,7 +105,6 @@ struct LogsQueryDescriptor;
 
 impl QueryDescriptor for LogsQueryDescriptor {
     type Id = LogId;
-    type Shard = LogShard;
     type ClauseKind = ClauseKind;
     type ClauseSpec = IndexedClauseSpec;
     type Filter = LogFilter;
@@ -114,43 +113,26 @@ impl QueryDescriptor for LogsQueryDescriptor {
         build_clause_specs(filter)
     }
 
-    fn first_shard_raw(&self, id: Self::Id) -> u64 {
-        id.shard().get()
-    }
-
-    fn last_shard_raw(&self, id: Self::Id) -> u64 {
-        id.shard().get()
-    }
-
-    fn shard_from_raw(&self, shard_raw: u64) -> Self::Shard {
-        LogShard::new(shard_raw).expect("shard derived from LogId range")
-    }
-
     fn local_range_for_shard(
         &self,
         from: Self::Id,
         to_inclusive: Self::Id,
-        shard: Self::Shard,
+        shard_raw: u64,
     ) -> (u32, u32) {
+        let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
         let (local_from, local_to) = table_specs::local_range_for_shard(from, to_inclusive, shard);
         (local_from.get(), local_to.get())
-    }
-
-    fn compose_id(&self, shard: Self::Shard, local_raw: u32) -> Self::Id {
-        compose_log_id(
-            shard,
-            LogLocalId::new(local_raw).expect("bitmap values must fit local-id"),
-        )
     }
 
     async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
         &self,
         tables: &Tables<M, B>,
         clause_specs: &[Self::ClauseSpec],
-        shard: Self::Shard,
+        shard_raw: u64,
         local_from: u32,
         local_to: u32,
     ) -> Result<Vec<PreparedClause<Self::ClauseKind>>> {
+        let shard = LogShard::new(shard_raw).expect("shard derived from LogId range");
         prepare_shard_clauses(
             tables,
             clause_specs,
