@@ -1,16 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use roaring::RoaringBitmap;
-
 use crate::core::ids::LogId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
-use crate::kernel::sharded_streams::{compacted_bitmap_blob, group_stream_values_into_pages};
+use crate::ingest::bitmap_pages;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::{BitmapBlob, decode_bitmap_blob, encode_bitmap_blob};
 use crate::tables::Tables;
 
 pub fn collect_stream_appends(
@@ -57,32 +54,21 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     block: &FinalizedBlock,
     first_log_id: u64,
 ) -> Result<Vec<(String, u32)>> {
-    let mut touched_pages = BTreeSet::<(String, u32)>::new();
-
     let grouped_values = collect_stream_appends(block, first_log_id)
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
-    for (stream, pages) in group_stream_values_into_pages(grouped_values, STREAM_PAGE_LOCAL_ID_SPAN)
-    {
-        for (page_start, bitmap) in pages {
-            let Some((_count, bitmap_blob)) = compacted_bitmap_blob(bitmap, page_start) else {
-                continue;
-            };
-
+    bitmap_pages::persist_stream_fragments(
+        block.block_num,
+        grouped_values,
+        STREAM_PAGE_LOCAL_ID_SPAN,
+        |stream, page_start, block_num, bytes| async move {
             tables
                 .bitmap_by_block()
-                .put(
-                    &stream,
-                    page_start,
-                    block.block_num,
-                    encode_bitmap_blob(&bitmap_blob)?,
-                )
-                .await?;
-            touched_pages.insert((stream.clone(), page_start));
-        }
-    }
-
-    Ok(touched_pages.into_iter().collect())
+                .put(&stream, page_start, block_num, bytes)
+                .await
+        },
+    )
+    .await
 }
 
 pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
@@ -105,42 +91,33 @@ pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
     stream_id: &str,
     page_start: u32,
 ) -> Result<bool> {
-    let mut merged = RoaringBitmap::new();
-    for bytes in tables
-        .bitmap_by_block()
-        .load_page_fragments(stream_id, page_start)
-        .await?
-    {
-        merged |= &decode_bitmap_blob(&bytes)?.bitmap;
-    }
-    if merged.is_empty() {
-        return Ok(false);
-    }
-
-    let count = merged.len() as u32;
-    let min_local = merged.min().unwrap_or(page_start);
-    let max_local = merged.max().unwrap_or(page_start);
-    let meta = StreamBitmapMeta {
-        block_num: 0,
-        count,
-        min_local,
-        max_local,
-    };
-    let bitmap_blob = BitmapBlob {
-        min_local,
-        max_local,
-        count,
-        crc32: 0,
-        bitmap: merged,
-    };
-
-    tables
-        .bitmap_page_blobs()
-        .put(stream_id, page_start, encode_bitmap_blob(&bitmap_blob)?)
-        .await?;
-    tables
-        .bitmap_page_meta()
-        .put(stream_id, page_start, &meta)
-        .await?;
-    Ok(true)
+    bitmap_pages::compact_stream_page(
+        stream_id,
+        page_start,
+        |stream, page_start| async move {
+            tables
+                .bitmap_by_block()
+                .load_page_fragments(&stream, page_start)
+                .await
+        },
+        |stream, page_start, bytes| async move {
+            tables
+                .bitmap_page_blobs()
+                .put(&stream, page_start, bytes)
+                .await
+        },
+        |stream, page_start, meta| async move {
+            tables
+                .bitmap_page_meta()
+                .put(&stream, page_start, &meta)
+                .await
+        },
+        |count, min_local, max_local| StreamBitmapMeta {
+            block_num: 0,
+            count,
+            min_local,
+            max_local,
+        },
+    )
+    .await
 }

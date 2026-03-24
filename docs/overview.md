@@ -46,7 +46,9 @@ The crate is organized in three layers.
 - `src/family.rs`
 - `src/ingest/authority.rs`
 - `src/ingest/authority/*`
+- `src/ingest/bitmap_pages.rs`
 - `src/ingest/engine.rs`
+- `src/ingest/primary_dir.rs`
 - `src/kernel/*`
 - `src/runtime.rs`
 - `src/streams/*`
@@ -93,6 +95,8 @@ The shared layer owns:
 - write-authority policy (see [write-authority.md](write-authority.md))
 - publication-state reads
 - shared finalized-state and block-identity reads
+- shared primary-directory fragment persistence plus sealed sub-bucket/bucket compaction
+- shared bitmap-page fragment persistence plus sealed-page compaction mechanics
 
 ### Logs family
 
@@ -104,8 +108,7 @@ The logs layer owns:
 - exact-match materialization
 - log artifact writes
 - log block metadata reads and writes
-- immutable directory fragment writes and summary compaction
-- immutable stream fragment writes and page compaction
+- logs-specific stream fanout and open-page marker handling
 - stream fanout for address/topic indexes
 - logs-specific sequencing state (`next_log_id`) and per-block ingest behavior
 
@@ -119,8 +122,7 @@ The traces layer owns:
 - trace block-window to trace-ID-window mapping
 - zero-copy `CallFrameView` access over stored RLP bytes
 - trace exact-match materialization from stored bytes
-- immutable trace directory fragment writes and summary compaction
-- immutable trace stream fragment writes and page compaction
+- traces-specific stream fanout from `trace_rlp`
 - stream fanout for `from`, `to`, `selector`, and `has_value`
 - traces-specific sequencing state (`next_trace_id`) and per-block ingest behavior
 - public service-level `query_traces` execution over trace-owned indexes

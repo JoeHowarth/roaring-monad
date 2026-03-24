@@ -22,6 +22,8 @@ async def ingest_finalized_blocks(blocks, lease):
 
 The `IngestEngine` orchestrates this flow. It owns finalized sequencing validation, publication, and the shared block loop. The service owns one concrete `Families { logs, txs, traces }` registry, and those family handlers derive startup state from the published head before ingesting one shared `FinalizedBlock` at a time.
 
+Shared ingest helpers under `src/ingest/` now own the generic primary-directory and bitmap-page mechanics. Family adapters supply payload-specific block artifacts, stream fanout values, and any family-only behavior such as logs open-page markers.
+
 The current family set is:
 
 - logs: fully implemented and persists artifacts
@@ -64,6 +66,8 @@ After all blocks in the batch are persisted, sealed directory boundaries are com
 - **Trace sub-bucket compaction**: when `next_trace_id` crosses a trace sub-bucket boundary, the sealed trace fragments are compacted into `trace_dir_sub_bucket`, key `<trace_sub_bucket_start>`
 - **Trace bucket compaction**: when `next_trace_id` crosses a trace bucket boundary, the sealed trace sub-buckets are optionally compacted into `trace_dir_bucket`, key `<trace_bucket_start>`
 
+The sealing walk and the compaction from fragments/sub-buckets are shared substrate logic. Logs and traces provide only the family directory layout (bucket spans, alignment functions, and table bindings).
+
 See [storage-model.md](storage-model.md) for directory layout details.
 
 ## Stream Page Compaction
@@ -76,6 +80,8 @@ When `next_log_id` or `next_trace_id` crosses a stream page boundary (see [stora
 4. delete the `open_bitmap_page` marker for the sealed page
 
 The traces family follows the same pattern with `trace_bitmap_by_block`, `trace_bitmap_page_meta`, and `trace_bitmap_page_blob`.
+
+The generic page-grouping, bitmap merge, and compacted-page write flow lives in shared ingest helpers. Family adapters are responsible for producing `(stream_id, local_id)` pairs and selecting the family-owned tables.
 
 ## Open-Page Markers
 
@@ -92,11 +98,13 @@ When a stream fragment is written to a page for the first time in a batch, an op
 - `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared startup/write aggregation
 - `runtime.rs`: shared store-handle + typed-table runtime used by query/startup/ingest
 - `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
+- `ingest/primary_dir.rs`: shared primary-directory fragment persistence and sealed-boundary compaction
+- `ingest/bitmap_pages.rs`: shared stream-page fragment persistence and compacted-page writes
 - `logs/family.rs`: logs-specific startup recovery and per-block ingest sequencing
 - `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
 - `traces/mod.rs`: trace-family startup recovery and per-block ingest sequencing
-- `logs/ingest/`: owns log directory/stream fragment publication plus eager compaction
-- `traces/ingest/`: owns trace directory/stream fragment publication plus eager compaction
+- `logs/ingest/`: logs payload encoding, logs stream fanout, and open-page marker handling
+- `traces/ingest/`: trace payload encoding and trace stream fanout
 - `publication_state.indexed_finalized_head` is published last
 
 See [write-authority.md](write-authority.md) for the lease and publication model.

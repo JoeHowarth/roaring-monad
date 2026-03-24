@@ -8,7 +8,7 @@ use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{LogDirByBlockSpec, LogDirSubBucketSpec};
 use crate::logs::types::{BlockLogHeader, BlockRecord, Log};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::tables::{PrimaryDirFragmentLayout, Tables};
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
@@ -54,10 +54,12 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
             block_num,
             first_log_id,
             count,
-            LogDirSubBucketSpec::sub_bucket_start,
-            LOG_DIRECTORY_SUB_BUCKET_SIZE,
-            LogDirByBlockSpec::partition,
-            LogDirByBlockSpec::clustering,
+            PrimaryDirFragmentLayout {
+                sub_bucket_start: LogDirSubBucketSpec::sub_bucket_start,
+                sub_bucket_span: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                partition: LogDirByBlockSpec::partition,
+                clustering: LogDirByBlockSpec::clustering,
+            },
         )
         .await
 }

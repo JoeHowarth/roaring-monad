@@ -3,13 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::core::ids::TraceId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
-use crate::kernel::sharded_streams::{compacted_bitmap_blob, group_stream_values_into_pages};
+use crate::ingest::bitmap_pages::{self, StreamPageLayout};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::streams::encode_bitmap_blob;
 use crate::tables::Tables;
-use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::traces::keys::{has_value_stream_id, stream_id};
+use crate::traces::keys::{
+    TRACE_LOCAL_ID_MASK, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id, stream_id,
+};
 use crate::traces::table_specs;
+use crate::traces::types::StreamBitmapMeta;
 use crate::traces::view::BlockTraceIter;
 
 pub fn collect_trace_stream_appends(
@@ -59,31 +60,76 @@ pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
     block: &FinalizedBlock,
     first_trace_id: u64,
 ) -> Result<Vec<(String, u32)>> {
-    let mut touched_pages = BTreeSet::<(String, u32)>::new();
-
     let grouped_values = collect_trace_stream_appends(block, first_trace_id)?
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
-    for (stream, pages) in
-        group_stream_values_into_pages(grouped_values, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
-    {
-        for (page_start, bitmap) in pages {
-            let Some((_count, bitmap_blob)) = compacted_bitmap_blob(bitmap, page_start) else {
-                continue;
-            };
-
+    bitmap_pages::persist_stream_fragments(
+        block.block_num,
+        grouped_values,
+        TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+        |stream, page_start, block_num, bytes| async move {
             tables
                 .trace_bitmap_by_block()
-                .put(
-                    &stream,
-                    page_start,
-                    block.block_num,
-                    encode_bitmap_blob(&bitmap_blob)?,
-                )
-                .await?;
-            touched_pages.insert((stream.clone(), page_start));
-        }
-    }
+                .put(&stream, page_start, block_num, bytes)
+                .await
+        },
+    )
+    .await
+}
 
-    Ok(touched_pages.into_iter().collect())
+pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    touched_pages: &[(String, u32)],
+    from_next_trace_id: u64,
+    next_trace_id: u64,
+) -> Result<()> {
+    bitmap_pages::compact_sealed_touched_stream_pages(
+        touched_pages,
+        from_next_trace_id,
+        next_trace_id,
+        StreamPageLayout {
+            page_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+            local_id_mask: TRACE_LOCAL_ID_MASK,
+        },
+        |stream_id, page_start| async move {
+            compact_trace_stream_page(tables, &stream_id, page_start).await
+        },
+    )
+    .await
+}
+
+pub async fn compact_trace_stream_page<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    stream_id: &str,
+    page_start: u32,
+) -> Result<bool> {
+    bitmap_pages::compact_stream_page(
+        stream_id,
+        page_start,
+        |stream, page_start| async move {
+            tables
+                .trace_bitmap_by_block()
+                .load_page_fragments(&stream, page_start)
+                .await
+        },
+        |stream, page_start, bytes| async move {
+            tables
+                .trace_bitmap_page_blobs()
+                .put(&stream, page_start, bytes)
+                .await
+        },
+        |stream, page_start, meta| async move {
+            tables
+                .trace_bitmap_page_meta()
+                .put(&stream, page_start, &meta)
+                .await
+        },
+        |count, min_local, max_local| StreamBitmapMeta {
+            block_num: 0,
+            count,
+            min_local,
+            max_local,
+        },
+    )
+    .await
 }

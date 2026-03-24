@@ -4,7 +4,7 @@ use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::tables::{PrimaryDirFragmentLayout, Tables};
 use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
 use crate::traces::types::{BlockTraceHeader, TraceBlockRecord};
@@ -61,10 +61,12 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
             block_num,
             first_trace_id,
             count,
-            TraceDirSubBucketSpec::sub_bucket_start,
-            TRACE_DIRECTORY_SUB_BUCKET_SIZE,
-            TraceDirByBlockSpec::partition,
-            TraceDirByBlockSpec::clustering,
+            PrimaryDirFragmentLayout {
+                sub_bucket_start: TraceDirSubBucketSpec::sub_bucket_start,
+                sub_bucket_span: TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+                partition: TraceDirByBlockSpec::partition,
+                clustering: TraceDirByBlockSpec::clustering,
+            },
         )
         .await
 }
