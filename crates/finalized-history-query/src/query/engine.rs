@@ -3,6 +3,7 @@ use crate::core::ids::FamilyIdValue;
 use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
 use crate::query::normalized::{effective_limit, plan_page};
+use crate::query::planner::IndexedClause;
 use crate::query::runner::{
     QueryDescriptor, QueryMaterializer, build_page, empty_page, execute_indexed_query,
 };
@@ -15,6 +16,7 @@ use crate::tables::{StreamTables, Tables};
 pub(crate) trait IndexedFilter {
     fn has_indexed_clause(&self) -> bool;
     fn max_or_terms(&self) -> usize;
+    fn indexed_clauses(&self) -> Vec<IndexedClause>;
 }
 
 pub(crate) trait IndexedQueryRequest {
@@ -90,11 +92,10 @@ where
     M: MetaStore,
     P: PublicationStore,
     B: BlobStore,
-    R: IndexedQueryRequest<Filter = D::Filter>,
+    R: IndexedQueryRequest,
     D: QueryDescriptor,
     D::Id: FamilyIdValue,
-    D::Filter: IndexedFilter,
-    Q: QueryMaterializer<Id = D::Id, Filter = D::Filter>,
+    Q: QueryMaterializer<Id = D::Id, Filter = R::Filter>,
     W: Fn(&crate::core::state::BlockRecord) -> Option<crate::core::state::PrimaryWindowRecord>,
 {
     let tables = family_tables.tables;

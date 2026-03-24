@@ -10,12 +10,13 @@ use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{ResolvedBlockRange, load_block_ref};
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
+use crate::query::engine::IndexedFilter;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::StreamBitmapMeta;
 use crate::tables::{StreamTables, Tables};
 
 use super::bitmap::load_prepared_clause_bitmap;
-use super::planner::{IndexedClause, prepare_shard_clauses};
+use super::planner::prepare_shard_clauses;
 pub type ShardBitmapSet = BTreeMap<u64, RoaringBitmap>;
 
 pub struct MaterializerCaches<F> {
@@ -233,9 +234,7 @@ where
 #[allow(async_fn_in_trait)]
 pub(crate) trait QueryDescriptor {
     type Id: QueryId;
-    type Filter;
 
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause>;
     fn local_range_for_shard(
         &self,
         from: Self::Id,
@@ -341,10 +340,10 @@ pub async fn cached_parent_block_ref<M: MetaStore, B: BlobStore>(
     .await
 }
 
-pub(crate) async fn execute_indexed_query<M, B, D, Q>(
+pub(crate) async fn execute_indexed_query<M, B, D, Q, F>(
     stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
     descriptor: &D,
-    filter: &D::Filter,
+    filter: &F,
     id_window: (D::Id, D::Id),
     take: usize,
     materializer: &mut Q,
@@ -353,10 +352,11 @@ where
     M: MetaStore,
     B: BlobStore,
     D: QueryDescriptor,
-    Q: QueryMaterializer<Id = D::Id, Filter = D::Filter>,
+    Q: QueryMaterializer<Id = D::Id, Filter = F>,
+    F: IndexedFilter,
 {
     let (from_id, to_id_inclusive) = id_window;
-    let clause_specs = descriptor.build_clause_specs(filter);
+    let clause_specs = filter.indexed_clauses();
     let mut matched = Vec::new();
 
     for shard_raw in from_id.shard_raw()..=to_id_inclusive.shard_raw() {

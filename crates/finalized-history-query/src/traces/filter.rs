@@ -1,6 +1,6 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::query::engine::IndexedFilter;
-use crate::query::planner::{IndexedClause, indexed_clause, single_selector_clause};
+use crate::query::planner::{IndexedClause, build_indexed_clause, single_selector_clause};
 use crate::traces::types::{Address20, Selector4};
 use crate::traces::view::CallFrameView;
 
@@ -34,37 +34,28 @@ impl IndexedFilter for TraceFilter {
             || has_indexed_value(&self.selector)
             || self.has_value == Some(true)
     }
-}
 
-impl TraceFilter {
-    pub(crate) fn indexed_clauses(&self) -> Vec<IndexedClause> {
+    fn indexed_clauses(&self) -> Vec<IndexedClause> {
         let mut clauses = Vec::new();
 
-        if let Some(clause) = &self.from
-            && let Some(clause) = indexed_clause("from", clause.indexed_values())
-        {
-            clauses.push(clause);
+        if let Some(clause) = build_indexed_clause("from", &self.from) {
+            clauses.push(clause)
         }
-
-        if let Some(clause) = &self.to
-            && let Some(clause) = indexed_clause("to", clause.indexed_values())
-        {
-            clauses.push(clause);
+        if let Some(clause) = build_indexed_clause("to", &self.to) {
+            clauses.push(clause)
         }
-
-        if let Some(clause) = &self.selector
-            && let Some(clause) = indexed_clause("selector", clause.indexed_values())
-        {
-            clauses.push(clause);
+        if let Some(clause) = build_indexed_clause("selector", &self.selector) {
+            clauses.push(clause)
         }
-
         if self.has_value == Some(true) {
             clauses.push(single_selector_clause("has_value", vec![1]));
         }
 
         clauses
     }
+}
 
+impl TraceFilter {
     pub fn matches_trace(&self, item: &crate::traces::types::Trace) -> bool {
         if let Some(expected) = self.is_top_level
             && (item.depth == 0) != expected

@@ -6,7 +6,6 @@ use crate::error::Result;
 use crate::query::engine::{
     FamilyQueryTables, IndexedQueryRequest, QueryLimits, execute_family_query,
 };
-use crate::query::planner::IndexedClause;
 use crate::query::runner::QueryDescriptor;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -95,11 +94,6 @@ struct TracesQueryDescriptor;
 
 impl QueryDescriptor for TracesQueryDescriptor {
     type Id = TraceId;
-    type Filter = TraceFilter;
-
-    fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause> {
-        filter.indexed_clauses()
-    }
 
     fn local_range_for_shard(
         &self,

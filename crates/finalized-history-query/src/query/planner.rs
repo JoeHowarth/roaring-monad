@@ -1,3 +1,4 @@
+use crate::core::clause::Clause;
 use crate::error::Result;
 use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::query::bitmap;
@@ -26,6 +27,18 @@ pub(crate) fn indexed_clause(
             .map(|value| StreamSelector { stream_kind, value })
             .collect(),
     })
+}
+
+pub(crate) fn build_indexed_clause<T>(
+    stream_kind: &'static str,
+    clause: &Option<Clause<T>>,
+) -> Option<IndexedClause>
+where
+    T: Copy + Into<Vec<u8>>,
+{
+    clause
+        .as_ref()
+        .and_then(|clause| indexed_clause(stream_kind, clause.indexed_values()))
 }
 
 pub(crate) fn single_selector_clause(stream_kind: &'static str, value: Vec<u8>) -> IndexedClause {

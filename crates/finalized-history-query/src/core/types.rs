@@ -27,7 +27,6 @@ impl<T> Clause<T> {
         }
     }
 }
-
 pub fn clause_matches<T: Eq>(actual: &T, clause: &Option<Clause<T>>) -> bool {
     match clause {
         None | Some(Clause::Any) => true,
