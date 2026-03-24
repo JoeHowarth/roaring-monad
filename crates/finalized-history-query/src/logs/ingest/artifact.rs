@@ -2,11 +2,10 @@ use bytes::Bytes;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::family::FinalizedBlock;
 use crate::kernel::codec::StorageCodec;
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::logs::table_specs::{LogDirByBlockSpec, LogDirSubBucketSpec};
-use crate::logs::types::{BlockLogHeader, BlockRecord, Log};
+use crate::logs::types::{BlockLogHeader, Log};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{PrimaryDirFragmentLayout, Tables};
 
@@ -21,24 +20,6 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     tables
         .point_log_payloads()
         .put_block(block_num, block_blob, &header)
-        .await
-}
-
-pub async fn persist_log_block_record<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    first_log_id: u64,
-) -> Result<()> {
-    let block_record = BlockRecord {
-        block_hash: block.block_hash,
-        parent_hash: block.parent_hash,
-        first_log_id,
-        count: block.logs.len() as u32,
-    };
-
-    tables
-        .block_records()
-        .put(block.block_num, &block_record)
         .await
 }
 

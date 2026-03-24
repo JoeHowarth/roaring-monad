@@ -7,11 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
+use finalized_history_query::core::state::{
+    BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
-use finalized_history_query::logs::keys::BLOCK_RECORD_TABLE;
-use finalized_history_query::logs::table_specs::BlockRecordSpec;
-use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -20,11 +20,29 @@ use finalized_history_query::store::publication::{
     PUBLICATION_STATE_SUFFIX, PUBLICATION_STATE_TABLE,
 };
 use finalized_history_query::store::traits::{MetaStore, PutCond};
-use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
-use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 use helpers::*;
+
+fn shared_block_record(
+    block_hash: [u8; 32],
+    parent_hash: [u8; 32],
+    logs: Option<(u64, u32)>,
+    traces: Option<(u64, u32)>,
+) -> BlockRecord {
+    BlockRecord {
+        block_hash,
+        parent_hash,
+        logs: logs.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+        traces: traces.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+    }
+}
 
 #[test]
 fn service_startup_bootstraps_publication_ownership() {
@@ -139,31 +157,11 @@ fn reader_only_startup_is_observational_and_ingest_is_rejected() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(3),
-            BlockRecord {
-                block_hash: [3; 32],
-                parent_hash: [2; 32],
-                first_log_id: 9,
-                count: 1,
-            }
-            .encode(),
+            shared_block_record([3; 32], [2; 32], Some((9, 1)), Some((0, 0))).encode(),
             PutCond::Any,
         )
         .await
         .expect("seed block meta");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(3),
-            TraceBlockRecord {
-                block_hash: [3; 32],
-                parent_hash: [2; 32],
-                first_trace_id: 0,
-                count: 0,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
         let plan = svc.startup().await.expect("reader-only startup");
@@ -230,13 +228,7 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
             .put(
                 BLOCK_RECORD_TABLE,
                 &BlockRecordSpec::key(1),
-                BlockRecord {
-                    block_hash: [1; 32],
-                    parent_hash: [0; 32],
-                    first_log_id: 0,
-                    count: 0,
-                }
-                .encode(),
+                shared_block_record([1; 32], [0; 32], Some((0, 0)), None).encode(),
                 PutCond::Any,
             )
             .await
@@ -308,45 +300,19 @@ fn startup_recovers_trace_state_from_published_head_only() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(2),
-            BlockRecord {
-                block_hash: [2; 32],
-                parent_hash: [1; 32],
-                first_log_id: 12,
-                count: 0,
-            }
-            .encode(),
+            shared_block_record([2; 32], [1; 32], Some((12, 0)), Some((40, 3))).encode(),
             PutCond::Any,
         )
         .await
         .expect("seed published block record");
         meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(2),
-            TraceBlockRecord {
-                block_hash: [2; 32],
-                parent_hash: [1; 32],
-                first_trace_id: 40,
-                count: 3,
-            }
-            .encode(),
+            BLOCK_RECORD_TABLE,
+            &BlockRecordSpec::key(3),
+            shared_block_record([3; 32], [2; 32], None, Some((999, 7))).encode(),
             PutCond::Any,
         )
         .await
-        .expect("seed published trace block record");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(3),
-            TraceBlockRecord {
-                block_hash: [3; 32],
-                parent_hash: [2; 32],
-                first_trace_id: 999,
-                count: 7,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed unpublished trace block record");
+        .expect("seed unpublished block record");
 
         let runtime = finalized_history_query::runtime::Runtime::new(
             meta,
@@ -378,13 +344,7 @@ fn startup_rejects_missing_trace_records_for_nonzero_published_head() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(3),
-            BlockRecord {
-                block_hash: [3; 32],
-                parent_hash: [2; 32],
-                first_log_id: 8,
-                count: 2,
-            }
-            .encode(),
+            shared_block_record([3; 32], [2; 32], Some((8, 2)), None).encode(),
             PutCond::Any,
         )
         .await

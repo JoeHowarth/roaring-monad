@@ -1,10 +1,8 @@
 use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
-use crate::core::state::BlockRecordLike;
 use crate::error::{Error, Result};
 use crate::family::Hash32;
-use crate::query::types::BlockWindow;
 
 pub type Address20 = [u8; 20];
 pub type Selector4 = [u8; 4];
@@ -74,52 +72,9 @@ pub struct StreamBitmapMeta {
     pub max_local: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct TraceBlockRecord {
-    pub block_hash: Hash32,
-    pub parent_hash: Hash32,
-    pub first_trace_id: u64,
-    pub count: u32,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraceSequencingState {
     pub next_trace_id: TraceId,
 }
 
 pub type TraceStartupState = TraceSequencingState;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TraceBlockWindow {
-    pub first_trace_id: TraceId,
-    pub count: u32,
-}
-
-impl From<&TraceBlockRecord> for TraceBlockWindow {
-    fn from(value: &TraceBlockRecord) -> Self {
-        Self {
-            first_trace_id: TraceId::new(value.first_trace_id),
-            count: value.count,
-        }
-    }
-}
-
-impl BlockWindow<TraceId> for TraceBlockWindow {
-    fn first_id(self) -> TraceId {
-        self.first_trace_id
-    }
-
-    fn count(self) -> u32 {
-        self.count
-    }
-}
-
-impl BlockRecordLike for TraceBlockRecord {
-    fn block_hash(&self) -> [u8; 32] {
-        self.block_hash
-    }
-
-    fn parent_hash(&self) -> [u8; 32] {
-        self.parent_hash
-    }
-}

@@ -88,7 +88,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
             item.block_hash,
             async {
                 Ok(tables
-                    .trace_block_records()
+                    .block_records()
                     .get(block_num)
                     .await?
                     .map(|record| record.parent_hash))

@@ -10,18 +10,19 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
+use finalized_history_query::core::state::{
+    BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+};
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
-    BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
+    BITMAP_PAGE_META_TABLE, LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
+    STREAM_PAGE_LOCAL_ID_SPAN,
 };
-use finalized_history_query::logs::table_specs::{
-    self, BitmapPageMetaSpec, BlockRecordSpec, LogDirSubBucketSpec,
-};
-use finalized_history_query::logs::types::{BlockRecord, Log};
+use finalized_history_query::logs::table_specs::{self, BitmapPageMetaSpec, LogDirSubBucketSpec};
+use finalized_history_query::logs::types::Log;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -36,8 +37,6 @@ use finalized_history_query::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
     TableId,
 };
-use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
-use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 #[derive(Clone, Copy)]
@@ -59,6 +58,26 @@ struct FaultPlan {
 #[derive(Default)]
 struct FaultInjector {
     plan: Mutex<Option<FaultPlan>>,
+}
+
+fn shared_block_record(
+    block_hash: [u8; 32],
+    parent_hash: [u8; 32],
+    logs: Option<(u64, u32)>,
+    traces: Option<(u64, u32)>,
+) -> BlockRecord {
+    BlockRecord {
+        block_hash,
+        parent_hash,
+        logs: logs.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+        traces: traces.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+    }
 }
 
 impl FaultInjector {
@@ -630,31 +649,12 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(1),
-            BlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_log_id: seed_first_log_id,
-                count: 0,
-            }
-            .encode(),
+            shared_block_record([1; 32], [0; 32], Some((seed_first_log_id, 0)), Some((0, 0)))
+                .encode(),
             PutCond::Any,
         )
         .await
         .expect("seed block 1 meta");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(1),
-            TraceBlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_trace_id: 0,
-                count: 0,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed block 1 trace meta");
 
         let crashing_writer =
             mk_service_with_writer(meta.clone(), blob.clone(), injector.clone(), 1);

@@ -1,9 +1,7 @@
 mod artifact;
 mod stream;
 
-pub use artifact::{
-    parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
-};
+pub use artifact::{parse_stream_shard, persist_log_artifacts, persist_log_dir_by_block};
 pub use stream::persist_stream_fragments;
 
 #[cfg(test)]
@@ -14,14 +12,13 @@ mod tests {
     use crate::kernel::codec::StorageCodec;
     use crate::logs::codec::validate_log;
     use crate::logs::keys::{
-        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE,
+        BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_LOG_HEADER_TABLE,
         LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
     };
     use crate::logs::table_specs::{
         BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
-        BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
-        LogDirSubBucketSpec,
+        BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
     };
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -30,9 +27,7 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
 
-    use super::artifact::{
-        persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
-    };
+    use super::artifact::{persist_log_artifacts, persist_log_dir_by_block};
     use super::stream::{collect_stream_appends, persist_stream_fragments};
     use crate::ingest::bitmap_pages;
     use crate::ingest::primary_dir::compact_sealed_primary_directory;
@@ -264,26 +259,6 @@ mod tests {
                     .expect("decode stream page blob")
                     .count
                     > 0
-            );
-        });
-    }
-
-    #[test]
-    fn persist_log_block_record_writes_block_record() {
-        block_on(async {
-            let meta = InMemoryMetaStore::default();
-            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let block = sample_block(9, 5, vec![sample_log(9, 0, 0, 4)]);
-
-            persist_log_block_record(&tables, &block, 33)
-                .await
-                .expect("persist block metadata");
-
-            assert!(
-                meta.get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(9))
-                    .await
-                    .expect("block meta")
-                    .is_some()
             );
         });
     }

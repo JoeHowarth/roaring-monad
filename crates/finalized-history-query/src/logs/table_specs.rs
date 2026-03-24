@@ -5,16 +5,6 @@ pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTab
 use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
-pub struct BlockRecordSpec;
-impl PointTableSpec for BlockRecordSpec {
-    const TABLE: TableId = TableId::new("block_record");
-}
-impl BlockRecordSpec {
-    pub fn key(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
-    }
-}
-
 pub struct BlockLogHeaderSpec;
 impl PointTableSpec for BlockLogHeaderSpec {
     const TABLE: TableId = TableId::new("block_log_header");

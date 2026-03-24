@@ -12,17 +12,19 @@ use finalized_history_query::config::Config;
 use finalized_history_query::core::directory_resolver::ResolvedPrimaryLocation;
 use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use finalized_history_query::core::refs::BlockRef;
+use finalized_history_query::core::state::{
+    BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+};
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::codec::validate_log;
 use finalized_history_query::logs::keys::{
-    BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE,
-    MAX_LOCAL_ID,
+    BLOCK_LOG_HEADER_TABLE, LOG_DIR_BUCKET_TABLE, LOG_DIRECTORY_BUCKET_SIZE, MAX_LOCAL_ID,
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
-    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec,
+    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
 };
-use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord, DirBucket, Log};
+use finalized_history_query::logs::types::{BlockLogHeader, DirBucket, Log};
 use finalized_history_query::query::runner::{QueryIdRange, QueryMaterializer, ShardBitmapSet};
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -648,8 +650,12 @@ pub fn seed_materialized_blocks(
                 BlockRecord {
                     block_hash,
                     parent_hash,
-                    first_log_id: block.first_log_id,
-                    count: u32::try_from(block.logs.len()).expect("block log count fits in u32"),
+                    logs: Some(PrimaryWindowRecord {
+                        first_primary_id: block.first_log_id,
+                        count: u32::try_from(block.logs.len())
+                            .expect("block log count fits in u32"),
+                    }),
+                    traces: None,
                 }
                 .encode(),
             )

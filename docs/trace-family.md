@@ -114,11 +114,12 @@ logs family convention.
 
 ### Trace block record
 
-`trace_block_record` table, key `<block_num>`:
-`{ block_hash, parent_hash, first_trace_id, count }`.
+`block_record` table, key `<block_num>`:
+`{ block_hash, parent_hash, logs: Option<PrimaryWindowRecord>, traces: Option<PrimaryWindowRecord> }`.
 
-Same role as the logs `block_record`: authoritative per-block sequencing
-record for the trace ID space.
+The traces family reads the `traces` window from this shared block-keyed
+record. It is the authoritative per-block sequencing record for the trace ID
+space.
 
 ### Directory
 
@@ -287,7 +288,7 @@ Within a single block's trace ingest:
 
 1. `block_trace_blob` — raw RLP bytes
 2. `block_trace_header` — offset table
-3. `trace_block_record` — sequencing metadata
+3. `block_record` — shared block sequencing metadata
 4. directory fragments — `trace_dir_by_block` rows
 5. stream fragments — `trace_bitmap_by_block` rows
 6. compaction — directory sub-buckets, stream pages (when boundaries seal)
@@ -298,7 +299,8 @@ advance, consistent with the existing publication ordering invariant.
 ## Startup
 
 `TracesFamily::load_startup_state` derives `TraceSequencingState` from the
-published `indexed_finalized_head` by reading the `trace_block_record` for the
-head block and computing `next_trace_id = first_trace_id + count`.
+published `indexed_finalized_head` by reading the shared `block_record` for the
+head block and computing `next_trace_id = traces.first_primary_id + traces.count`.
 
-If no trace block records exist (fresh instance), `next_trace_id` starts at 0.
+If no shared block records with a `traces` window exist (fresh instance),
+`next_trace_id` starts at 0.

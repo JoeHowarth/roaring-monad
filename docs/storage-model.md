@@ -27,7 +27,7 @@ All artifacts for a block must be durable before `publication_state.indexed_fina
 The artifact write order for a block preserves family-local durability before shared publication:
 
 1. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_trace_blob` / `block_trace_header`)
-2. family block metadata (`block_record`, `trace_block_record`)
+2. shared block metadata (`block_record`)
 3. shared block hash lookup (`block_hash_index`)
 4. family directory fragments (`log_dir_by_block`, `trace_dir_by_block`)
 5. family stream fragments (`bitmap_by_block`, `trace_bitmap_by_block`)
@@ -148,7 +148,7 @@ This means:
 - local log `1` lives at bytes `[41, 97)`
 - local log `2` lives at bytes `[97, 124)`
 
-Empty blocks do not need `block_log_header` or `block_log_blob` entries. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockRecord`.
+Empty blocks do not need `block_log_header` or `block_log_blob` entries. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockRecord.logs`.
 
 ## Logs Block Payload Objects
 
@@ -267,9 +267,12 @@ Mitigations:
 `BlockRecord` is the authoritative per-block sequencing record:
 
 ```text
-block_record table, key <block_num> -> BlockRecord { block_hash, parent_hash, first_log_id, count }
+block_record table, key <block_num> -> BlockRecord {
+  block_hash,
+  parent_hash,
+  logs: Option<PrimaryWindowRecord { first_primary_id, count }>,
+  traces: Option<PrimaryWindowRecord { first_primary_id, count }>
+}
 ```
 
-This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate — `BlockRecord` is the authoritative per-block record for finalized-state reads; directory buckets are lookup accelerators for `log_id -> block_num`.
-
-Traces mirror this with `trace_block_record`, which is the authoritative per-block sequencing record for `trace_id` ranges while trace directory artifacts remain lookup accelerators.
+This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate: `BlockRecord` is the authoritative per-block record for finalized-state reads, while directory buckets are lookup accelerators for `log_id -> block_num` and `trace_id -> block_num`.

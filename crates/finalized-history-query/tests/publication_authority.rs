@@ -6,18 +6,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::config::Config;
+use finalized_history_query::core::state::{
+    BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+};
 use finalized_history_query::family::Families;
 use finalized_history_query::ingest::authority::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
+    BITMAP_BY_BLOCK_TABLE, LOG_DIR_BY_BLOCK_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
-    self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, BlockRecordSpec, LogDirByBlockSpec,
+    self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, LogDirByBlockSpec,
 };
-use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::runtime::Runtime;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -198,8 +200,14 @@ fn readers_use_only_publication_state() {
             BlockRecord {
                 block_hash: [3; 32],
                 parent_hash: [2; 32],
-                first_log_id: 9,
-                count: 1,
+                logs: Some(PrimaryWindowRecord {
+                    first_primary_id: 9,
+                    count: 1,
+                }),
+                traces: Some(PrimaryWindowRecord {
+                    first_primary_id: 0,
+                    count: 0,
+                }),
             }
             .encode(),
             PutCond::Any,

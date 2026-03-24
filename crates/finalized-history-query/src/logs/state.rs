@@ -1,8 +1,7 @@
 use crate::core::ids::{LogId, PrimaryIdRange};
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
-use crate::logs::types::LogBlockWindow;
-use crate::query::window::{PrimaryWindowSource, resolve_primary_window};
+use crate::query::window::resolve_primary_window;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -10,38 +9,17 @@ pub async fn resolve_log_window<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_range: &ResolvedBlockRange,
 ) -> Result<Option<PrimaryIdRange>> {
-    resolve_primary_window(tables, block_range, &LogWindowSource).await
-}
-
-struct LogWindowSource;
-
-impl PrimaryWindowSource for LogWindowSource {
-    type Id = LogId;
-    type Range = PrimaryIdRange;
-    type Window = LogBlockWindow;
-
-    async fn load_block_window<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        block_num: u64,
-    ) -> Result<Option<Self::Window>> {
-        Ok(tables
-            .block_records()
-            .get(block_num)
-            .await?
-            .as_ref()
-            .map(LogBlockWindow::from))
-    }
+    resolve_primary_window::<_, _, LogId, _>(tables, block_range, |record| record.logs).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::refs::BlockRef;
+    use crate::core::state::{
+        BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+    };
     use crate::kernel::codec::StorageCodec;
-    use crate::logs::keys::BLOCK_RECORD_TABLE;
-    use crate::logs::table_specs::BlockRecordSpec;
-    use crate::logs::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{MetaStore, PutCond};
@@ -55,8 +33,11 @@ mod tests {
             BlockRecord {
                 block_hash: [block_num as u8; 32],
                 parent_hash: [0; 32],
-                first_log_id,
-                count,
+                logs: Some(PrimaryWindowRecord {
+                    first_primary_id: first_log_id,
+                    count,
+                }),
+                traces: None,
             }
             .encode(),
             PutCond::Any,

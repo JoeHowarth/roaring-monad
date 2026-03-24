@@ -42,7 +42,7 @@ Within the logs family step, artifact writes remain:
 
 1. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
 2. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
-3. **Block meta** — `block_record` table, key `<block_num>`: `{ block_hash, parent_hash, first_log_id, count }`
+3. **Block meta** — `block_record` table, key `<block_num>`: merge the logs `PrimaryWindowRecord { first_primary_id, count }` into the shared `{ block_hash, parent_hash, logs, traces }` record
 4. **Block hash index** — `block_hash_index` table, key `<block_hash>`: reverse lookup
 5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
 6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
@@ -51,7 +51,7 @@ Within the traces family step, artifact writes are:
 
 1. **Trace blob** — `block_trace_blob` blob table, key `<block_num>`: raw per-block `trace_rlp`
 2. **Block trace header** — `block_trace_header` table, key `<block_num>`: compact trace header with offsets and tx starts
-3. **Trace block meta** — `trace_block_record` table, key `<block_num>`: `{ block_hash, parent_hash, first_trace_id, count }`
+3. **Block meta** — `block_record` table, key `<block_num>`: merge the traces `PrimaryWindowRecord { first_primary_id, count }` into the shared `{ block_hash, parent_hash, logs, traces }` record
 4. **Directory fragments** — one `trace_dir_by_block` row per covered sub-bucket, keyed by partition `<trace_sub_bucket_start>` and clustering `<block_num>`
 5. **Stream fragments** — `trace_bitmap_by_block` rows per stream per page touched
 

@@ -3,7 +3,7 @@ use bytes::Bytes;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::codec::fixed_codec;
-use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta, TraceBlockRecord};
+use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta};
 
 impl StorageCodec for BlockTraceHeader {
     fn encode(&self) -> Bytes {
@@ -88,18 +88,6 @@ fixed_codec! {
             count: u32,
             min_local: u32,
             max_local: u32,
-        }
-    }
-}
-
-fixed_codec! {
-    impl TraceBlockRecord {
-        length_error = "invalid trace_block_record length";
-        fields {
-            block_hash: [u8; 32],
-            parent_hash: [u8; 32],
-            first_trace_id: u64,
-            count: u32,
         }
     }
 }

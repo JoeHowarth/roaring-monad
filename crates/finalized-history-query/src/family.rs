@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::core::state::{BlockRecord, PrimaryWindowRecord};
 use crate::error::Result;
 use crate::logs::family::LogsFamily;
 use crate::logs::types::{Log, LogSequencingState};
@@ -85,13 +86,16 @@ impl Families {
         M: MetaStore,
         B: BlobStore,
     {
+        let first_log_id = states.logs.next_log_id.get();
+        let first_trace_id = states.traces.next_trace_id.get();
+
         runtime
             .tables()
             .block_hash_index()
             .put(&block.block_hash, block.block_num)
             .await?;
 
-        Ok(FamilyBlockWrites {
+        let writes = FamilyBlockWrites {
             logs: self
                 .logs
                 .ingest_block(config, runtime, &mut states.logs, block)
@@ -104,6 +108,28 @@ impl Families {
                 .traces
                 .ingest_block(config, runtime, &mut states.traces, block)
                 .await?,
-        })
+        };
+
+        runtime
+            .tables()
+            .block_records()
+            .put(
+                block.block_num,
+                &BlockRecord {
+                    block_hash: block.block_hash,
+                    parent_hash: block.parent_hash,
+                    logs: Some(PrimaryWindowRecord {
+                        first_primary_id: first_log_id,
+                        count: writes.logs as u32,
+                    }),
+                    traces: Some(PrimaryWindowRecord {
+                        first_primary_id: first_trace_id,
+                        count: writes.traces as u32,
+                    }),
+                },
+            )
+            .await?;
+
+        Ok(writes)
     }
 }

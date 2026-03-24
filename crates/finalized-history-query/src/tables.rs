@@ -2,6 +2,7 @@ use bytes::Bytes;
 
 use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::layout::read_u64_be;
+use crate::core::state::{BlockRecord, BlockRecordSpec};
 use crate::error::{Error, Result};
 use crate::kernel::blob_table::CachedBlobTable;
 pub use crate::kernel::cache::{
@@ -16,19 +17,15 @@ use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSp
 use crate::logs::log_ref::{BlockLogHeaderRef, LogRef};
 use crate::logs::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
-    BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
-    LogDirSubBucketSpec,
+    BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
 };
-use crate::logs::types::{BlockRecord, StreamBitmapMeta};
+use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
 use crate::traces::table_specs::{
     BlockTraceBlobSpec, BlockTraceHeaderSpec, TraceBitmapByBlockSpec, TraceBitmapPageBlobSpec,
-    TraceBitmapPageMetaSpec, TraceBlockRecordSpec, TraceDirBucketSpec, TraceDirByBlockSpec,
-    TraceDirSubBucketSpec,
+    TraceBitmapPageMetaSpec, TraceDirBucketSpec, TraceDirByBlockSpec, TraceDirSubBucketSpec,
 };
-use crate::traces::types::{
-    BlockTraceHeader, StreamBitmapMeta as TraceStreamBitmapMeta, TraceBlockRecord,
-};
+use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta as TraceStreamBitmapMeta};
 
 pub struct PrimaryDirTables<M: MetaStore> {
     buckets: PrimaryDirBucketTable<M>,
@@ -134,7 +131,6 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     block_hash_index: BlockHashIndexTable<M>,
     block_records: BlockRecordTable<M>,
     block_log_headers: BlockLogHeaderTable<M>,
-    trace_block_records: TraceBlockRecordTable<M>,
     block_trace_headers: BlockTraceHeaderTable<M>,
     log_dir: PrimaryDirTables<M>,
     trace_dir: PrimaryDirTables<M>,
@@ -169,10 +165,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             block_records,
             block_log_headers: block_log_headers.clone(),
-            trace_block_records: TraceBlockRecordTable::new(
-                meta_store.table(TraceBlockRecordSpec::TABLE),
-                no_cache(),
-            ),
             block_trace_headers: block_trace_headers.clone(),
             log_dir: PrimaryDirTables {
                 buckets: PrimaryDirBucketTable::new(
@@ -257,8 +249,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             trace_payloads: TracePayloadTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
                 block_trace_headers,
-                trace_block_records: TraceBlockRecordTable::new(
-                    meta_store.table(TraceBlockRecordSpec::TABLE),
+                block_records: BlockRecordTable::new(
+                    meta_store.table(BlockRecordSpec::TABLE),
                     no_cache(),
                 ),
             },
@@ -275,10 +267,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
 
     pub fn block_log_headers(&self) -> &BlockLogHeaderTable<M> {
         &self.block_log_headers
-    }
-
-    pub fn trace_block_records(&self) -> &TraceBlockRecordTable<M> {
-        &self.trace_block_records
     }
 
     pub fn block_trace_headers(&self) -> &BlockTraceHeaderTable<M> {
@@ -412,26 +400,6 @@ impl<M: MetaStore> BlockLogHeaderTable<M> {
 impl<M: MetaStore> Clone for BlockLogHeaderTable<M> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
-    }
-}
-
-pub struct TraceBlockRecordTable<M: MetaStore>(CachedPointTable<M, TraceBlockRecord>);
-
-impl<M: MetaStore> TraceBlockRecordTable<M> {
-    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
-        Self(CachedPointTable::new(table, cache))
-    }
-
-    pub async fn get(&self, block_num: u64) -> Result<Option<TraceBlockRecord>> {
-        self.0
-            .get_decoded(&TraceBlockRecordSpec::key(block_num))
-            .await
-    }
-
-    pub async fn put(&self, block_num: u64, block_record: &TraceBlockRecord) -> Result<()> {
-        self.0
-            .put_encoded(&TraceBlockRecordSpec::key(block_num), block_record)
-            .await
     }
 }
 
@@ -767,7 +735,7 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
 pub struct TracePayloadTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
     block_trace_headers: BlockTraceHeaderTable<M>,
-    trace_block_records: TraceBlockRecordTable<M>,
+    block_records: BlockRecordTable<M>,
 }
 
 impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
@@ -806,7 +774,7 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
             .trace_idx_in_tx(local_ordinal)
             .ok_or(Error::Decode("missing trace_idx for trace"))?;
         let block_hash = self
-            .trace_block_records
+            .block_records
             .get(block_num)
             .await?
             .map(|record| record.block_hash)

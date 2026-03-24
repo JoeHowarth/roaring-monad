@@ -2,7 +2,6 @@ pub use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID, read_u
 use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 use crate::store::traits::{ScannableTableId, TableId};
 
-pub const BLOCK_RECORD_TABLE: TableId = TableId::new("block_record");
 pub const BLOCK_LOG_HEADER_TABLE: TableId = TableId::new("block_log_header");
 pub const BLOCK_HASH_INDEX_TABLE: TableId = TableId::new("block_hash_index");
 pub const LOG_DIR_BUCKET_TABLE: TableId = TableId::new("log_dir_bucket");

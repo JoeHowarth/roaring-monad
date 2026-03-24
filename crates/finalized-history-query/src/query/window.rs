@@ -1,41 +1,40 @@
+use crate::core::ids::FamilyIdRange;
 use crate::core::range::ResolvedBlockRange;
+use crate::core::state::{BlockRecord, PrimaryWindowRecord};
 use crate::error::Result;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
-use super::types::{BlockWindow, PrimaryId, PrimaryRange};
+use super::types::PrimaryId;
 
-#[allow(async_fn_in_trait)]
-pub(crate) trait PrimaryWindowSource {
-    type Id: PrimaryId;
-    type Range: PrimaryRange<Id = Self::Id>;
-    type Window: BlockWindow<Self::Id>;
-
-    async fn load_block_window<M: MetaStore, B: BlobStore>(
-        &self,
-        tables: &Tables<M, B>,
-        block_num: u64,
-    ) -> Result<Option<Self::Window>>;
-}
-
-pub(crate) async fn resolve_primary_window<M: MetaStore, B: BlobStore, S: PrimaryWindowSource>(
+pub(crate) async fn resolve_primary_window<M, B, I, F>(
     tables: &Tables<M, B>,
     block_range: &ResolvedBlockRange,
-    source: &S,
-) -> Result<Option<S::Range>> {
+    select_window: F,
+) -> Result<Option<FamilyIdRange<I>>>
+where
+    M: MetaStore,
+    B: BlobStore,
+    I: PrimaryId,
+    F: Fn(&BlockRecord) -> Option<PrimaryWindowRecord>,
+{
     if block_range.is_empty() {
         return Ok(None);
     }
 
-    let Some(start) =
-        first_primary_id_in_range(tables, source, block_range.from_block, block_range.to_block)
-            .await?
+    let Some(start) = first_primary_id_in_range(
+        tables,
+        &select_window,
+        block_range.from_block,
+        block_range.to_block,
+    )
+    .await?
     else {
         return Ok(None);
     };
-    let Some(end_exclusive) = end_primary_id_exclusive_in_range(
+    let Some(end_exclusive): Option<I> = end_primary_id_exclusive_in_range(
         tables,
-        source,
+        &select_window,
         block_range.from_block,
         block_range.to_block,
     )
@@ -44,48 +43,65 @@ pub(crate) async fn resolve_primary_window<M: MetaStore, B: BlobStore, S: Primar
         return Ok(None);
     };
 
-    Ok(S::Range::new(
+    Ok(FamilyIdRange::new(
         start,
-        S::Id::new(end_exclusive.get().saturating_sub(1)),
+        <I as crate::core::ids::FamilyIdValue>::new(end_exclusive.get().saturating_sub(1)),
     ))
 }
 
-async fn first_primary_id_in_range<M: MetaStore, B: BlobStore, S: PrimaryWindowSource>(
+async fn first_primary_id_in_range<M, B, I, F>(
     tables: &Tables<M, B>,
-    source: &S,
+    select_window: &F,
     from_block: u64,
     to_block: u64,
-) -> Result<Option<S::Id>> {
+) -> Result<Option<I>>
+where
+    M: MetaStore,
+    B: BlobStore,
+    I: PrimaryId,
+    F: Fn(&BlockRecord) -> Option<PrimaryWindowRecord>,
+{
     let mut block_num = from_block;
     while block_num <= to_block {
-        let Some(window) = source.load_block_window(tables, block_num).await? else {
+        let Some(record) = tables.block_records().get(block_num).await? else {
             return Ok(None);
         };
-        if window.count() > 0 {
-            return Ok(Some(window.first_id()));
+        let Some(window) = select_window(&record) else {
+            return Ok(None);
+        };
+        if window.count > 0 {
+            return Ok(Some(I::new(window.first_primary_id)));
         }
         block_num = block_num.saturating_add(1);
     }
     Ok(None)
 }
 
-async fn end_primary_id_exclusive_in_range<M: MetaStore, B: BlobStore, S: PrimaryWindowSource>(
+async fn end_primary_id_exclusive_in_range<M, B, I, F>(
     tables: &Tables<M, B>,
-    source: &S,
+    select_window: &F,
     from_block: u64,
     to_block: u64,
-) -> Result<Option<S::Id>> {
+) -> Result<Option<I>>
+where
+    M: MetaStore,
+    B: BlobStore,
+    I: PrimaryId,
+    F: Fn(&BlockRecord) -> Option<PrimaryWindowRecord>,
+{
     let mut block_num = to_block;
     loop {
-        let Some(window) = source.load_block_window(tables, block_num).await? else {
+        let Some(record) = tables.block_records().get(block_num).await? else {
             return Ok(None);
         };
-        if window.count() > 0 {
-            return Ok(Some(S::Id::new(
+        let Some(window) = select_window(&record) else {
+            return Ok(None);
+        };
+        if window.count > 0 {
+            return Ok(Some(I::new(
                 window
-                    .first_id()
-                    .get()
-                    .saturating_add(window.count() as u64),
+                    .first_primary_id
+                    .saturating_add(u64::from(window.count)),
             )));
         }
         if block_num == from_block {

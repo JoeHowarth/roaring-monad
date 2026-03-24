@@ -2,12 +2,11 @@ use bytes::Bytes;
 
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
-use crate::family::FinalizedBlock;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{PrimaryDirFragmentLayout, Tables};
 use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
-use crate::traces::types::{BlockTraceHeader, TraceBlockRecord};
+use crate::traces::types::BlockTraceHeader;
 use alloy_rlp::{Header, PayloadView};
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
@@ -28,25 +27,6 @@ pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
         .put_block(block_num, block_blob, &header)
         .await?;
     Ok(trace_count)
-}
-
-pub async fn persist_trace_block_record<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    first_trace_id: u64,
-    count: u32,
-) -> Result<()> {
-    let block_record = TraceBlockRecord {
-        block_hash: block.block_hash,
-        parent_hash: block.parent_hash,
-        first_trace_id,
-        count,
-    };
-
-    tables
-        .trace_block_records()
-        .put(block.block_num, &block_record)
-        .await
 }
 
 pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(

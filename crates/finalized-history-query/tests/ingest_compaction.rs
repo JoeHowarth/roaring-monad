@@ -4,25 +4,45 @@ mod helpers;
 use std::sync::Arc;
 
 use finalized_history_query::api::FinalizedHistoryService;
+use finalized_history_query::core::state::{
+    BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec, PrimaryWindowRecord,
+};
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
-    BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
+    BITMAP_PAGE_META_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID,
+    STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
-    self, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockRecordSpec, LogDirByBlockSpec,
+    self, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
 };
-use finalized_history_query::logs::types::BlockRecord;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
 use finalized_history_query::store::traits::{BlobStore, MetaStore, PutCond};
-use finalized_history_query::traces::keys::TRACE_BLOCK_RECORD_TABLE;
-use finalized_history_query::traces::types::TraceBlockRecord;
 use futures::executor::block_on;
 
 use helpers::*;
+
+fn shared_block_record(
+    block_hash: [u8; 32],
+    parent_hash: [u8; 32],
+    logs: Option<(u64, u32)>,
+    traces: Option<(u64, u32)>,
+) -> BlockRecord {
+    BlockRecord {
+        block_hash,
+        parent_hash,
+        logs: logs.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+        traces: traces.map(|(first_primary_id, count)| PrimaryWindowRecord {
+            first_primary_id,
+            count,
+        }),
+    }
+}
 
 #[test]
 fn ingest_and_query_across_24_bit_log_shard_boundary() {
@@ -42,31 +62,17 @@ fn ingest_and_query_across_24_bit_log_shard_boundary() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(1),
-            BlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_log_id: u64::from(MAX_LOCAL_ID),
-                count: 0,
-            }
+            shared_block_record(
+                [1; 32],
+                [0; 32],
+                Some((u64::from(MAX_LOCAL_ID), 0)),
+                Some((0, 0)),
+            )
             .encode(),
             PutCond::Any,
         )
         .await
         .expect("seed block meta");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(1),
-            TraceBlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_trace_id: 0,
-                count: 0,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(
@@ -103,31 +109,11 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(1),
-            BlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_log_id,
-                count: 0,
-            }
-            .encode(),
+            shared_block_record([1; 32], [0; 32], Some((first_log_id, 0)), Some((0, 0))).encode(),
             PutCond::Any,
         )
         .await
         .expect("seed block meta");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(1),
-            TraceBlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_trace_id: 0,
-                count: 0,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         let block = mk_block(
@@ -184,31 +170,17 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
         meta.put(
             BLOCK_RECORD_TABLE,
             &BlockRecordSpec::key(1),
-            BlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE - 2,
-                count: 0,
-            }
+            shared_block_record(
+                [1; 32],
+                [0; 32],
+                Some((LOG_DIRECTORY_SUB_BUCKET_SIZE - 2, 0)),
+                Some((0, 0)),
+            )
             .encode(),
             PutCond::Any,
         )
         .await
         .expect("seed block meta");
-        meta.put(
-            TRACE_BLOCK_RECORD_TABLE,
-            &u64::to_be_bytes(1),
-            TraceBlockRecord {
-                block_hash: [1; 32],
-                parent_hash: [0; 32],
-                first_trace_id: 0,
-                count: 0,
-            }
-            .encode(),
-            PutCond::Any,
-        )
-        .await
-        .expect("seed trace block meta");
 
         let svc = FinalizedHistoryService::new_reader_writer(lease_writer_config(), meta, blob, 1);
         svc.ingest_finalized_block(mk_block(

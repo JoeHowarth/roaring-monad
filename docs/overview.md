@@ -230,7 +230,12 @@ class BlockIdentity:
 class BlockRecord:
     block_hash: bytes32
     parent_hash: bytes32
-    first_log_id: int
+    logs: PrimaryWindowRecord | None
+    traces: PrimaryWindowRecord | None
+
+
+class PrimaryWindowRecord:
+    first_primary_id: int
     count: u32
 
 
@@ -258,10 +263,9 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 Shared metadata:
 
 - `publication_state` table, key `state` -> `PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
-- `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, first_log_id, count }`
+- `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, logs: Option<PrimaryWindowRecord>, traces: Option<PrimaryWindowRecord> }`
 - `block_hash_index` table, key `<block_hash>` -> `block_num`
 - `block_log_header` table, key `<block_num>` -> `BlockLogHeader { offsets }`
-- `trace_block_record` table, key `<block_num>` -> `TraceBlockRecord { block_hash, parent_hash, first_trace_id, count }`
 - `block_trace_header` table, key `<block_num>` -> `BlockTraceHeader { encoding_version, offsets, tx_starts }`
 
 Trace metadata and blobs:
@@ -284,7 +288,7 @@ Stream index metadata/blob pairs:
 
 - `open_bitmap_page` table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
 - `bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` -> roaring bitmap blob
-- `bitmap_page_meta` table, key `<stream_id>/<page_start_local>` -> `StreamBitmapMeta { block_num, count, min_local, max_local }`
+- `bitmap_page_meta` table, key `<stream_id>/<page_start_local>` -> `StreamBitmapMeta { count, min_local, max_local }`
 - `bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` -> roaring bitmap blob
 
 Payload blobs:
@@ -358,7 +362,7 @@ The crate intentionally does not implement:
 25. `src/logs/log_ref.rs` — zero-copy log views
 26. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
 27. `src/logs/filter.rs` — log matching semantics, indexed clauses
-28. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
+28. `src/logs/state.rs` — logs-window resolution over shared block records
 29. `src/logs/materialize/` — logs-specific hydration on top of shared ID resolution
 30. `src/logs/query/` — main query engine
 31. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction

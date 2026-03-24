@@ -5,7 +5,6 @@ use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
 pub const MAX_TRACE_LOCAL_ID: u32 = TRACE_LOCAL_ID_MASK as u32;
 
-pub const TRACE_BLOCK_RECORD_TABLE: TableId = TableId::new("trace_block_record");
 pub const BLOCK_TRACE_HEADER_TABLE: TableId = TableId::new("block_trace_header");
 pub const TRACE_DIR_BUCKET_TABLE: TableId = TableId::new("trace_dir_bucket");
 pub const TRACE_DIR_SUB_BUCKET_TABLE: TableId = TableId::new("trace_dir_sub_bucket");

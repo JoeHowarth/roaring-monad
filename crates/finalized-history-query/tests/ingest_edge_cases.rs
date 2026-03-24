@@ -3,12 +3,13 @@ mod helpers;
 
 use finalized_history_query::Error;
 use finalized_history_query::api::FinalizedHistoryService;
+use finalized_history_query::core::state::{BLOCK_RECORD_TABLE, BlockRecord, BlockRecordSpec};
 use finalized_history_query::kernel::codec::StorageCodec;
-use finalized_history_query::logs::keys::{BLOCK_LOG_HEADER_TABLE, BLOCK_RECORD_TABLE};
+use finalized_history_query::logs::keys::BLOCK_LOG_HEADER_TABLE;
 use finalized_history_query::logs::table_specs::{
-    BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec,
+    BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec,
 };
-use finalized_history_query::logs::types::{BlockLogHeader, BlockRecord};
+use finalized_history_query::logs::types::BlockLogHeader;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
@@ -133,7 +134,7 @@ fn ingest_block_with_zero_logs_writes_empty_artifacts() {
             .expect("read block record")
             .expect("block record must be present for empty block");
         let record = BlockRecord::decode(&record_bytes.value).expect("decode");
-        assert_eq!(record.count, 0);
+        assert_eq!(record.logs.expect("logs window").count, 0);
 
         // block_log_header must exist (sentinel with one offset).
         let header_bytes = meta

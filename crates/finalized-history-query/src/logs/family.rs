@@ -10,8 +10,7 @@ use crate::ingest::open_pages::{
 };
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::logs::ingest::{
-    parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
-    persist_stream_fragments,
+    parse_stream_shard, persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
 };
 use crate::logs::keys::LOG_PRIMARY_DIR_LAYOUT;
 use crate::logs::types::LogSequencingState;
@@ -52,7 +51,6 @@ impl LogsFamily {
             from_next_log_id,
         )
         .await?;
-        persist_log_block_record(runtime.tables(), block, from_next_log_id).await?;
         persist_log_dir_by_block(
             runtime.tables(),
             block.block_num,

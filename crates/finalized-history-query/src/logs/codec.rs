@@ -3,7 +3,7 @@ use bytes::Bytes;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::codec::fixed_codec;
-use crate::logs::types::{BlockLogHeader, BlockRecord, Log, StreamBitmapMeta, Topic32};
+use crate::logs::types::{BlockLogHeader, Log, StreamBitmapMeta, Topic32};
 
 pub fn validate_log(log: &Log) -> bool {
     log.topics.len() <= 4
@@ -149,18 +149,6 @@ fixed_codec! {
             count: u32,
             min_local: u32,
             max_local: u32,
-        }
-    }
-}
-
-fixed_codec! {
-    impl BlockRecord {
-        length_error = "invalid block_record length";
-        fields {
-            block_hash: [u8; 32],
-            parent_hash: [u8; 32],
-            first_log_id: u64,
-            count: u32,
         }
     }
 }

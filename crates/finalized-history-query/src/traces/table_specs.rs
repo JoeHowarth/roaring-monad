@@ -4,9 +4,9 @@ pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTab
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
-    TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_BLOCK_RECORD_TABLE,
-    TRACE_DIR_BUCKET_TABLE, TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE,
-    TRACE_DIRECTORY_BUCKET_SIZE, TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+    TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_DIR_BUCKET_TABLE,
+    TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE, TRACE_DIRECTORY_BUCKET_SIZE,
+    TRACE_DIRECTORY_SUB_BUCKET_SIZE,
 };
 
 pub(super) const TRACE_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout =
@@ -19,16 +19,6 @@ pub(super) const TRACE_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout =
         inconsistent_bucket_error: "inconsistent trace directory bucket boundary across sub-buckets",
         missing_bucket_start_error: "missing trace directory bucket start block",
     };
-
-pub struct TraceBlockRecordSpec;
-impl PointTableSpec for TraceBlockRecordSpec {
-    const TABLE: TableId = TRACE_BLOCK_RECORD_TABLE;
-}
-impl TraceBlockRecordSpec {
-    pub fn key(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
-    }
-}
 
 pub struct BlockTraceHeaderSpec;
 impl PointTableSpec for BlockTraceHeaderSpec {

@@ -1,13 +1,12 @@
 use crate::api::ExecutionBudget;
+use crate::core::ids::{FamilyIdRange, FamilyIdValue};
 use crate::core::range::ResolvedBlockRange;
 use crate::error::{Error, Result};
 
-use super::types::PrimaryRange;
-
 #[derive(Debug, Clone)]
-pub(crate) struct NormalizedQuery<R: PrimaryRange> {
+pub(crate) struct NormalizedQuery<I> {
     pub block_range: ResolvedBlockRange,
-    pub id_range: R,
+    pub id_range: FamilyIdRange<I>,
     pub effective_limit: usize,
     pub take: usize,
 }
@@ -26,13 +25,13 @@ pub(crate) fn effective_limit(limit: usize, budget: ExecutionBudget) -> Result<u
     }
 }
 
-pub(crate) fn normalize_query<R: PrimaryRange>(
+pub(crate) fn normalize_query<I: FamilyIdValue + Copy + Ord>(
     block_range: &ResolvedBlockRange,
-    mut id_range: R,
-    resume_after: Option<R::Id>,
+    mut id_range: FamilyIdRange<I>,
+    resume_after: Option<I>,
     effective_limit: usize,
     resume_outside_message: &'static str,
-) -> Result<Option<NormalizedQuery<R>>> {
+) -> Result<Option<NormalizedQuery<I>>> {
     if let Some(resume_id) = resume_after {
         if !id_range.contains(resume_id) {
             return Err(Error::InvalidParams(resume_outside_message));
