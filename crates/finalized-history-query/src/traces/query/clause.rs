@@ -2,11 +2,11 @@ use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
 use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
+use crate::query::engine::StreamIndexFamily;
 use crate::query::planner::{
     IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses, single_selector_clause,
 };
-use crate::query::stream_family::StreamIndexFamily;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;

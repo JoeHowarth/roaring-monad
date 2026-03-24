@@ -5,11 +5,11 @@ use crate::error::Result;
 use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::query::engine::StreamIndexFamily;
 use crate::query::planner::{
     IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses,
 };
-use crate::query::stream_family::StreamIndexFamily;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 

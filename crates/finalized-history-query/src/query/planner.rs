@@ -5,7 +5,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::streams::decode_bitmap_blob;
 use crate::tables::Tables;
 
-use super::stream_family::StreamIndexFamily;
+use super::engine::StreamIndexFamily;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StreamSelector {

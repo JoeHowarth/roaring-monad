@@ -6,8 +6,8 @@ use crate::kernel::sharded_streams::merge_bitmap_bytes_into;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
+use super::engine::StreamIndexFamily;
 use super::planner::PreparedClause;
-use super::stream_family::StreamIndexFamily;
 
 pub(crate) const STREAM_LOAD_CONCURRENCY: usize = 32;
 

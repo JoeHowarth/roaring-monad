@@ -5,20 +5,38 @@ use crate::core::ids::{FamilyIdRange, FamilyIdValue};
 use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
+use crate::kernel::codec::StorageCodec;
 use crate::query::bitmap::load_prepared_clause_bitmap;
 use crate::query::normalized::{effective_limit, normalize_query};
 use crate::query::planner::PreparedClause;
 use crate::query::runner::{
     QueryDescriptor, QueryId, QueryMaterializer, build_page, empty_page, execute_indexed_query,
 };
-use crate::query::stream_family::StreamIndexFamily;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::Tables;
+use crate::tables::{StreamTables, Tables};
 
 pub(crate) trait IndexedFilter {
     fn has_indexed_clause(&self) -> bool;
     fn max_or_terms(&self) -> usize;
+}
+
+pub(crate) trait StreamIndexFamily {
+    type Shard: Copy;
+    type ClauseKind: Copy;
+    type BitmapMeta: StorageCodec;
+
+    fn stream_tables<M: MetaStore, B: BlobStore>(
+        tables: &Tables<M, B>,
+    ) -> &StreamTables<M, B, Self::BitmapMeta>;
+    fn stream_id(selector: &crate::query::planner::StreamSelector, shard: Self::Shard) -> String;
+    fn clause_sort_rank(kind: Self::ClauseKind) -> u8;
+    fn first_page_start(local_from: u32) -> u32;
+    fn last_page_start(local_to: u32) -> u32;
+    fn next_page_start(page_start: u32) -> u32;
+    fn is_full_shard_range(local_from: u32, local_to: u32) -> bool;
+    fn meta_overlaps(meta: &Self::BitmapMeta, local_from: u32, local_to: u32) -> bool;
+    fn meta_count(meta: &Self::BitmapMeta) -> u32;
 }
 
 pub(crate) trait IndexedQueryRequest {
