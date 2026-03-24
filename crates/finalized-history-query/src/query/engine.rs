@@ -1,4 +1,4 @@
-use crate::api::{ExecutionBudget, QueryOrder};
+use crate::api::{ExecutionBudget, IndexedQueryRequest};
 use crate::core::ids::FamilyIdValue;
 use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
@@ -17,55 +17,6 @@ pub(crate) trait IndexedFilter {
     fn indexed_clauses(&self) -> Vec<IndexedClause>;
 }
 
-pub(crate) trait IndexedQueryRequest {
-    type Filter: IndexedFilter;
-
-    fn start_block_num(&self) -> Option<u64>;
-    fn end_block_num(&self) -> Option<u64>;
-    fn start_block_hash(&self) -> Option<[u8; 32]>;
-    fn end_block_hash(&self) -> Option<[u8; 32]>;
-    fn order(&self) -> QueryOrder;
-    fn resume_id(&self) -> Option<u64>;
-    fn limit(&self) -> usize;
-    fn filter(&self) -> &Self::Filter;
-}
-
-impl<F: IndexedFilter> IndexedQueryRequest for crate::api::IndexedQueryRequest<F> {
-    type Filter = F;
-
-    fn start_block_num(&self) -> Option<u64> {
-        self.from_block
-    }
-
-    fn end_block_num(&self) -> Option<u64> {
-        self.to_block
-    }
-
-    fn start_block_hash(&self) -> Option<[u8; 32]> {
-        self.from_block_hash
-    }
-
-    fn end_block_hash(&self) -> Option<[u8; 32]> {
-        self.to_block_hash
-    }
-
-    fn order(&self) -> QueryOrder {
-        self.order
-    }
-
-    fn resume_id(&self) -> Option<u64> {
-        self.resume_id
-    }
-
-    fn limit(&self) -> usize {
-        self.limit
-    }
-
-    fn filter(&self) -> &Self::Filter {
-        &self.filter
-    }
-}
-
 pub(crate) struct QueryLimits {
     pub budget: ExecutionBudget,
     pub max_or_terms: usize,
@@ -76,15 +27,11 @@ pub(crate) struct FamilyQueryTables<'a, M: MetaStore, B: BlobStore> {
     pub stream_tables: &'a StreamTables<M, B, StreamBitmapMeta>,
 }
 
-pub(crate) async fn resolve_request_block_bounds<
-    M: MetaStore,
-    B: BlobStore,
-    R: IndexedQueryRequest,
->(
+pub(crate) async fn resolve_request_block_bounds<M: MetaStore, B: BlobStore, F: IndexedFilter>(
     tables: &Tables<M, B>,
-    request: &R,
+    request: &IndexedQueryRequest<F>,
 ) -> Result<(u64, u64)> {
-    let from_block = match (request.start_block_num(), request.start_block_hash()) {
+    let from_block = match (request.from_block, request.from_block_hash) {
         (Some(number), None) => number,
         (None, Some(hash)) => tables
             .block_hash_index
@@ -97,7 +44,7 @@ pub(crate) async fn resolve_request_block_bounds<
             ));
         }
     };
-    let to_block = match (request.end_block_num(), request.end_block_hash()) {
+    let to_block = match (request.to_block, request.to_block_hash) {
         (Some(number), None) => number,
         (None, Some(hash)) => tables
             .block_hash_index
@@ -113,10 +60,10 @@ pub(crate) async fn resolve_request_block_bounds<
     Ok((from_block, to_block))
 }
 
-pub(crate) async fn execute_family_query<M, P, B, R, Q, W>(
+pub(crate) async fn execute_family_query<M, P, B, F, Q, W>(
     family_tables: FamilyQueryTables<'_, M, B>,
     publication_store: &P,
-    request: &R,
+    request: &IndexedQueryRequest<F>,
     limits: QueryLimits,
     materializer: &mut Q,
     select_window: W,
@@ -125,21 +72,21 @@ where
     M: MetaStore,
     P: PublicationStore,
     B: BlobStore,
-    R: IndexedQueryRequest,
-    Q: QueryMaterializer<Filter = R::Filter>,
+    F: IndexedFilter,
+    Q: QueryMaterializer<Filter = F>,
     Q::Id: FamilyIdValue,
     W: Fn(&crate::core::state::BlockRecord) -> Option<crate::core::state::PrimaryWindowRecord>,
 {
     let tables = family_tables.tables;
 
-    if !request.filter().has_indexed_clause() {
+    if !request.filter.has_indexed_clause() {
         return Err(Error::InvalidParams(
             "query must include at least one indexed clause",
         ));
     }
-    if request.filter().max_or_terms() > limits.max_or_terms {
+    if request.filter.max_or_terms() > limits.max_or_terms {
         return Err(Error::QueryTooBroad {
-            actual: request.filter().max_or_terms(),
+            actual: request.filter.max_or_terms(),
             max: limits.max_or_terms,
         });
     }
@@ -150,7 +97,7 @@ where
         publication_store,
         from_block,
         to_block,
-        request.order(),
+        request.order,
     )
     .await?;
     if block_range.is_empty() {
@@ -165,8 +112,8 @@ where
     let Some(normalized) = plan_page(
         &block_range,
         id_window,
-        request.resume_id().map(Q::Id::new),
-        effective_limit(request.limit(), limits.budget)?,
+        request.resume_id.map(Q::Id::new),
+        effective_limit(request.limit, limits.budget)?,
         "resume_id outside resolved block window",
     )?
     else {
@@ -175,7 +122,7 @@ where
 
     let matched = execute_indexed_query(
         family_tables.stream_tables,
-        request.filter(),
+        &request.filter,
         (normalized.id_range.start, normalized.id_range.end_inclusive),
         normalized.take,
         materializer,
