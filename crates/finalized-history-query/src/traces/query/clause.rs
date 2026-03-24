@@ -2,8 +2,8 @@ use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
 use crate::query::planner::{
-    IndexedClause, PreparedClause, StreamSelector, clause_values,
-    prepare_shard_clauses as prepare_query_shard_clauses,
+    IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
+    prepare_shard_clauses as prepare_query_shard_clauses, single_selector_clause,
 };
 use crate::query::stream_family::StreamIndexFamily;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -22,10 +22,7 @@ pub(in crate::traces) enum ClauseKind {
     HasValue,
 }
 
-#[derive(Debug, Clone)]
-pub(in crate::traces) struct IndexedClauseSpec {
-    pub(in crate::traces) inner: IndexedClause<ClauseKind>,
-}
+pub(in crate::traces) type IndexedClauseSpec = IndexedClause<ClauseKind>;
 
 pub(in crate::traces) type PreparedShardClause = PreparedClause<ClauseKind>;
 
@@ -42,70 +39,31 @@ pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
 pub(in crate::traces) fn build_clause_specs(filter: &TraceFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 
-    if let Some(clause) = &filter.from {
-        let values = clause_values_20(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::From,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "from",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.from
+        && let Some(clause) = indexed_clause(ClauseKind::From, "from", clause_values_20(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.to {
-        let values = clause_values_20(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::To,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "to",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.to
+        && let Some(clause) = indexed_clause(ClauseKind::To, "to", clause_values_20(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.selector {
-        let values = clause_values_4(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Selector,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "selector",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.selector
+        && let Some(clause) =
+            indexed_clause(ClauseKind::Selector, "selector", clause_values_4(clause))
+    {
+        clauses.push(clause);
     }
 
     if filter.has_value == Some(true) {
-        clauses.push(IndexedClauseSpec {
-            inner: IndexedClause {
-                kind: ClauseKind::HasValue,
-                selectors: vec![StreamSelector {
-                    stream_kind: "has_value",
-                    value: vec![1],
-                }],
-            },
-        });
+        clauses.push(single_selector_clause(
+            ClauseKind::HasValue,
+            "has_value",
+            vec![1],
+        ));
     }
 
     clauses
@@ -118,13 +76,9 @@ pub(in crate::traces) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>
     local_from: TraceLocalId,
     local_to: TraceLocalId,
 ) -> Result<Vec<PreparedShardClause>> {
-    let shared_specs = clause_specs
-        .iter()
-        .map(|spec| spec.inner.clone())
-        .collect::<Vec<_>>();
     prepare_query_shard_clauses::<M, B, TracesStreamFamily>(
         tables,
-        &shared_specs,
+        clause_specs,
         shard,
         local_from.get(),
         local_to.get(),

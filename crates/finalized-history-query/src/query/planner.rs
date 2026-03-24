@@ -19,6 +19,31 @@ pub(crate) struct IndexedClause<K> {
     pub selectors: Vec<StreamSelector>,
 }
 
+pub(crate) fn indexed_clause<K>(
+    kind: K,
+    stream_kind: &'static str,
+    values: Vec<Vec<u8>>,
+) -> Option<IndexedClause<K>> {
+    (!values.is_empty()).then(|| IndexedClause {
+        kind,
+        selectors: values
+            .into_iter()
+            .map(|value| StreamSelector { stream_kind, value })
+            .collect(),
+    })
+}
+
+pub(crate) fn single_selector_clause<K>(
+    kind: K,
+    stream_kind: &'static str,
+    value: Vec<u8>,
+) -> IndexedClause<K> {
+    IndexedClause {
+        kind,
+        selectors: vec![StreamSelector { stream_kind, value }],
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedClause<K> {
     pub kind: K,

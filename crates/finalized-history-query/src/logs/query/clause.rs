@@ -6,7 +6,7 @@ use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
 use crate::query::planner::{
-    IndexedClause, PreparedClause, StreamSelector, clause_values,
+    IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses,
 };
 use crate::query::stream_family::StreamIndexFamily;
@@ -22,10 +22,7 @@ pub(in crate::logs) enum ClauseKind {
     Topic3,
 }
 
-#[derive(Debug, Clone)]
-pub(in crate::logs) struct IndexedClauseSpec {
-    pub(in crate::logs) inner: IndexedClause<ClauseKind>,
-}
+pub(in crate::logs) type IndexedClauseSpec = IndexedClause<ClauseKind>;
 
 pub(in crate::logs) type PreparedShardClause = PreparedClause<ClauseKind>;
 
@@ -42,94 +39,34 @@ pub(crate) fn is_full_shard_range(local_from: u32, local_to: u32) -> bool {
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
 
-    if let Some(clause) = &filter.address {
-        let values = clause_values_20(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Address,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "addr",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.address
+        && let Some(clause) = indexed_clause(ClauseKind::Address, "addr", clause_values_20(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.topic1 {
-        let values = clause_values_32(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Topic1,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "topic1",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.topic1
+        && let Some(clause) = indexed_clause(ClauseKind::Topic1, "topic1", clause_values_32(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.topic2 {
-        let values = clause_values_32(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Topic2,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "topic2",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.topic2
+        && let Some(clause) = indexed_clause(ClauseKind::Topic2, "topic2", clause_values_32(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.topic3 {
-        let values = clause_values_32(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Topic3,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "topic3",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.topic3
+        && let Some(clause) = indexed_clause(ClauseKind::Topic3, "topic3", clause_values_32(clause))
+    {
+        clauses.push(clause);
     }
 
-    if let Some(clause) = &filter.topic0 {
-        let values = clause_values_32(clause);
-        if !values.is_empty() {
-            clauses.push(IndexedClauseSpec {
-                inner: IndexedClause {
-                    kind: ClauseKind::Topic0,
-                    selectors: values
-                        .into_iter()
-                        .map(|value| StreamSelector {
-                            stream_kind: "topic0",
-                            value,
-                        })
-                        .collect(),
-                },
-            });
-        }
+    if let Some(clause) = &filter.topic0
+        && let Some(clause) = indexed_clause(ClauseKind::Topic0, "topic0", clause_values_32(clause))
+    {
+        clauses.push(clause);
     }
 
     clauses
@@ -142,13 +79,9 @@ pub(in crate::logs) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
     local_from: LogLocalId,
     local_to: LogLocalId,
 ) -> Result<Vec<PreparedShardClause>> {
-    let shared_specs = clause_specs
-        .iter()
-        .map(|spec| spec.inner.clone())
-        .collect::<Vec<_>>();
     prepare_query_shard_clauses::<M, B, LogsStreamFamily>(
         tables,
-        &shared_specs,
+        clause_specs,
         shard,
         local_from.get(),
         local_to.get(),
