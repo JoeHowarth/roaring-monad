@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use roaring::RoaringBitmap;
 
+use crate::core::layout::LOCAL_ID_BITS;
 use crate::streams::{BitmapBlob, decode_bitmap_blob};
 
 pub fn hex_digit(v: u8) -> char {
@@ -12,8 +13,8 @@ pub fn hex_digit(v: u8) -> char {
     }
 }
 
-pub fn sharded_stream_id(index_kind: &str, value: &[u8], shard: u64, local_id_bits: u32) -> String {
-    let shard_hex_width = ((64 - local_id_bits) as usize).div_ceil(4);
+pub fn sharded_stream_id(index_kind: &str, value: &[u8], shard: u64) -> String {
+    let shard_hex_width = ((64 - LOCAL_ID_BITS) as usize).div_ceil(4);
     let mut out =
         String::with_capacity(index_kind.len() + 1 + value.len() * 2 + 1 + shard_hex_width);
     out.push_str(index_kind);

@@ -4,8 +4,8 @@ use crate::core::ids::LogId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::table_specs;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -20,12 +20,12 @@ pub fn collect_stream_appends(
         let shard = global_log_id.shard();
         let local = global_log_id.local().get();
 
-        out.entry(table_specs::stream_id("addr", &log.address, shard))
+        out.entry(sharded_stream_id("addr", &log.address, shard.get()))
             .or_default()
             .insert(local);
 
         if let Some(topic0) = log.topics.first() {
-            out.entry(table_specs::stream_id("topic0", topic0, shard))
+            out.entry(sharded_stream_id("topic0", topic0, shard.get()))
                 .or_default()
                 .insert(local);
         }
@@ -37,7 +37,7 @@ pub fn collect_stream_appends(
                 3 => "topic3",
                 _ => continue,
             };
-            out.entry(table_specs::stream_id(kind, topic, shard))
+            out.entry(sharded_stream_id(kind, topic, shard.get()))
                 .or_default()
                 .insert(local);
         }

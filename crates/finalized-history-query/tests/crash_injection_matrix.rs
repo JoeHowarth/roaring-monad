@@ -21,7 +21,7 @@ use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, LOG_DIR_SUB_BUCKET_TABLE, LOG_DIRECTORY_SUB_BUCKET_SIZE,
     STREAM_PAGE_LOCAL_ID_SPAN,
 };
-use finalized_history_query::logs::table_specs::{self, BitmapPageMetaSpec, LogDirSubBucketSpec};
+use finalized_history_query::logs::table_specs::{BitmapPageMetaSpec, LogDirSubBucketSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -686,10 +686,12 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .expect("dir sub bucket")
             .is_some()
         );
-        let sid = table_specs::stream_id(
+        let sid = finalized_history_query::kernel::sharded_streams::sharded_stream_id(
             "addr",
             &[7; 20],
-            finalized_history_query::core::ids::LogShard::new(0).unwrap(),
+            finalized_history_query::core::ids::LogShard::new(0)
+                .unwrap()
+                .get(),
         );
         let page_start = page_start_local(
             (seed_first_log_id as u32).saturating_sub(0),

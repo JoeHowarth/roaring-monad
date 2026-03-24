@@ -1,6 +1,5 @@
 use crate::core::ids::{LogId, LogShard};
-use crate::core::layout::{LOCAL_ID_BITS, MAX_LOCAL_ID};
-use crate::kernel::sharded_streams::sharded_stream_id;
+use crate::core::layout::MAX_LOCAL_ID;
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::kernel::table_specs::{
     aligned_u64_start, page_prefix, page_stream_key, stream_page_key, u64_key,
@@ -150,8 +149,4 @@ pub fn local_range_for_shard(
         crate::core::ids::LogLocalId::new(MAX_LOCAL_ID).expect("MAX_LOCAL_ID is valid")
     };
     (local_from, local_to)
-}
-
-pub fn stream_id(index_kind: &str, value: &[u8], shard: LogShard) -> String {
-    sharded_stream_id(index_kind, value, shard.get(), LOCAL_ID_BITS)
 }

@@ -1,5 +1,4 @@
 use crate::core::layout::LOCAL_ID_BITS;
-use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
@@ -21,14 +20,6 @@ pub const TRACE_BITMAP_PAGE_BLOB_TABLE: BlobTableId = BlobTableId::new("trace_bi
 pub const TRACE_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const TRACE_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
-
-pub fn stream_id(index_kind: &str, value: &[u8], shard: crate::core::ids::TraceShard) -> String {
-    sharded_stream_id(index_kind, value, shard.get(), LOCAL_ID_BITS)
-}
-
-pub fn has_value_stream_id(shard: crate::core::ids::TraceShard) -> String {
-    stream_id("has_value", b"\x01", shard)
-}
 
 pub fn trace_local_range_for_shard(
     from: crate::core::ids::TraceId,

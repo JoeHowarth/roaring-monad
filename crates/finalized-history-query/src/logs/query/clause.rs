@@ -2,10 +2,9 @@ use crate::core::clause::Clause;
 use crate::core::ids::{LogLocalId, LogShard};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::error::Result;
-use crate::kernel::sharded_streams::page_start_local;
+use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::table_specs;
 use crate::query::planner::{
     IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses,
@@ -98,7 +97,7 @@ impl StreamIndexFamily for LogsStreamFamily {
     }
 
     fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {
-        table_specs::stream_id(selector.stream_kind, &selector.value, shard)
+        sharded_stream_id(selector.stream_kind, &selector.value, shard.get())
     }
 
     fn clause_sort_rank(kind: Self::ClauseKind) -> u8 {

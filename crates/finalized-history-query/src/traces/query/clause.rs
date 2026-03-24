@@ -1,7 +1,7 @@
 use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
-use crate::kernel::sharded_streams::page_start_local;
+use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
 use crate::query::planner::{
     IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses, single_selector_clause,
@@ -10,9 +10,7 @@ use crate::query::stream_family::StreamIndexFamily;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
-use crate::traces::keys::{
-    MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id,
-};
+use crate::traces::keys::{MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::traces) enum ClauseKind {
@@ -95,8 +93,8 @@ impl StreamIndexFamily for TracesStreamFamily {
 
     fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {
         match selector.stream_kind {
-            "has_value" => has_value_stream_id(shard),
-            _ => crate::traces::keys::stream_id(selector.stream_kind, &selector.value, shard),
+            "has_value" => sharded_stream_id("has_value", b"\x01", shard.get()),
+            _ => sharded_stream_id(selector.stream_kind, &selector.value, shard.get()),
         }
     }
 

@@ -14,7 +14,7 @@ use finalized_history_query::logs::keys::{
     STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
-    self, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
+    BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
 };
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -123,10 +123,12 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         );
         svc.ingest_finalized_block(block).await.expect("ingest");
 
-        let sid = table_specs::stream_id(
+        let sid = finalized_history_query::kernel::sharded_streams::sharded_stream_id(
             "addr",
             &[5; 20],
-            finalized_history_query::core::ids::LogShard::new(0).unwrap(),
+            finalized_history_query::core::ids::LogShard::new(0)
+                .unwrap()
+                .get(),
         );
         let page_start = page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1, STREAM_PAGE_LOCAL_ID_SPAN);
         assert!(

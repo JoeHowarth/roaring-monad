@@ -4,9 +4,10 @@ use crate::core::ids::TraceId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::keys::{TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id, stream_id};
+use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::view::BlockTraceIter;
 
 pub fn collect_trace_stream_appends(
@@ -22,24 +23,24 @@ pub fn collect_trace_stream_appends(
         let local = global_trace_id.local().get();
         let view = iterated.view;
 
-        out.entry(stream_id("from", view.from_addr()?, shard))
+        out.entry(sharded_stream_id("from", view.from_addr()?, shard.get()))
             .or_default()
             .insert(local);
 
         if let Some(to_addr) = view.to_addr()? {
-            out.entry(stream_id("to", to_addr, shard))
+            out.entry(sharded_stream_id("to", to_addr, shard.get()))
                 .or_default()
                 .insert(local);
         }
 
         if let Some(selector) = view.selector()? {
-            out.entry(stream_id("selector", selector, shard))
+            out.entry(sharded_stream_id("selector", selector, shard.get()))
                 .or_default()
                 .insert(local);
         }
 
         if view.has_value()? {
-            out.entry(has_value_stream_id(shard))
+            out.entry(sharded_stream_id("has_value", b"\x01", shard.get()))
                 .or_default()
                 .insert(local);
         }

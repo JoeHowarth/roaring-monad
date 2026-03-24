@@ -22,7 +22,7 @@ use finalized_history_query::logs::keys::{
 };
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
-    self, BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
+    BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
 };
 use finalized_history_query::logs::types::{BlockLogHeader, DirBucket, Log};
 use finalized_history_query::query::runner::{QueryIdRange, QueryMaterializer, ShardBitmapSet};
@@ -750,11 +750,7 @@ pub fn seed_publication_state(
 }
 
 pub fn stream_for_address(address: [u8; 20], shard: u64) -> String {
-    table_specs::stream_id(
-        "addr",
-        &address,
-        LogShard::new(shard).expect("valid log shard"),
-    )
+    finalized_history_query::kernel::sharded_streams::sharded_stream_id("addr", &address, shard)
 }
 
 pub fn materializer<'a>(
