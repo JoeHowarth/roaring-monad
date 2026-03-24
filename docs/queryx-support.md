@@ -36,6 +36,7 @@ response envelopes, and error mapping.
 The current crate already has much of the core substrate shape that the
 reference document wants:
 
+- a concrete block query API over shared finalized block metadata
 - a concrete logs query API
 - a shared `FinalizedBlock` ingest envelope
 - one service-owned runtime and typed table bundle
@@ -54,12 +55,16 @@ Current family status:
 
 The current public surface is still narrower than the reference:
 
-- logs and traces only
+- blocks, logs, and traces only
 - finalized history only
 - no descending traversal
 - no field selection
 - no relation joins
 - no tag-based range inputs on the transport-free surface
+
+The current `query_blocks` substrate is intentionally narrow: it materializes
+shared block identity (`number`, `hash`, `parent_hash`) from `block_record`
+rather than a richer block-header object.
 
 That is acceptable. The important thing is that the crate now has a shared
 multi-family substrate instead of a logs-only architecture.

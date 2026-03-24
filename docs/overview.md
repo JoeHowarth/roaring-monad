@@ -19,8 +19,8 @@ plans live under `docs/historical/`. Active and completed plans live under
 
 The crate implements the finalized-history query substrate that powers the
 `queryX` family of RPC methods. Today it exposes finalized-history queries for
-the logs and traces families, plus a shared ingest substrate for logs, txs,
-and traces.
+shared block identities plus the logs and traces families, alongside a shared
+ingest substrate for logs, txs, and traces.
 
 The main path:
 
@@ -30,8 +30,8 @@ The main path:
 4. logs receive monotonic finalized `log_id`; traces receive monotonic finalized `TraceId`
 5. immutable family-owned directory fragments and immutable stream-page fragments are written
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
-7. `query_logs` and `query_traces` resolve finalized block windows
-8. each family maps that block window to its primary-ID window
+7. `query_blocks`, `query_logs`, and `query_traces` resolve finalized block windows
+8. block queries scan shared block metadata directly; indexed families map that block window to a primary-ID window
 9. query, status, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 11. ingest writes seed those same typed caches immediately
@@ -56,6 +56,7 @@ The crate is organized in three layers.
 
 ### Shared finalized-history substrate
 
+- `src/blocks.rs`
 - `src/core/*`
 - `src/family.rs`
 - `src/ingest/authority.rs`
@@ -85,9 +86,11 @@ For details on each subsystem, see: [storage-model.md](storage-model.md), [write
 
 The public query surface is transport-free:
 
+- `QueryBlocksRequest`
 - `QueryLogsRequest`
 - `QueryTracesRequest`
 - `ExecutionBudget`
+- `QueryPage<Block>`
 - `QueryPage<Log>`
 - `QueryPage<Trace>`
 - `QueryPageMeta`
@@ -104,6 +107,7 @@ The shared layer owns:
 - the long-lived runtime that shares store handles and typed tables across query/status/ingest
 - the multi-family ingest coordinator that validates sequence once and publishes once per batch
 - range resolution against finalized head
+- direct finalized block scans over shared block metadata
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - typed immutable-artifact table reads with per-table bytes cache policy (see [caching.md](caching.md))
@@ -168,6 +172,15 @@ class QueryLogsRequest:
     filter: LogFilter
 
 
+class QueryBlocksRequest:
+    from_block: int | None
+    to_block: int | None
+    from_block_hash: bytes32 | None
+    to_block_hash: bytes32 | None
+    order: QueryOrder
+    limit: int
+
+
 class QueryTracesRequest:
     from_block: int | None
     to_block: int | None
@@ -200,6 +213,12 @@ class QueryPageMeta:
 class QueryPage[T]:
     items: list[T]
     meta: QueryPageMeta
+
+
+class Block:
+    number: int
+    hash: bytes32
+    parent_hash: bytes32
 
 
 class Tx:
