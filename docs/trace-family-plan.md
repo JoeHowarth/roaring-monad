@@ -1,6 +1,6 @@
 # Trace Family Implementation Plan
 
-> Sibling to [trace-family.md](trace-family.md) (target-state design).
+> Sibling to [trace-family.md](trace-family.md) (current implementation).
 > This document sequences the implementation into concrete steps.
 
 ## Phases
@@ -93,7 +93,7 @@ Tests:
 
 #### 2b. BlockTraceIter
 
-`src/traces/view.rs` (or `src/traces/iter.rs`)
+`src/traces/view.rs`
 
 - `BlockTraceIter<'a>` — walks the outer `Vec<Vec<CallFrame>>` RLP structure
 - yields `(tx_idx: u32, trace_idx: u32, CallFrameView<'a>)` in flat order
@@ -112,7 +112,7 @@ Tests:
 
 #### 3a. Trace keys and constants
 
-`src/traces/keys.rs`
+`src/traces/table_specs.rs`
 
 - table IDs: `TRACE_BLOCK_RECORD_TABLE`, `BLOCK_TRACE_HEADER_TABLE`,
   `TRACE_DIR_BUCKET_TABLE`, `TRACE_DIR_SUB_BUCKET_TABLE`,
@@ -153,7 +153,7 @@ methods.
 
 #### 4a. TraceSequencingState
 
-`src/traces/state.rs`
+`src/traces/types.rs` and `src/traces/mod.rs`
 
 - `TraceSequencingState { next_trace_id: TraceId }`
 - derive from `trace_block_record` at the published head, same as logs
@@ -163,7 +163,7 @@ methods.
 - update `FamilyStates` to hold `TraceSequencingState` instead of
   the old trace startup alias
 - update `ServiceStatus` accordingly
-- update `TracesFamily::load_state_from_head` to read `trace_block_record` and
+- update `TracesFamily::load_state_from_head_record` to read `trace_block_record` and
   derive `next_trace_id`
 
 ---
@@ -174,7 +174,7 @@ This is the largest phase. Follow the logs ingest structure closely.
 
 #### 5a. Trace artifact persistence
 
-`src/traces/ingest/artifact.rs`
+`src/traces/ingest.rs`
 
 - `persist_trace_artifacts` — iterate `BlockTraceIter` over the raw RLP,
   collect byte offsets and tx boundaries, build `BlockTraceHeader`, write
@@ -185,7 +185,7 @@ This is the largest phase. Follow the logs ingest structure closely.
 
 #### 5b. Stream index collection and persistence
 
-`src/traces/ingest/stream.rs`
+`src/traces/ingest.rs`
 
 - `collect_trace_stream_appends` — iterate `BlockTraceIter`, for each frame
   extract `from`, `to` (if present), `selector` (if call-type and input >= 4
@@ -196,7 +196,7 @@ This is the largest phase. Follow the logs ingest structure closely.
 
 #### 5c. Compaction
 
-`src/traces/ingest/compaction.rs`
+`src/traces/ingest.rs` plus shared helpers under `src/ingest/`
 
 - directory compaction (sub-bucket, bucket) — same logic as logs, different
   table IDs

@@ -1,10 +1,9 @@
 # Trace Family
 
-> Status: target-state design
+> Status: current implementation
 >
-> This document describes the intended end-state design for the trace family.
-> It is not fully implemented today, and it is not a concrete implementation
-> plan. Implementation sequencing and rollout steps belong in `docs/plans/`.
+> This document describes the current trace-family architecture in
+> `finalized-history-query`. Future rollout sequencing belongs in `docs/plans/`.
 
 This document describes the trace family design: storage layout, ingest
 behavior, zero-copy accessors, indexing, and how native-transfer queries are
@@ -109,8 +108,7 @@ To recover `tx_idx` for flat trace `i`, find the first `tx_starts` entry `> i`
 and subtract one from that position. This is O(log T) where T is the
 transaction count in the block.
 
-Empty blocks (zero traces) get an empty header and no blob entry, matching the
-logs family convention.
+Empty blocks (zero traces) get an empty header and an empty trace blob entry.
 
 ### Trace block record
 
@@ -284,23 +282,23 @@ for any hash → block_num resolution.
 
 ## Artifact Write Order
 
-Within a single block's trace ingest:
+Within the trace-family portion of a block ingest:
 
-1. `block_trace_blob` — raw RLP bytes
-2. `block_trace_header` — offset table
-3. `block_record` — shared block sequencing metadata
-4. directory fragments — `trace_dir_by_block` rows
-5. stream fragments — `trace_bitmap_by_block` rows
-6. compaction — directory sub-buckets, stream pages (when boundaries seal)
+1. `block_trace_blob` plus `block_trace_header` — raw RLP bytes and offset table
+2. directory fragments — `trace_dir_by_block` rows
+3. stream fragments — `trace_bitmap_by_block` rows
+4. compaction — directory sub-buckets and stream pages when boundaries seal
 
-All trace artifacts are written before the shared `publication_state` head
-advance, consistent with the existing publication ordering invariant.
+The surrounding shared ingest envelope writes `block_hash_index` before family
+ingest begins and writes the shared `block_record` after logs, txs, and traces
+all finish for the block. As with logs, all trace artifacts are durable before
+the shared `publication_state` head advance.
 
 ## State From Head
 
-`TracesFamily::load_state_from_head` derives `TraceSequencingState` from the
-published `indexed_finalized_head` by reading the shared `block_record` for the
-head block and computing `next_trace_id = traces.first_primary_id + traces.count`.
+`TracesFamily::load_state_from_head_record` derives `TraceSequencingState` from
+the shared head record selected by the family coordinator. It computes
+`next_trace_id = traces.first_primary_id + traces.count`.
 
 If no shared block records with a `traces` window exist (fresh instance),
 `next_trace_id` starts at 0.

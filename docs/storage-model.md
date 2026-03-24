@@ -16,7 +16,7 @@ All read-path data artifacts are treated as immutable once published. The
 only shared mutable state is:
 
 - `publication_state` table entry `state` — ownership session, lease validity, indexed finalized head
-- `open_bitmap_page` table rows — write/recovery inventory markers
+- `open_bitmap_page` and `trace_open_bitmap_page` table rows — write/recovery inventory markers
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.
 
@@ -24,14 +24,14 @@ This means cached artifacts are safe to reuse indefinitely until eviction, with 
 
 All artifacts for a block must be durable before `publication_state.indexed_finalized_head` is advanced. This ensures readers never observe a head that references artifacts that don't yet exist.
 
-The artifact write order for a block preserves family-local durability before shared publication:
+The artifact write order for a block preserves shared visibility boundaries:
 
-1. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_trace_blob` / `block_trace_header`)
-2. shared block metadata (`block_record`)
-3. shared block hash lookup (`block_hash_index`)
-4. family directory fragments (`log_dir_by_block`, `trace_dir_by_block`)
-5. family stream fragments (`bitmap_by_block`, `trace_bitmap_by_block`)
-6. family compaction (directory summaries, stream pages)
+1. shared block hash lookup (`block_hash_index`)
+2. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_trace_blob` / `block_trace_header`)
+3. family directory fragments (`log_dir_by_block`, `trace_dir_by_block`)
+4. family stream fragments (`bitmap_by_block`, `trace_bitmap_by_block`)
+5. family compaction (directory summaries, stream pages)
+6. shared block metadata (`block_record`)
 7. head advance via CAS on `publication_state`
 
 Writers use unconditional writes for normal artifacts. Correctness

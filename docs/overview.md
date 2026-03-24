@@ -45,19 +45,20 @@ The crate is organized in three layers.
 - `src/core/*`
 - `src/family.rs`
 - `src/ingest/authority.rs`
-- `src/ingest/authority/*`
 - `src/ingest/bitmap_pages.rs`
 - `src/ingest/engine.rs`
+- `src/ingest/open_pages.rs`
 - `src/ingest/primary_dir.rs`
+- `src/ingest/recovery.rs`
 - `src/kernel/*`
 - `src/runtime.rs`
-- `src/streams/*`
+- `src/streams.rs`
 - `src/tables.rs`
 
 ### Family adapters
 
 - `src/logs/*`
-- `src/txs/*`
+- `src/txs.rs`
 - `src/traces/*`
 
 The RPC crate stays outside this boundary. It owns transport concerns such as JSON-RPC parsing, tag policy, field selection, envelope formatting, and error mapping.
@@ -131,7 +132,7 @@ The traces layer owns:
 
 The txs layer already participates in the shared family boundary:
 
-- `src/txs/*`
+- `src/txs.rs`
 
 Today txs still provide state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
 
@@ -148,7 +149,7 @@ class QueryLogsRequest:
     from_block_hash: bytes32 | None
     to_block_hash: bytes32 | None
     order: QueryOrder
-    resume_log_id: int | None
+    resume_id: int | None
     limit: int
     filter: LogFilter
 
@@ -159,7 +160,7 @@ class QueryTracesRequest:
     from_block_hash: bytes32 | None
     to_block_hash: bytes32 | None
     order: QueryOrder
-    resume_trace_id: int | None
+    resume_id: int | None
     limit: int
     filter: TraceFilter
 
@@ -278,6 +279,7 @@ Trace metadata and blobs:
 - `trace_bitmap_by_block` scannable table, partition `<stream_id>/<page_start>`, clustering `<block_num>` -> immutable bitmap fragment
 - `trace_bitmap_page_meta` table, key `<stream_id>/<page_start>` -> compacted page metadata
 - `trace_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` -> compacted page bitmap
+- `trace_open_bitmap_page` scannable table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
 
 Directory metadata:
 
@@ -306,6 +308,7 @@ Today the logs and traces families persist finalized-history artifacts. The shar
 class FinalizedHistoryService:
     async def status(self) -> ServiceStatus
     async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
+    async def query_traces(self, request: QueryTracesRequest, budget: ExecutionBudget) -> QueryPage[Trace]
     async def ingest_finalized_block(self, block: FinalizedBlock) -> IngestOutcome
     async def ingest_finalized_blocks(self, blocks: list[FinalizedBlock]) -> IngestOutcome
 ```
@@ -322,7 +325,6 @@ This boundary is transport-free:
 The crate intentionally does not implement:
 
 - descending traversal
-- `block_hash` query mode on the transport-free query surface
 - tx artifact storage and query support
 - relation hydration helpers
 - canonical block / transaction / trace artifact stores
@@ -342,51 +344,46 @@ The crate intentionally does not implement:
 6. `src/kernel/scannable_table.rs` — shared scannable partition loading
 7. `src/kernel/blob_table.rs` — shared cache-backed blob access
 8. `src/tables.rs` — typed immutable-artifact table assembly, shared directory bundles, and family-facing wrappers
-9. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
-10. `src/core/page.rs` — pagination/result vocabulary
-11. `src/core/refs.rs` — shared `BlockRef` type
-12. `src/core/state.rs` — shared state projections
-13. `src/core/range.rs` — block-range validation and clipping
-14. `src/core/layout.rs` — shared finalized-history ID layout constants
-15. `src/core/ids.rs` — shared `FamilyId` core plus family ID wrappers and shared ranges
-16. `src/core/directory.rs` — shared directory bucket and fragment payloads
-17. `src/core/directory_resolver.rs` — shared primary-ID directory resolution
-18. `src/query/runner.rs` — shared matched-item vocabulary, public candidate runner, and indexed query runner
-19. `src/store/publication.rs` — shared publication/session state and storage key
-20. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
+9. `src/core/types.rs` — shared clause, pagination, and `BlockRef` vocabulary
+10. `src/core/state.rs` — shared state projections
+11. `src/core/range.rs` — block-range validation and clipping
+12. `src/core/layout.rs` — shared finalized-history ID layout constants
+13. `src/core/ids.rs` — shared `FamilyId` core plus family ID wrappers and shared ranges
+14. `src/core/directory.rs` — shared directory bucket and fragment payloads
+15. `src/core/directory_resolver.rs` — shared primary-ID directory resolution
+16. `src/query/runner.rs` — shared matched-item vocabulary, public candidate runner, and indexed query runner
+17. `src/store/publication.rs` — shared publication/session state and storage key
+18. `src/streams.rs` — roaring bitmap blob format and stream-page metadata
 
 ### Pass 3: Logs family
 
-21. `src/logs/types.rs` — logs-owned schema and sequencing projections
-22. `src/logs/keys.rs` — logs-family key layout and ID constants
-23. `src/logs/table_specs.rs` — logs-family table specs and key helpers
-24. `src/logs/codec.rs` — log, block log header, and block record encodings over shared directory payloads
-25. `src/logs/log_ref.rs` — zero-copy log views
-26. `src/logs/family.rs` — logs-specific state derivation and per-block ingest handler
-27. `src/logs/filter.rs` — log matching semantics, indexed clauses
-28. `src/logs/state.rs` — logs-window resolution over shared block records
-29. `src/logs/materialize/` — logs-specific hydration on top of shared ID resolution
-30. `src/logs/query/` — main query engine
-31. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
+19. `src/logs/types.rs` — logs-owned schema and sequencing projections
+20. `src/logs/table_specs.rs` — logs-family table specs and key helpers
+21. `src/logs/codec.rs` — log and block-header encodings over shared storage payloads
+22. `src/logs/log_ref.rs` — zero-copy log views
+23. `src/logs/family.rs` — logs-specific state derivation and per-block ingest handler
+24. `src/logs/filter.rs` — log matching semantics and indexed clauses
+25. `src/logs/materialize/` — logs-specific hydration on top of shared ID resolution
+26. `src/logs/query/` — main query engine
+27. `src/logs/ingest.rs` — log-family ingest: artifacts and stream fanout
 
 ### Pass 4: Traces family
 
-29. `src/traces/types.rs` — traces-owned schema and sequencing projections
-30. `src/traces/keys.rs` — traces-family key layout and stream key helpers
-31. `src/traces/table_specs.rs` — traces-family table specs
-32. `src/traces/codec.rs` — trace block header and block record encodings
-33. `src/traces/view.rs` — zero-copy `CallFrameView` access over stored RLP bytes
-34. `src/traces/materialize.rs` — `trace_id -> block_num -> trace bytes` resolution
-35. `src/traces/filter.rs` — trace matching semantics and indexed clauses
-36. `src/traces/query/` — trace query engine
-37. `src/traces/ingest/` — trace-family ingest: artifacts, fragments, compaction
+28. `src/traces/types.rs` — traces-owned schema and sequencing projections
+29. `src/traces/table_specs.rs` — traces-family table specs
+30. `src/traces/codec.rs` — trace block-header encodings
+31. `src/traces/view.rs` — zero-copy `CallFrameView` access over stored RLP bytes
+32. `src/traces/materialize.rs` — `trace_id -> block_num -> trace bytes` resolution
+33. `src/traces/filter.rs` — trace matching semantics and indexed clauses
+34. `src/traces/query/` — trace query engine
+35. `src/traces/ingest.rs` — trace-family ingest: artifacts and stream fanout
 
 ### Pass 5: Storage and codecs
 
-38. `src/kernel/codec.rs` — shared storage codec trait and fixed-layout codec macro
-39. `src/kernel/sharded_streams.rs` — shared sharded stream/page helpers used by logs and traces
-40. `src/kernel/compaction.rs` — shared sealed-boundary compaction helpers
-41. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
+36. `src/kernel/codec.rs` — shared storage codec trait and fixed-layout codec macro
+37. `src/kernel/sharded_streams.rs` — shared sharded stream/page helpers used by logs and traces
+38. `src/kernel/compaction.rs` — shared sealed-boundary compaction helpers
+39. `src/store/traits.rs` — `MetaStore`, `BlobStore` contracts
 
 ### Pass 6: Ingest orchestration
 

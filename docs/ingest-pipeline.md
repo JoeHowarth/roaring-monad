@@ -39,20 +39,20 @@ For each block in the batch:
 
 Within the logs family step, artifact writes remain:
 
-1. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
-2. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
-3. **Block meta** — `block_record` table, key `<block_num>`: merge the logs `PrimaryWindowRecord { first_primary_id, count }` into the shared `{ block_hash, parent_hash, logs, traces }` record
-4. **Block hash index** — `block_hash_index` table, key `<block_hash>`: reverse lookup
-5. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
-6. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
+1. **Shared block hash index** — `block_hash_index` is written before family ingest starts for the block
+2. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
+3. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
+4. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
+5. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
+6. **Shared block meta** — `block_record` is written after all families finish for the block, carrying the shared `{ block_hash, parent_hash, logs, traces }` record
 
 Within the traces family step, artifact writes are:
 
 1. **Trace blob** — `block_trace_blob` blob table, key `<block_num>`: raw per-block `trace_rlp`
 2. **Block trace header** — `block_trace_header` table, key `<block_num>`: compact trace header with offsets and tx starts
-3. **Block meta** — `block_record` table, key `<block_num>`: merge the traces `PrimaryWindowRecord { first_primary_id, count }` into the shared `{ block_hash, parent_hash, logs, traces }` record
-4. **Directory fragments** — one `trace_dir_by_block` row per covered sub-bucket, keyed by partition `<trace_sub_bucket_start>` and clustering `<block_num>`
-5. **Stream fragments** — `trace_bitmap_by_block` rows per stream per page touched
+3. **Directory fragments** — one `trace_dir_by_block` row per covered sub-bucket, keyed by partition `<trace_sub_bucket_start>` and clustering `<block_num>`
+4. **Stream fragments** — `trace_bitmap_by_block` rows per stream per page touched
+5. **Shared block meta** — `block_record` is still written once, after all families finish for the block
 
 All family artifacts for the block batch must be durable before the head advance — see the publication ordering invariant in [storage-model.md](storage-model.md). Artifact writes are unconditional; publication remains the only visibility boundary. Writes flow through the service-owned typed `Tables` runtime so ingest also warms the same per-table caches that queries read.
 
@@ -93,17 +93,17 @@ When a stream fragment is written to a page for the first time in a batch, an op
 ## Important Boundaries
 
 - `api.rs`: transport-free query and ingest entrypoints
-- `block.rs`: shared finalized block envelope carrying block identity plus family payloads
+- `family.rs`: shared finalized block envelope carrying block identity plus family payloads
 - `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared state derivation and per-family ingest aggregation
 - `runtime.rs`: shared store-handle + typed-table runtime used by query/status/ingest
 - `ingest/engine.rs`: generic writer preflight and publication orchestration from current head to new tail for the shared finalized block envelope
 - `ingest/primary_dir.rs`: shared primary-directory fragment persistence and sealed-boundary compaction
 - `ingest/bitmap_pages.rs`: shared stream-page fragment persistence and compacted-page writes
 - `logs/family.rs`: logs-specific sequencing-state derivation and per-block ingest handler
-- `txs/family.rs`: tx-family scaffold that currently rejects non-empty tx payloads
+- `txs.rs`: tx-family scaffold that currently rejects non-empty tx payloads
 - `traces/mod.rs`: trace-family sequencing-state derivation and per-block ingest handler
-- `logs/ingest/`: logs payload encoding, logs stream fanout, and open-page marker handling
-- `traces/ingest/`: trace payload encoding and trace stream fanout
+- `logs/ingest.rs`: logs payload encoding and logs stream fanout
+- `traces/ingest.rs`: trace payload encoding and trace stream fanout
 - `publication_state.indexed_finalized_head` is published last
 
 See [write-authority.md](write-authority.md) for the lease and publication model.

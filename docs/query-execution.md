@@ -8,8 +8,8 @@ This document describes the shared query execution model used by logs and traces
 block_window = inclusive finalized block range after validation and clipping
 primary_id = family-specific monotonic ID
 log_id = the primary_id for logs
-resume_log_id = declarative log-ID lower bound in the request
-next_resume_log_id = token returned for the next request
+resume_id = declarative primary-ID lower bound in the request
+next_resume_id = token returned for the next request
 cursor_block = block containing the last returned item
 effective_limit = min(request.limit, budget.max_results or request.limit)
 ```
@@ -67,11 +67,11 @@ async def query_logs(request, budget):
     if log_window.is_empty():
         return empty_page(block_window)
 
-    if request.resume_log_id is not None:
-        if not log_window.contains(request.resume_log_id):
-            raise InvalidParams("resume_log_id outside resolved block window")
+    if request.resume_id is not None:
+        if not log_window.contains(request.resume_id):
+            raise InvalidParams("resume_id outside resolved block window")
 
-        log_window = log_window.resume_strictly_after(request.resume_log_id)
+        log_window = log_window.resume_strictly_after(request.resume_id)
         if log_window.is_empty():
             return empty_page(block_window)
 
@@ -91,7 +91,7 @@ async def query_logs(request, budget):
             resolved_to_block=block_window.resolved_to_ref,
             cursor_block=page_matches[-1].block_ref if page_matches else block_window.examined_endpoint_ref,
             has_more=has_more,
-            next_resume_log_id=page_matches[-1].id if has_more and page_matches else None,
+            next_resume_id=page_matches[-1].id if has_more and page_matches else None,
         ),
     )
 ```
@@ -100,7 +100,7 @@ Key steps:
 
 1. **Range resolution** — `RangeResolver` clips the request to the indexed finalized head
 2. **Window resolution** — `LogWindowResolver` maps the block range to a log-ID range
-3. **Resume handling** — if `resume_log_id` is set, narrow the window to strictly after it
+3. **Resume handling** — if `resume_id` is set, narrow the window to strictly after it
 4. **Shard-streaming execution** — fetch `effective_limit + 1` matches to determine `has_more`
 5. **Page assembly** — preserve primary IDs through assembly for exact pagination metadata
 
@@ -158,7 +158,7 @@ async def execute_indexed_query(filter, id_window, take):
 This preserves the primary ID long enough to emit:
 
 - exact `has_more`
-- exact `next_resume_log_id`
+- exact `next_resume_id`
 - exact `cursor_block`
 
 ## Clause Filtering and Bitmap Intersection
@@ -192,8 +192,8 @@ The higher-level family query engines build on the same module through the inter
 
 ## Pagination
 
-- `resume_log_id` is a declarative lower bound — the query resumes strictly after this value
-- `next_resume_log_id` is the ID of the last returned item when `has_more` is true
+- `resume_id` is a declarative lower bound — the query resumes strictly after this value
+- `next_resume_id` is the ID of the last returned item when `has_more` is true
 - `cursor_block` is the `BlockRef` of the block containing the last returned item
 - `has_more` is exact because the executor fetches `limit + 1` candidates
 

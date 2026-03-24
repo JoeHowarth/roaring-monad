@@ -30,8 +30,8 @@ envelopes, and error mapping.
 
 ## Where We Are Today
 
-The current crate already has the core substrate shape that the reference
-document wants:
+The current crate already has much of the core substrate shape that the
+reference document wants:
 
 - a concrete logs query API
 - a shared `FinalizedBlock` ingest envelope
@@ -39,18 +39,19 @@ document wants:
 - one ingest coordinator that validates block continuity once and publishes
   once per batch
 - one concrete `Families { logs, txs, traces }` registry
-- logs as the first real family implementation
+- logs and traces as real family implementations
 
 Current family status:
 
 - `logs`: real family, with storage layout, codecs, indexing, query execution,
   materialization, and ingest
 - `txs`: scaffold family slot only
-- `traces`: scaffold family slot only
+- `traces`: real family, with trace-owned storage, indexing, query execution,
+  materialization, and ingest
 
 The current public surface is still narrower than the reference:
 
-- logs only
+- logs and traces only
 - finalized history only
 - no descending traversal
 - no field selection
@@ -125,17 +126,17 @@ The design goal for transactions is therefore:
 
 ### Traces
 
-Traces are comparatively straightforward once the trace source and canonical
-trace schema are chosen.
+Traces are now a concrete family implementation rather than a placeholder.
 
-The main design work is:
+They currently have:
 
-- selecting the trace representation
-- deciding which fields are indexed
-- deciding which relations are exposed
+- raw per-block `trace_rlp` blob storage plus compact trace headers
+- trace-owned directory and bitmap index artifacts
+- trace query execution and exact-match materialization
+- shared pagination and publication behavior
 
-Unlike transactions, traces do not have to deal with several wire-level
-transaction envelope variants.
+Remaining trace work is additive product/runtime expansion rather than basic
+family bring-up.
 
 ### Transfers
 
