@@ -4,7 +4,7 @@ use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::core::refs::BlockRef;
 use crate::core::state::{BlockIdentity, load_block_identity};
 use crate::error::{Error, Result};
-use crate::query::engine::resolve_request_block_bounds;
+use crate::query::bounds::resolve_request_block_bounds;
 use crate::query::normalized::effective_limit;
 use crate::query::runner::empty_page;
 use crate::store::publication::PublicationStore;
