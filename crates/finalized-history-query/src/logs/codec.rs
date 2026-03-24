@@ -146,7 +146,6 @@ fixed_codec! {
         version = 1;
         version_error = "unsupported stream bitmap meta version";
         fields {
-            block_num: u64,
             count: u32,
             min_local: u32,
             max_local: u32,

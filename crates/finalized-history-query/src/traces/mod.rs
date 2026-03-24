@@ -13,14 +13,18 @@ use crate::config::Config;
 use crate::core::ids::TraceId;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
+use crate::ingest::bitmap_pages::{self, StreamPageLayout};
 use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
-    compact_sealed_trace_stream_pages, persist_trace_artifacts, persist_trace_block_record,
-    persist_trace_dir_by_block, persist_trace_stream_fragments,
+    persist_trace_artifacts, persist_trace_block_record, persist_trace_dir_by_block,
+    persist_trace_stream_fragments,
 };
-use crate::traces::keys::TRACE_PRIMARY_DIR_LAYOUT;
+use crate::traces::keys::{
+    TRACE_LOCAL_ID_MASK, TRACE_PRIMARY_DIR_LAYOUT, TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+};
+use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
 pub use types::{Trace, TraceSequencingState, TraceStartupState};
@@ -78,11 +82,20 @@ impl TracesFamily {
             TRACE_PRIMARY_DIR_LAYOUT,
         )
         .await?;
-        compact_sealed_trace_stream_pages(
-            runtime.tables(),
+        bitmap_pages::compact_sealed_touched_stream_pages(
+            runtime.tables().trace_streams(),
             &touched_pages,
             from_next_trace_id,
             next_trace_id,
+            StreamPageLayout {
+                page_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+                local_id_mask: TRACE_LOCAL_ID_MASK,
+            },
+            |count, min_local, max_local| StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
         )
         .await?;
 

@@ -6,7 +6,7 @@ pub use artifact::{
     parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
 };
 pub use compaction::compact_newly_sealed_directory;
-pub use stream::{compact_stream_page, persist_stream_fragments};
+pub use stream::persist_stream_fragments;
 
 #[cfg(test)]
 mod tests {

@@ -6,9 +6,11 @@ use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
-use crate::logs::types::StreamBitmapMeta;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
+
+#[cfg(test)]
+use crate::logs::types::StreamBitmapMeta;
 
 pub fn collect_stream_appends(
     block: &FinalizedBlock,
@@ -66,6 +68,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
     .await
 }
 
+#[cfg(test)]
 pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     sealed_pages: &[(String, u32)],
@@ -75,27 +78,18 @@ pub async fn compact_sealed_stream_pages<M: MetaStore, B: BlobStore>(
     }
 
     for (stream_id, page_start) in sealed_pages {
-        compact_stream_page(tables, stream_id, *page_start).await?;
+        let _ = bitmap_pages::compact_stream_page(
+            tables.log_streams(),
+            stream_id,
+            *page_start,
+            |count, min_local, max_local| StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
+        )
+        .await?;
     }
 
     Ok(())
-}
-
-pub async fn compact_stream_page<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    stream_id: &str,
-    page_start: u32,
-) -> Result<bool> {
-    bitmap_pages::compact_stream_page(
-        tables.log_streams(),
-        stream_id,
-        page_start,
-        |count, min_local, max_local| StreamBitmapMeta {
-            block_num: 0,
-            count,
-            min_local,
-            max_local,
-        },
-    )
-    .await
 }

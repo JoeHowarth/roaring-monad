@@ -288,7 +288,6 @@ mod tests {
                 BITMAP_PAGE_META_TABLE,
                 &BitmapPageMetaSpec::key(stream, page_start),
                 StreamBitmapMeta {
-                    block_num: 0,
                     count: 1,
                     min_local: 11,
                     max_local: 11,
@@ -337,7 +336,6 @@ mod tests {
                     BITMAP_PAGE_META_TABLE,
                     &meta_key,
                     StreamBitmapMeta {
-                        block_num: 7,
                         count: 1,
                         min_local: 11,
                         max_local: 11,
@@ -422,7 +420,6 @@ mod tests {
                     BITMAP_PAGE_META_TABLE,
                     &meta_key,
                     StreamBitmapMeta {
-                        block_num: 7,
                         count: 1,
                         min_local: 11,
                         max_local: 11,

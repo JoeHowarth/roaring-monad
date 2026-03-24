@@ -28,7 +28,6 @@ pub struct BlockLogHeader {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct StreamBitmapMeta {
-    pub block_num: u64,
     pub count: u32,
     pub min_local: u32,
     pub max_local: u32,

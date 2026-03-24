@@ -3,14 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::core::ids::TraceId;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
-use crate::ingest::bitmap_pages::{self, StreamPageLayout};
+use crate::ingest::bitmap_pages;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::keys::{
-    TRACE_LOCAL_ID_MASK, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id, stream_id,
-};
+use crate::traces::keys::{TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id, stream_id};
 use crate::traces::table_specs;
-use crate::traces::types::StreamBitmapMeta;
 use crate::traces::view::BlockTraceIter;
 
 pub fn collect_trace_stream_appends(
@@ -68,31 +65,6 @@ pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
         block.block_num,
         grouped_values,
         TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-    )
-    .await
-}
-
-pub async fn compact_sealed_trace_stream_pages<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    touched_pages: &[(String, u32)],
-    from_next_trace_id: u64,
-    next_trace_id: u64,
-) -> Result<()> {
-    bitmap_pages::compact_sealed_touched_stream_pages(
-        tables.trace_streams(),
-        touched_pages,
-        from_next_trace_id,
-        next_trace_id,
-        StreamPageLayout {
-            page_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-            local_id_mask: TRACE_LOCAL_ID_MASK,
-        },
-        |count, min_local, max_local| StreamBitmapMeta {
-            block_num: 0,
-            count,
-            min_local,
-            max_local,
-        },
     )
     .await
 }

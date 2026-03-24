@@ -3,15 +3,17 @@ use crate::core::ids::LogId;
 use crate::core::state::derive_next_log_id;
 use crate::error::Result;
 use crate::family::FinalizedBlock;
+use crate::ingest::bitmap_pages;
 use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
 };
 use crate::logs::ingest::{
-    compact_newly_sealed_directory, compact_stream_page, parse_stream_shard, persist_log_artifacts,
+    compact_newly_sealed_directory, parse_stream_shard, persist_log_artifacts,
     persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
 };
 use crate::logs::types::LogSequencingState;
+use crate::logs::types::StreamBitmapMeta;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -88,8 +90,17 @@ impl LogsFamily {
         )
         .await?
         {
-            let _ = compact_stream_page(runtime.tables(), &page.stream_id, page.page_start_local)
-                .await?;
+            let _ = bitmap_pages::compact_stream_page(
+                runtime.tables().log_streams(),
+                &page.stream_id,
+                page.page_start_local,
+                |count, min_local, max_local| StreamBitmapMeta {
+                    count,
+                    min_local,
+                    max_local,
+                },
+            )
+            .await?;
             delete_open_bitmap_page(runtime.tables(), &page).await?;
         }
 
