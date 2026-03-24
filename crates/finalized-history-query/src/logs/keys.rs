@@ -24,14 +24,6 @@ pub(super) const LOG_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout = PrimaryDir
     missing_bucket_start_error: "missing directory bucket start block",
 };
 
-pub fn u64_be(v: u64) -> [u8; 8] {
-    v.to_be_bytes()
-}
-
-pub fn block_hash_index_suffix(hash: &[u8; 32]) -> Vec<u8> {
-    hash.to_vec()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

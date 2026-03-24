@@ -107,7 +107,7 @@ fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize
             return Err(Error::Decode("transaction trace list has trailing bytes"));
         }
         for frame in frames {
-            offsets.push(offset_in(trace_rlp, frame))?;
+            offsets.push(crate::core::offsets::byte_offset_in(trace_rlp, frame))?;
             trace_count = trace_count.saturating_add(1);
         }
     }
@@ -132,10 +132,6 @@ fn empty_trace_header() -> BlockTraceHeader {
         offsets: BucketedOffsets::new(),
         tx_starts: Vec::new(),
     }
-}
-
-fn offset_in(root: &[u8], slice: &[u8]) -> u64 {
-    crate::core::offsets::byte_offset_in(root, slice)
 }
 
 #[cfg(test)]

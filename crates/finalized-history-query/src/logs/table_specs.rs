@@ -2,7 +2,7 @@ use crate::core::ids::{LogId, LogShard};
 use crate::core::layout::{LOCAL_ID_BITS, MAX_LOCAL_ID};
 use crate::kernel::sharded_streams::sharded_stream_id;
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, u64_be};
+use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub struct BlockRecordSpec;
@@ -11,7 +11,7 @@ impl PointTableSpec for BlockRecordSpec {
 }
 impl BlockRecordSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        u64_be(block_num).to_vec()
+        block_num.to_be_bytes().to_vec()
     }
 }
 
@@ -21,7 +21,7 @@ impl PointTableSpec for BlockLogHeaderSpec {
 }
 impl BlockLogHeaderSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        u64_be(block_num).to_vec()
+        block_num.to_be_bytes().to_vec()
     }
 }
 
@@ -46,7 +46,7 @@ impl LogDirBucketSpec {
     }
 
     pub fn key(bucket_start_log_id: u64) -> Vec<u8> {
-        u64_be(bucket_start_log_id).to_vec()
+        bucket_start_log_id.to_be_bytes().to_vec()
     }
 }
 
@@ -61,7 +61,7 @@ impl LogDirSubBucketSpec {
     }
 
     pub fn key(sub_bucket_start_log_id: u64) -> Vec<u8> {
-        u64_be(sub_bucket_start_log_id).to_vec()
+        sub_bucket_start_log_id.to_be_bytes().to_vec()
     }
 }
 
@@ -71,11 +71,11 @@ impl ScannableTableSpec for LogDirByBlockSpec {
 }
 impl LogDirByBlockSpec {
     pub fn partition(sub_bucket_start_log_id: u64) -> Vec<u8> {
-        u64_be(sub_bucket_start_log_id).to_vec()
+        sub_bucket_start_log_id.to_be_bytes().to_vec()
     }
 
     pub fn clustering(block_num: u64) -> Vec<u8> {
-        u64_be(block_num).to_vec()
+        block_num.to_be_bytes().to_vec()
     }
 }
 
@@ -86,7 +86,7 @@ impl PointTableSpec for BitmapPageMetaSpec {
 impl BitmapPageMetaSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64_be(u64::from(page_start_local)));
+        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
         key
     }
 }
@@ -98,12 +98,12 @@ impl ScannableTableSpec for BitmapByBlockSpec {
 impl BitmapByBlockSpec {
     pub fn partition(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64_be(u64::from(page_start_local)));
+        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
         key
     }
 
     pub fn clustering(block_num: u64) -> Vec<u8> {
-        u64_be(block_num).to_vec()
+        block_num.to_be_bytes().to_vec()
     }
 }
 
@@ -113,11 +113,11 @@ impl ScannableTableSpec for OpenBitmapPageSpec {
 }
 impl OpenBitmapPageSpec {
     pub fn partition(shard: LogShard) -> Vec<u8> {
-        u64_be(shard.get()).to_vec()
+        shard.get().to_be_bytes().to_vec()
     }
 
     pub fn page_prefix(page_start_local: u32) -> Vec<u8> {
-        let mut key = u64_be(u64::from(page_start_local)).to_vec();
+        let mut key = u64::from(page_start_local).to_be_bytes().to_vec();
         key.push(b'/');
         key
     }
@@ -135,7 +135,7 @@ impl BlobTableSpec for BlockLogBlobSpec {
 }
 impl BlockLogBlobSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        u64_be(block_num).to_vec()
+        block_num.to_be_bytes().to_vec()
     }
 }
 
@@ -146,7 +146,7 @@ impl BlobTableSpec for BitmapPageBlobSpec {
 impl BitmapPageBlobSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64_be(u64::from(page_start_local)));
+        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
         key
     }
 }

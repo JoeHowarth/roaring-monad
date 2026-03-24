@@ -1,6 +1,7 @@
 use crate::core::clause::Clause;
 use crate::core::ids::{TraceLocalId, TraceShard};
 use crate::error::Result;
+use crate::kernel::sharded_streams::page_start_local;
 use crate::query::planner::{
     IndexedClause, PreparedClause, StreamSelector, clause_values, indexed_clause,
     prepare_shard_clauses as prepare_query_shard_clauses, single_selector_clause,
@@ -11,7 +12,6 @@ use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
 use crate::traces::keys::{
     MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id,
-    trace_stream_page_start_local,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,11 +110,11 @@ impl StreamIndexFamily for TracesStreamFamily {
     }
 
     fn first_page_start(local_from: u32) -> u32 {
-        trace_stream_page_start_local(local_from)
+        page_start_local(local_from, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
     }
 
     fn last_page_start(local_to: u32) -> u32 {
-        trace_stream_page_start_local(local_to)
+        page_start_local(local_to, TRACE_STREAM_PAGE_LOCAL_ID_SPAN)
     }
 
     fn next_page_start(page_start: u32) -> u32 {

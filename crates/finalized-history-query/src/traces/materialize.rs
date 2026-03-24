@@ -28,10 +28,6 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         }
     }
 
-    pub(crate) fn exact_match_trace(&self, item: &Trace, filter: &TraceFilter) -> bool {
-        filter.matches_trace(item)
-    }
-
     pub(crate) async fn load_trace_at(
         &mut self,
         block_num: u64,
@@ -102,7 +98,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     }
 
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
-        self.exact_match_trace(item, filter)
+        filter.matches_trace(item)
     }
 
     fn into_output(item: Self::Item) -> Self::Output {
