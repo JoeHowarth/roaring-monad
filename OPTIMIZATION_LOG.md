@@ -1389,3 +1389,107 @@ cargo bench -p finalized-history-query --bench query_end_to_end_bench -- query_e
 ### Methodology Learnings
 
 - For this benchmark size, a second local run can move by roughly 1% to 3% without any code changes, so small single-run deltas should not be over-interpreted.
+
+## 2026-03-23 19:18:50 PDT - Shrink pagination test fixtures to the minimal two-page case
+
+### Change Summary
+
+- Reduced the pagination fixture sizes in the in-memory blob/meta store tests and the filesystem store pagination test from `1_025` entries with a `1_024` page size to `PAGE_LIMIT = 4` and `ENTRY_COUNT = 5`.
+- Kept the same cursor-boundary assertion semantics while removing thousands of unnecessary seeded writes from the filesystem-backed test.
+
+### Hypothesis
+
+- The slow unit-test time is dominated by `store::fs::tests::list_prefix_pagination_does_not_repeat_cursor_entry`, because that test seeds more than three thousand fully synced filesystem writes on macOS just to force one page boundary.
+- A minimal two-page fixture should preserve coverage while cutting nearly all of the wall time.
+
+### Commands
+
+```bash
+python - <<'PY'
+import json, subprocess, os, time
+cmd = ['cargo','test','-p','finalized-history-query','--tests','--lib','--no-run','--message-format=json']
+proc = subprocess.Popen(cmd, cwd='/Users/jh/work/roaring-monad', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+executables = []
+for line in proc.stdout:
+    line = line.strip()
+    if not line.startswith('{'):
+        continue
+    msg = json.loads(line)
+    if msg.get('reason') == 'compiler-artifact':
+        target = msg.get('target', {})
+        profile = msg.get('profile', {})
+        exe = msg.get('executable')
+        if exe and profile.get('test'):
+            executables.append((target.get('name'), ','.join(target.get('kind', [])), exe))
+proc.wait()
+seen = set()
+uniq = []
+for item in executables:
+    if item[2] in seen:
+        continue
+    seen.add(item[2])
+    uniq.append(item)
+results = []
+for name, kind, exe in uniq:
+    start = time.time()
+    subprocess.run([exe, '--test-threads=1'], cwd='/Users/jh/work/roaring-monad', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    results.append((time.time() - start, name, kind, os.path.relpath(exe, '/Users/jh/work/roaring-monad')))
+for elapsed, name, kind, exe in sorted(results, reverse=True):
+    print(f'{elapsed:7.3f}s  {kind:14}  {name:35}  {exe}')
+print(f'TOTAL {sum(r[0] for r in results):.3f}s across {len(results)} binaries')
+PY
+
+python - <<'PY'
+import subprocess, time
+exe='/Users/jh/work/roaring-monad/target/debug/deps/finalized_history_query-02e0a7f4ff8fafb6'
+for name in [
+ 'store::fs::tests::create_if_absent_allows_only_one_creator',
+ 'store::fs::tests::compare_and_set_is_serialized',
+ 'store::fs::tests::list_prefix_pagination_does_not_repeat_cursor_entry',
+]:
+    start=time.time()
+    subprocess.run([exe,'--test-threads=1',name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    print(f'{time.time()-start:7.3f}s  {name}')
+PY
+
+/usr/bin/time -lp cargo test -p finalized-history-query --lib -- --test-threads=1
+/usr/bin/time -lp cargo test -p finalized-history-query --lib store::fs::tests::list_prefix_pagination_does_not_repeat_cursor_entry -- --test-threads=1
+```
+
+### Workload Shape
+
+- Rust unit-test binary for `finalized-history-query`
+- Focused follow-up on the `store::fs` unit tests
+- Local macOS filesystem-backed store with `sync_all()` on each test-seeded file write
+
+### Bottleneck Evidence
+
+- Before the change, the unit-test binary spent almost all of its time in `store::fs`:
+  - `store::fs` module slice: `19.239s`
+  - next-slowest module slice: `0.014s`
+- Before the change, individual `store::fs` tests were:
+  - `create_if_absent_allows_only_one_creator`: `0.020s`
+  - `compare_and_set_is_serialized`: `0.030s`
+  - `list_prefix_pagination_does_not_repeat_cursor_entry`: `19.214s`
+- The slow test seeded `1_025` scan entries and `1_025` blob entries; on the filesystem-backed store that expands into thousands of fully synced writes because scannable meta writes also write version files.
+
+### Before / After Metrics
+
+- `cargo test -p finalized-history-query --lib -- --test-threads=1`
+  - before: `real 19.58s`, test body finished in `19.44s`
+  - after: `real 1.97s`, test body finished in `0.21s`
+- `store::fs::tests::list_prefix_pagination_does_not_repeat_cursor_entry`
+  - before: `19.214s` via direct unit-test binary timing
+  - after: `real 0.23s`, test body finished in `0.09s`
+
+### Interpretation
+
+- The slow test was dominated by fixture construction, not the pagination logic under test.
+- Using a minimal two-page fixture preserves the cursor-repeat boundary condition and removes nearly all of the wall time.
+- The rest of the unit suite was already fast; this one filesystem test was the bottleneck.
+
+### Methodology Learnings
+
+- Timing the compiled test binaries directly is a good way to separate cargo setup overhead from actual test runtime.
+- Grouping the unit-test binary by module prefix quickly exposed `store::fs` as the outlier before drilling down to individual tests.
+- For pagination correctness tests, use the smallest fixture that crosses a page boundary; mirroring a large production-like page size can hide expensive setup costs without adding coverage.

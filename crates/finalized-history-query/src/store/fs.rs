@@ -631,6 +631,8 @@ mod tests {
     use std::sync::Arc;
 
     const TEST_BLOB_TABLE: BlobTableId = BlobTableId::new("test_blob");
+    const PAGE_LIMIT: usize = 4;
+    const ENTRY_COUNT: usize = PAGE_LIMIT + 1;
 
     fn unique_temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -734,7 +736,7 @@ mod tests {
         let partition = LogDirByBlockSpec::partition(0);
 
         block_on(async {
-            for index in 0..1_025u64 {
+            for index in 0..ENTRY_COUNT as u64 {
                 meta_store
                     .scan_put(
                         LOG_DIR_BY_BLOCK_TABLE,
@@ -761,7 +763,7 @@ mod tests {
                         &partition,
                         b"",
                         meta_cursor.take(),
-                        1_024,
+                        PAGE_LIMIT,
                     )
                     .await
                     .expect("list meta");
@@ -776,7 +778,12 @@ mod tests {
             let mut blob_seen = Vec::new();
             loop {
                 let page = blob_store
-                    .list_prefix(TEST_BLOB_TABLE, b"list-prefix/", blob_cursor.take(), 1_024)
+                    .list_prefix(
+                        TEST_BLOB_TABLE,
+                        b"list-prefix/",
+                        blob_cursor.take(),
+                        PAGE_LIMIT,
+                    )
                     .await
                     .expect("list blob prefix");
                 blob_seen.extend(page.keys.iter().cloned());
@@ -788,10 +795,10 @@ mod tests {
 
             let meta_unique = meta_seen.iter().collect::<std::collections::BTreeSet<_>>();
             let blob_unique = blob_seen.iter().collect::<std::collections::BTreeSet<_>>();
-            assert_eq!(meta_seen.len(), 1_025);
-            assert_eq!(meta_unique.len(), 1_025);
-            assert_eq!(blob_seen.len(), 1_025);
-            assert_eq!(blob_unique.len(), 1_025);
+            assert_eq!(meta_seen.len(), ENTRY_COUNT);
+            assert_eq!(meta_unique.len(), ENTRY_COUNT);
+            assert_eq!(blob_seen.len(), ENTRY_COUNT);
+            assert_eq!(blob_unique.len(), ENTRY_COUNT);
         });
 
         let _ = fs::remove_dir_all(root);

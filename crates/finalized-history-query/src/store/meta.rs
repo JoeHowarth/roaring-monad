@@ -237,11 +237,14 @@ mod tests {
     use crate::store::traits::MetaStore;
     use crate::store::traits::PutCond;
 
+    const PAGE_LIMIT: usize = 4;
+    const ENTRY_COUNT: usize = PAGE_LIMIT + 1;
+
     #[test]
     fn list_pagination_does_not_repeat_cursor_entry() {
         block_on(async {
             let store = InMemoryMetaStore::default();
-            for index in 0..1_025u64 {
+            for index in 0..ENTRY_COUNT as u64 {
                 store
                     .scan_put(
                         LOG_DIR_BY_BLOCK_TABLE,
@@ -263,7 +266,7 @@ mod tests {
                         &LogDirByBlockSpec::partition(0),
                         b"",
                         cursor.take(),
-                        1_024,
+                        PAGE_LIMIT,
                     )
                     .await
                     .expect("list");
@@ -275,8 +278,8 @@ mod tests {
             }
 
             let unique = seen.iter().collect::<std::collections::BTreeSet<_>>();
-            assert_eq!(seen.len(), 1_025);
-            assert_eq!(unique.len(), 1_025);
+            assert_eq!(seen.len(), ENTRY_COUNT);
+            assert_eq!(unique.len(), ENTRY_COUNT);
         });
     }
 }

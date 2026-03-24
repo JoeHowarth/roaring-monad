@@ -90,12 +90,14 @@ mod tests {
     use crate::store::traits::{BlobStore, BlobTableId};
 
     const TEST_TABLE: BlobTableId = BlobTableId::new("test");
+    const PAGE_LIMIT: usize = 4;
+    const ENTRY_COUNT: usize = PAGE_LIMIT + 1;
 
     #[test]
     fn list_prefix_pagination_does_not_repeat_cursor_entry() {
         block_on(async {
             let store = InMemoryBlobStore::default();
-            for index in 0..1_025u64 {
+            for index in 0..ENTRY_COUNT as u64 {
                 let key = format!("list-prefix/{index:04}").into_bytes();
                 store
                     .put_blob(TEST_TABLE, &key, Bytes::from_static(b"v"))
@@ -107,7 +109,7 @@ mod tests {
             let mut seen = Vec::new();
             loop {
                 let page = store
-                    .list_prefix(TEST_TABLE, b"list-prefix/", cursor.take(), 1_024)
+                    .list_prefix(TEST_TABLE, b"list-prefix/", cursor.take(), PAGE_LIMIT)
                     .await
                     .expect("list prefix");
                 seen.extend(page.keys.iter().cloned());
@@ -118,8 +120,8 @@ mod tests {
             }
 
             let unique = seen.iter().collect::<std::collections::BTreeSet<_>>();
-            assert_eq!(seen.len(), 1_025);
-            assert_eq!(unique.len(), 1_025);
+            assert_eq!(seen.len(), ENTRY_COUNT);
+            assert_eq!(unique.len(), ENTRY_COUNT);
         });
     }
 }
