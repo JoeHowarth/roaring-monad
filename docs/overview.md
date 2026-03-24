@@ -333,30 +333,33 @@ The crate intentionally does not implement:
 5. `src/kernel/point_table.rs` — shared cache-backed point-table reads/writes
 6. `src/kernel/scannable_table.rs` — shared scannable partition loading
 7. `src/kernel/blob_table.rs` — shared cache-backed blob access
-8. `src/tables.rs` — typed immutable-artifact table assembly and family-facing wrappers
+8. `src/tables.rs` — typed immutable-artifact table assembly, shared directory bundles, and family-facing wrappers
 9. `src/core/clause.rs` — shared clause vocabulary (`Any`, `One`, `Or`)
 10. `src/core/page.rs` — pagination/result vocabulary
 11. `src/core/refs.rs` — shared `BlockRef` type
 12. `src/core/state.rs` — shared state projections
 13. `src/core/range.rs` — block-range validation and clipping
-14. `src/query/runner.rs` — shared matched-item vocabulary, public candidate runner, and indexed query runner
-15. `src/core/layout.rs` — shared finalized-history ID layout constants
-16. `src/store/publication.rs` — shared publication/session state and storage key
-17. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
+14. `src/core/layout.rs` — shared finalized-history ID layout constants
+15. `src/core/ids.rs` — shared `FamilyId` core plus family ID wrappers and shared ranges
+16. `src/core/directory.rs` — shared directory bucket and fragment payloads
+17. `src/core/directory_resolver.rs` — shared primary-ID directory resolution
+18. `src/query/runner.rs` — shared matched-item vocabulary, public candidate runner, and indexed query runner
+19. `src/store/publication.rs` — shared publication/session state and storage key
+20. `src/streams/bitmap_blob.rs` — roaring bitmap blob format
 
 ### Pass 3: Logs family
 
-18. `src/logs/types.rs` — logs-owned schema and startup projections
-19. `src/logs/keys.rs` — logs-family key layout and ID constants
-20. `src/logs/table_specs.rs` — logs-family table specs and key helpers
-21. `src/logs/codec.rs` — log, directory bucket, block log header, and block record encodings
-22. `src/logs/log_ref.rs` — zero-copy log and bucket views
-23. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
-24. `src/logs/filter.rs` — log matching semantics, indexed clauses
-25. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
-26. `src/logs/materialize/` — `log_id -> block_num -> byte-range` resolution
-27. `src/logs/query/` — main query engine
-28. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
+21. `src/logs/types.rs` — logs-owned schema and startup projections
+22. `src/logs/keys.rs` — logs-family key layout and ID constants
+23. `src/logs/table_specs.rs` — logs-family table specs and key helpers
+24. `src/logs/codec.rs` — log, block log header, and block record encodings over shared directory payloads
+25. `src/logs/log_ref.rs` — zero-copy log views
+26. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
+27. `src/logs/filter.rs` — log matching semantics, indexed clauses
+28. `src/logs/state.rs` — `BlockRecord` helpers, log-window fields
+29. `src/logs/materialize/` — logs-specific hydration on top of shared ID resolution
+30. `src/logs/query/` — main query engine
+31. `src/logs/ingest/` — log-family ingest: artifacts, fragments, compaction
 
 ### Pass 4: Traces family
 

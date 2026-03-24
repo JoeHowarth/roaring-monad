@@ -14,16 +14,18 @@ cursor_block = block containing the last returned item
 effective_limit = min(request.limit, budget.max_results or request.limit)
 ```
 
-## LogId Type System
+## Family ID Type System
 
-A `LogId` is a 64-bit value split into two components:
+Each family ID (`LogId`, `TraceId`, and future peers like transaction IDs) wraps the same shared 64-bit `FamilyId` layout:
 
 | Component | Bits | Type | Range |
 |-----------|------|------|-------|
-| Shard | Upper 40 bits | `LogShard` | 0 to 2^40 - 1 |
-| Local ID | Lower 24 bits | `LogLocalId` | 0 to 16,777,215 |
+| Shard | Upper 40 bits | family shard newtype | 0 to 2^40 - 1 |
+| Local ID | Lower 24 bits | family local-id newtype | 0 to 16,777,215 |
 
-Composition: `global_log_id = (shard << 24) | local_id`
+Composition: `family_id = (shard << 24) | local_id`
+
+The shared `FamilyId` core owns shard/local extraction, composition, and generic range helpers. The public wrappers preserve family type safety at API boundaries.
 
 The shard determines which stream pages and bitmaps are relevant. The local ID is the position within a shard's bitmap space.
 
@@ -37,9 +39,10 @@ The execution stack is split into shared substrate plus family-owned boundaries:
 2. `query::window` resolves the first and last non-empty primary IDs inside the resolved block range.
 3. `query::planner` turns family clause vocabularies into shared logical stream selectors and shard-local prepared clauses.
 4. `query::bitmap` loads the prepared clause bitmaps from compacted pages or frontier fragments.
-5. `query::runner` executes the shard loop, intersects bitmaps, batches contiguous same-block candidates, materializes outputs, and assembles the page.
+5. `core::directory` and `core::directory_resolver` provide the shared directory payloads and `primary_id -> (block_num, local_ordinal)` resolution.
+6. `query::runner` executes the shard loop, intersects bitmaps, batches contiguous same-block candidates, materializes outputs, and assembles the page.
 
-Logs and traces still own request validation, indexed clause vocabularies, exact-match semantics, physical table lookups, and output materialization.
+Logs and traces still own request validation, indexed clause vocabularies, exact-match semantics, physical key derivation, and output materialization.
 
 ## Query Flow
 
@@ -168,9 +171,11 @@ Stream scans prefer compacted `stream_page_*` blobs and fall back to `stream_fra
 
 After bitmap intersection identifies candidate primary IDs, each family materializer resolves and hydrates them:
 
-1. **Directory lookup** — resolve `primary_id -> (block_num, local_ordinal)` using the family directory structures.
+1. **Directory lookup** — resolve `primary_id -> (block_num, local_ordinal)` through one shared three-tier algorithm over shared `PrimaryDirBucket` and `PrimaryDirFragment` payloads.
 2. **Coalesced runs** — contiguous same-block candidates are discovered and materialized in bounded prefixes so one block-range read or a tight trace loop can serve several matches.
 3. **Shared block refs** — `query::runner::cached_block_ref_with_fallback(...)` owns the cache + canonical block-ref lookup path, while each family only supplies its fallback parent-hash source when the canonical block-ref row is absent.
+
+The directory tables are exposed as family-owned bundles on `Tables` (`log_dir()` and `trace_dir()`), but both bundles use the same shared bucket/sub-bucket/fragment table types.
 
 Materialized items are checked against the family filter for exact match because the bitmap index remains a candidate filter rather than a full predicate evaluation.
 
