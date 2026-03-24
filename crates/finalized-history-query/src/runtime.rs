@@ -3,9 +3,9 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 pub struct Runtime<M: MetaStore, B: BlobStore> {
-    meta_store: M,
-    blob_store: B,
-    tables: Tables<M, B>,
+    pub meta_store: M,
+    pub blob_store: B,
+    pub tables: Tables<M, B>,
 }
 
 impl<M: MetaStore, B: BlobStore> Runtime<M, B> {
@@ -16,17 +16,5 @@ impl<M: MetaStore, B: BlobStore> Runtime<M, B> {
             blob_store,
             tables,
         }
-    }
-
-    pub fn meta_store(&self) -> &M {
-        &self.meta_store
-    }
-
-    pub fn blob_store(&self) -> &B {
-        &self.blob_store
-    }
-
-    pub fn tables(&self) -> &Tables<M, B> {
-        &self.tables
     }
 }

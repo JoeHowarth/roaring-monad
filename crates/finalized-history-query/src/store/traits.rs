@@ -78,16 +78,12 @@ pub struct Page {
 #[derive(Debug)]
 pub struct KvTable<M> {
     store: M,
-    table: TableId,
+    pub table: TableId,
 }
 
 impl<M> KvTable<M> {
     pub fn new(store: M, table: TableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> TableId {
-        self.table
     }
 }
 
@@ -117,16 +113,12 @@ impl<M: MetaStore> KvTable<M> {
 #[derive(Debug, Clone, Copy)]
 pub struct KvTableRef<'a, M> {
     store: &'a M,
-    table: TableId,
+    pub table: TableId,
 }
 
 impl<'a, M> KvTableRef<'a, M> {
     pub fn new(store: &'a M, table: TableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> TableId {
-        self.table
     }
 }
 
@@ -147,16 +139,12 @@ impl<M: MetaStore> KvTableRef<'_, M> {
 #[derive(Debug)]
 pub struct ScannableKvTable<M> {
     store: M,
-    table: ScannableTableId,
+    pub table: ScannableTableId,
 }
 
 impl<M> ScannableKvTable<M> {
     pub fn new(store: M, table: ScannableTableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> ScannableTableId {
-        self.table
     }
 }
 
@@ -208,22 +196,18 @@ impl<M: MetaStore> ScannableKvTable<M> {
 #[derive(Debug, Clone, Copy)]
 pub struct ScannableKvTableRef<'a, M> {
     store: &'a M,
-    table: ScannableTableId,
+    pub table: ScannableTableId,
 }
 
 #[derive(Debug)]
 pub struct BlobTable<B> {
     store: B,
-    table: BlobTableId,
+    pub table: BlobTableId,
 }
 
 impl<B> BlobTable<B> {
     pub fn new(store: B, table: BlobTableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> BlobTableId {
-        self.table
     }
 }
 
@@ -275,16 +259,12 @@ impl<B: BlobStore> BlobTable<B> {
 #[derive(Debug, Clone, Copy)]
 pub struct BlobTableRef<'a, B> {
     store: &'a B,
-    table: BlobTableId,
+    pub table: BlobTableId,
 }
 
 impl<'a, B> BlobTableRef<'a, B> {
     pub fn new(store: &'a B, table: BlobTableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> BlobTableId {
-        self.table
     }
 }
 
@@ -327,10 +307,6 @@ impl<B: BlobStore> BlobTableRef<'_, B> {
 impl<'a, M> ScannableKvTableRef<'a, M> {
     pub fn new(store: &'a M, table: ScannableTableId) -> Self {
         Self { store, table }
-    }
-
-    pub fn table(&self) -> ScannableTableId {
-        self.table
     }
 }
 

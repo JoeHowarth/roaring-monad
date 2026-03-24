@@ -61,7 +61,7 @@ where
 {
     let mut block_num = from_block;
     while block_num <= to_block {
-        let Some(record) = tables.block_records().get(block_num).await? else {
+        let Some(record) = tables.block_records.get(block_num).await? else {
             return Ok(None);
         };
         let Some(window) = select_window(&record) else {
@@ -89,7 +89,7 @@ where
 {
     let mut block_num = to_block;
     loop {
-        let Some(record) = tables.block_records().get(block_num).await? else {
+        let Some(record) = tables.block_records.get(block_num).await? else {
             return Ok(None);
         };
         let Some(window) = select_window(&record) else {

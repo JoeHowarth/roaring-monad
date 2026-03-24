@@ -57,7 +57,7 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
-        tables.log_streams(),
+        &tables.log_streams,
         block.block_num,
         grouped_values,
         STREAM_PAGE_LOCAL_ID_SPAN,

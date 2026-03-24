@@ -84,7 +84,7 @@ impl StreamIndexFamily for TracesStreamFamily {
     fn stream_tables<M: MetaStore, B: BlobStore>(
         tables: &Tables<M, B>,
     ) -> &crate::tables::StreamTables<M, B, Self::BitmapMeta> {
-        tables.trace_streams()
+        &tables.trace_streams
     }
 
     fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {

@@ -60,21 +60,21 @@ pub async fn mark_open_bitmap_page_if_absent<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    tables.open_bitmap_pages().mark_if_absent(page).await
+    tables.open_bitmap_pages.mark_if_absent(page).await
 }
 
 pub async fn delete_open_bitmap_page<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     page: &OpenBitmapPage,
 ) -> Result<()> {
-    tables.open_bitmap_pages().delete(page).await
+    tables.open_bitmap_pages.delete(page).await
 }
 
 pub async fn list_open_bitmap_pages_for_shard<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     shard: LogShard,
 ) -> Result<Vec<OpenBitmapPage>> {
-    tables.open_bitmap_pages().list_for_shard(shard).await
+    tables.open_bitmap_pages.list_for_shard(shard).await
 }
 
 pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore, B: BlobStore>(
@@ -83,7 +83,7 @@ pub async fn list_open_bitmap_pages_for_shard_page<M: MetaStore, B: BlobStore>(
     page_start_local: u32,
 ) -> Result<Vec<OpenBitmapPage>> {
     tables
-        .open_bitmap_pages()
+        .open_bitmap_pages
         .list_for_shard_page(shard, page_start_local)
         .await
 }

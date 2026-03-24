@@ -27,7 +27,7 @@ impl LogsFamily {
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
     ) -> Result<LogSequencingState> {
-        let next_log_id = derive_next_log_id(runtime.tables(), indexed_finalized_head).await?;
+        let next_log_id = derive_next_log_id(&runtime.tables, indexed_finalized_head).await?;
         Ok(LogSequencingState {
             next_log_id: LogId::new(next_log_id),
         })
@@ -45,21 +45,21 @@ impl LogsFamily {
 
         persist_log_artifacts(
             config,
-            runtime.tables(),
+            &runtime.tables,
             block.block_num,
             &block.logs,
             from_next_log_id,
         )
         .await?;
         persist_log_dir_by_block(
-            runtime.tables(),
+            &runtime.tables,
             block.block_num,
             from_next_log_id,
             block.logs.len() as u32,
         )
         .await?;
         let touched_pages =
-            persist_stream_fragments(runtime.tables(), block, from_next_log_id).await?;
+            persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;
         opened_during.extend(
             touched_pages
                 .into_iter()
@@ -77,11 +77,11 @@ impl LogsFamily {
             .iter()
             .filter(|page| !page.is_sealed_at(next_log_id))
         {
-            mark_open_bitmap_page_if_absent(runtime.tables(), page).await?;
+            mark_open_bitmap_page_if_absent(&runtime.tables, page).await?;
         }
 
         compact_newly_sealed_primary_directory(
-            runtime.tables().log_dir(),
+            &runtime.tables.log_dir,
             from_next_log_id,
             next_log_id,
             LOG_PRIMARY_DIR_LAYOUT,
@@ -89,7 +89,7 @@ impl LogsFamily {
         .await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
-            runtime.tables(),
+            &runtime.tables,
             &opened_during,
             from_next_log_id,
             next_log_id,
@@ -97,7 +97,7 @@ impl LogsFamily {
         .await?
         {
             let _ = bitmap_pages::compact_stream_page(
-                runtime.tables().log_streams(),
+                &runtime.tables.log_streams,
                 &page.stream_id,
                 page.page_start_local,
                 |count, min_local, max_local| StreamBitmapMeta {
@@ -107,7 +107,7 @@ impl LogsFamily {
                 },
             )
             .await?;
-            delete_open_bitmap_page(runtime.tables(), &page).await?;
+            delete_open_bitmap_page(&runtime.tables, &page).await?;
         }
 
         state.next_log_id = LogId::new(next_log_id);

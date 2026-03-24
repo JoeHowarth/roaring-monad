@@ -89,7 +89,7 @@ impl StreamIndexFamily for LogsStreamFamily {
     fn stream_tables<M: MetaStore, B: BlobStore>(
         tables: &Tables<M, B>,
     ) -> &crate::tables::StreamTables<M, B, Self::BitmapMeta> {
-        tables.log_streams()
+        &tables.log_streams
     }
 
     fn stream_id(selector: &StreamSelector, shard: Self::Shard) -> String {

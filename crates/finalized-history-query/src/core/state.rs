@@ -144,7 +144,7 @@ pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
     block_num: u64,
 ) -> Result<Option<BlockIdentity>> {
     tables
-        .block_records()
+        .block_records
         .get(block_num)
         .await
         .map(|opt| opt.map(|block_record| BlockIdentity::from((block_num, &block_record))))
@@ -158,7 +158,7 @@ pub async fn derive_next_log_id<M: MetaStore, B: BlobStore>(
         return Ok(0);
     }
 
-    let Some(block_record) = tables.block_records().get(indexed_finalized_head).await? else {
+    let Some(block_record) = tables.block_records.get(indexed_finalized_head).await? else {
         return Err(Error::NotFound);
     };
     let Some(window) = block_record.logs else {
@@ -173,5 +173,5 @@ pub async fn load_block_num_by_hash<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_hash: &[u8; 32],
 ) -> Result<Option<u64>> {
-    tables.block_hash_index().get(block_hash).await
+    tables.block_hash_index.get(block_hash).await
 }

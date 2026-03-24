@@ -380,12 +380,12 @@ mod tests {
                 },
             );
             let first = tables
-                .point_log_payloads()
+                .point_log_payloads
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("first contiguous load");
             let second = tables
-                .point_log_payloads()
+                .point_log_payloads
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("second contiguous load");
@@ -438,7 +438,7 @@ mod tests {
 
             let tables = Tables::without_cache(meta, blob);
             let fragments = tables
-                .log_dir()
+                .log_dir
                 .load_sub_bucket_fragments(sub_bucket_start)
                 .await
                 .expect("load directory fragments");

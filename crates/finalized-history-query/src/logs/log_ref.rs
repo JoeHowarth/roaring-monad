@@ -205,7 +205,7 @@ impl std::fmt::Debug for BlockLogHeaderRef {
 #[derive(Clone)]
 pub struct DirBucketRef {
     buf: Bytes,
-    start_block: u64,
+    pub start_block: u64,
     count: u32,
 }
 
@@ -239,10 +239,6 @@ impl DirBucketRef {
             start_block,
             count,
         })
-    }
-
-    pub fn start_block(&self) -> u64 {
-        self.start_block
     }
 
     pub fn count(&self) -> usize {

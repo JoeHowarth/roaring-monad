@@ -108,7 +108,7 @@ mod tests {
                 .await
                 .expect("persist fragments");
             compact_sealed_primary_directory(
-                tables.log_dir(),
+                &tables.log_dir,
                 first_log_id,
                 count,
                 first_log_id + count as u64,
@@ -195,7 +195,7 @@ mod tests {
                 .expect("persist stream fragments");
             for (stream_id, page_start) in &touched_pages {
                 let _ = bitmap_pages::compact_stream_page(
-                    tables.log_streams(),
+                    &tables.log_streams,
                     stream_id,
                     *page_start,
                     |count, min_local, max_local| StreamBitmapMeta {
@@ -275,7 +275,7 @@ mod tests {
                 .await
                 .expect("persist fragments");
             compact_sealed_primary_directory(
-                tables.log_dir(),
+                &tables.log_dir,
                 first_log_id,
                 count,
                 first_log_id + count as u64,

@@ -23,7 +23,7 @@ pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
         Bytes::copy_from_slice(trace_rlp)
     };
     tables
-        .block_trace_blobs()
+        .block_trace_blobs
         .put_block(block_num, block_blob, &header)
         .await?;
     Ok(trace_count)
@@ -36,7 +36,7 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
     count: u32,
 ) -> Result<()> {
     tables
-        .trace_dir()
+        .trace_dir
         .persist_block_fragment(
             block_num,
             first_trace_id,

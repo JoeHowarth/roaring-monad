@@ -79,7 +79,7 @@ fn service_startup_uses_configured_lease_blocks() {
         );
 
         svc.startup().await.expect("startup");
-        let publication_state = MetaPublicationStore::new(svc.meta_store().clone())
+        let publication_state = MetaPublicationStore::new(svc.runtime.meta_store.clone())
             .load()
             .await
             .expect("load publication state")
@@ -244,7 +244,8 @@ fn startup_retry_reuses_the_same_session_after_ownership_is_acquired() {
             .await
             .expect("startup should ignore unpublished suffix artifacts");
         assert!(
-            svc.meta_store()
+            svc.runtime
+                .meta_store
                 .get(BLOCK_RECORD_TABLE, &BlockRecordSpec::key(1))
                 .await
                 .expect("read block meta after startup")
@@ -272,7 +273,7 @@ fn service_can_publish_a_contiguous_batch() {
             svc.ingest_finalized_blocks(blocks)
                 .await
                 .expect("batched ingest"),
-            MetaPublicationStore::new(svc.meta_store().clone())
+            MetaPublicationStore::new(svc.runtime.meta_store.clone())
                 .load_finalized_head_state()
                 .await
                 .expect("head state"),

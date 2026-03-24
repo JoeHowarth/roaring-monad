@@ -532,7 +532,7 @@ mod tests {
 
             let tables = Tables::without_cache(meta, blob);
             let fragments = tables
-                .log_streams()
+                .log_streams
                 .load_page_fragments(stream, page_start)
                 .await
                 .expect("load page fragments");

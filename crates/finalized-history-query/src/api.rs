@@ -61,7 +61,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     publication_store: MetaPublicationStore<M>,
     logs_query: LogsQueryEngine,
     traces_query: TracesQueryEngine,
-    runtime: Runtime<M, B>,
+    pub runtime: Runtime<M, B>,
     allows_writes: bool,
 }
 
@@ -76,7 +76,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         let logs_query = LogsQueryEngine::from_config(&config);
         let traces_query = TracesQueryEngine::from_config(&config);
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
-        let publication_store = MetaPublicationStore::new(runtime.meta_store().clone());
+        let publication_store = MetaPublicationStore::new(runtime.meta_store.clone());
         let ingest = IngestEngine::new(config, authority, Families::default());
         Self {
             ingest,
@@ -89,19 +89,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
-        self.runtime.tables().metrics_snapshot()
-    }
-
-    pub fn meta_store(&self) -> &M {
-        self.runtime.meta_store()
-    }
-
-    pub fn blob_store(&self) -> &B {
-        self.runtime.blob_store()
-    }
-
-    pub(crate) fn runtime(&self) -> &Runtime<M, B> {
-        &self.runtime
+        self.runtime.tables.metrics_snapshot()
     }
 
     pub async fn query_logs(
@@ -111,7 +99,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     ) -> Result<crate::core::page::QueryPage<Log>> {
         self.logs_query
             .query_logs(
-                self.runtime.tables(),
+                &self.runtime.tables,
                 &self.publication_store,
                 request,
                 budget,
@@ -126,7 +114,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     ) -> Result<crate::core::page::QueryPage<Trace>> {
         self.traces_query
             .query_traces(
-                self.runtime.tables(),
+                &self.runtime.tables,
                 &self.publication_store,
                 request,
                 budget,
@@ -148,7 +136,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     pub async fn startup(&self) -> Result<StartupPlan> {
         if !self.allows_writes {
             return startup_plan(
-                self.runtime(),
+                &self.runtime,
                 &self.publication_store,
                 &self.ingest.families,
                 0,
@@ -175,7 +163,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         }
 
         self.ingest
-            .ingest_finalized_blocks(self.runtime(), &blocks)
+            .ingest_finalized_blocks(&self.runtime, &blocks)
             .await
     }
 
@@ -192,7 +180,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     async fn recover_and_plan(&self, indexed_finalized_head: u64) -> Result<StartupPlan> {
         startup_plan_from_head(
-            self.runtime(),
+            &self.runtime,
             &self.ingest.families,
             indexed_finalized_head,
             0,

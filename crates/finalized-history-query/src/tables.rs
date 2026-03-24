@@ -128,18 +128,18 @@ impl<M: MetaStore> PrimaryDirTables<M> {
 }
 
 pub struct Tables<M: MetaStore, B: BlobStore> {
-    block_hash_index: BlockHashIndexTable<M>,
-    block_records: BlockRecordTable<M>,
-    block_log_headers: BlockLogHeaderTable<M>,
-    block_trace_headers: BlockTraceHeaderTable<M>,
-    log_dir: PrimaryDirTables<M>,
-    trace_dir: PrimaryDirTables<M>,
-    log_streams: StreamTables<M, B, StreamBitmapMeta>,
-    trace_streams: StreamTables<M, B, TraceStreamBitmapMeta>,
-    point_log_payloads: PointLogPayloadTable<M, B>,
-    block_trace_blobs: BlockTraceBlobTable<M, B>,
-    open_bitmap_pages: OpenBitmapPageTable<M>,
-    trace_payloads: TracePayloadTable<M, B>,
+    pub block_hash_index: BlockHashIndexTable<M>,
+    pub block_records: BlockRecordTable<M>,
+    pub block_log_headers: BlockLogHeaderTable<M>,
+    pub block_trace_headers: BlockTraceHeaderTable<M>,
+    pub log_dir: PrimaryDirTables<M>,
+    pub trace_dir: PrimaryDirTables<M>,
+    pub log_streams: StreamTables<M, B, StreamBitmapMeta>,
+    pub trace_streams: StreamTables<M, B, TraceStreamBitmapMeta>,
+    pub point_log_payloads: PointLogPayloadTable<M, B>,
+    pub block_trace_blobs: BlockTraceBlobTable<M, B>,
+    pub open_bitmap_pages: OpenBitmapPageTable<M>,
+    pub trace_payloads: TracePayloadTable<M, B>,
 }
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
@@ -255,54 +255,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
             },
         }
-    }
-
-    pub fn block_records(&self) -> &BlockRecordTable<M> {
-        &self.block_records
-    }
-
-    pub fn block_hash_index(&self) -> &BlockHashIndexTable<M> {
-        &self.block_hash_index
-    }
-
-    pub fn block_log_headers(&self) -> &BlockLogHeaderTable<M> {
-        &self.block_log_headers
-    }
-
-    pub fn block_trace_headers(&self) -> &BlockTraceHeaderTable<M> {
-        &self.block_trace_headers
-    }
-
-    pub fn log_dir(&self) -> &PrimaryDirTables<M> {
-        &self.log_dir
-    }
-
-    pub fn trace_dir(&self) -> &PrimaryDirTables<M> {
-        &self.trace_dir
-    }
-
-    pub fn point_log_payloads(&self) -> &PointLogPayloadTable<M, B> {
-        &self.point_log_payloads
-    }
-
-    pub fn log_streams(&self) -> &StreamTables<M, B, StreamBitmapMeta> {
-        &self.log_streams
-    }
-
-    pub fn trace_streams(&self) -> &StreamTables<M, B, TraceStreamBitmapMeta> {
-        &self.trace_streams
-    }
-
-    pub fn block_trace_blobs(&self) -> &BlockTraceBlobTable<M, B> {
-        &self.block_trace_blobs
-    }
-
-    pub fn open_bitmap_pages(&self) -> &OpenBitmapPageTable<M> {
-        &self.open_bitmap_pages
-    }
-
-    pub fn trace_payloads(&self) -> &TracePayloadTable<M, B> {
-        &self.trace_payloads
     }
 
     pub fn metrics_snapshot(&self) -> BytesCacheMetrics {
@@ -606,7 +558,7 @@ impl<B: BlobStore> StreamPageBlobTable<B> {
     }
 
     fn metrics(&self) -> TableCacheMetrics {
-        self.inner.cache().metrics_snapshot()
+        self.inner.cache.metrics_snapshot()
     }
 }
 

@@ -13,7 +13,7 @@ pub async fn derive_next_trace_id<M: MetaStore, B: BlobStore>(
         return Ok(0);
     }
 
-    let Some(block_record) = tables.block_records().get(indexed_finalized_head).await? else {
+    let Some(block_record) = tables.block_records.get(indexed_finalized_head).await? else {
         return Err(Error::NotFound);
     };
     let Some(window) = block_record.traces else {

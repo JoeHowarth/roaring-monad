@@ -7,7 +7,7 @@ const CALL_FRAME_FIELD_COUNT: usize = 11;
 
 #[derive(Debug, Clone)]
 pub struct CallFrameView<'a> {
-    frame_bytes: &'a [u8],
+    pub frame_bytes: &'a [u8],
     fields: Vec<&'a [u8]>,
 }
 
@@ -29,10 +29,6 @@ impl<'a> CallFrameView<'a> {
             frame_bytes,
             fields,
         })
-    }
-
-    pub fn frame_bytes(&self) -> &'a [u8] {
-        self.frame_bytes
     }
 
     pub fn typ(&self) -> Result<u8> {

@@ -350,7 +350,7 @@ pub async fn cached_parent_block_ref<M: MetaStore, B: BlobStore>(
 ) -> Result<BlockRef> {
     cached_block_ref_with_fallback(cache, tables, block_num, block_hash, async {
         Ok(tables
-            .block_records()
+            .block_records
             .get(block_num)
             .await?
             .map(|record| record.parent_hash))

@@ -6,16 +6,12 @@ use crate::store::traits::{BlobStore, BlobTable};
 
 pub struct CachedBlobTable<B: BlobStore> {
     blob_table: BlobTable<B>,
-    cache: HashMapTableBytesCache,
+    pub cache: HashMapTableBytesCache,
 }
 
 impl<B: BlobStore> CachedBlobTable<B> {
     pub fn new(blob_table: BlobTable<B>, cache: HashMapTableBytesCache) -> Self {
         Self { blob_table, cache }
-    }
-
-    pub fn cache(&self) -> &HashMapTableBytesCache {
-        &self.cache
     }
 
     pub async fn get_by_key(&self, key: &[u8]) -> Result<Option<Bytes>> {

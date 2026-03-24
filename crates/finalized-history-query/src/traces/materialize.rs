@@ -33,7 +33,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, TraceId>(
-            self.tables.trace_dir(),
+            &self.tables.trace_dir,
             &mut self.caches.directory_fragment_cache,
             id,
             TraceDirBucketSpec::bucket_start,
@@ -54,7 +54,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
         for (id, location) in run.iter().copied() {
             let Some(item) = self
                 .tables
-                .trace_payloads()
+                .trace_payloads
                 .load_trace_at(location.block_num, location.local_ordinal)
                 .await?
             else {

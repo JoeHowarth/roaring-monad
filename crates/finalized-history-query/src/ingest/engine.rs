@@ -111,7 +111,7 @@ where
     let expected_parent = if indexed_finalized_head == 0 {
         [0u8; 32]
     } else {
-        load_block_identity(runtime.tables(), indexed_finalized_head)
+        load_block_identity(&runtime.tables, indexed_finalized_head)
             .await?
             .ok_or(Error::NotFound)?
             .hash

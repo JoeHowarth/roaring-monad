@@ -18,7 +18,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let (block_blob, header) = encode_block_log_blob(logs)?;
     tables
-        .point_log_payloads()
+        .point_log_payloads
         .put_block(block_num, block_blob, &header)
         .await
 }
@@ -30,7 +30,7 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
     count: u32,
 ) -> Result<()> {
     tables
-        .log_dir()
+        .log_dir
         .persist_block_fragment(
             block_num,
             first_log_id,

@@ -39,7 +39,7 @@ impl TracesFamily {
         let next_trace_id = if indexed_finalized_head == 0 {
             0
         } else {
-            state::derive_next_trace_id(runtime.tables(), indexed_finalized_head).await?
+            state::derive_next_trace_id(&runtime.tables, indexed_finalized_head).await?
         };
         Ok(TraceSequencingState {
             next_trace_id: TraceId::new(next_trace_id),
@@ -55,12 +55,12 @@ impl TracesFamily {
     ) -> Result<usize> {
         let from_next_trace_id = state.next_trace_id.get();
         let trace_count =
-            persist_trace_artifacts(runtime.tables(), block.block_num, &block.trace_rlp).await?;
+            persist_trace_artifacts(&runtime.tables, block.block_num, &block.trace_rlp).await?;
         let trace_count_u32 =
             u32::try_from(trace_count).map_err(|_| Error::Decode("trace count overflow"))?;
 
         persist_trace_dir_by_block(
-            runtime.tables(),
+            &runtime.tables,
             block.block_num,
             from_next_trace_id,
             trace_count_u32,
@@ -70,16 +70,16 @@ impl TracesFamily {
         let next_trace_id = from_next_trace_id + trace_count as u64;
 
         let touched_pages =
-            persist_trace_stream_fragments(runtime.tables(), block, from_next_trace_id).await?;
+            persist_trace_stream_fragments(&runtime.tables, block, from_next_trace_id).await?;
         compact_newly_sealed_primary_directory(
-            runtime.tables().trace_dir(),
+            &runtime.tables.trace_dir,
             from_next_trace_id,
             next_trace_id,
             TRACE_PRIMARY_DIR_LAYOUT,
         )
         .await?;
         bitmap_pages::compact_sealed_touched_stream_pages(
-            runtime.tables().trace_streams(),
+            &runtime.tables.trace_streams,
             &touched_pages,
             from_next_trace_id,
             next_trace_id,

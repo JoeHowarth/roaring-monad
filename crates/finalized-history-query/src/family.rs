@@ -90,8 +90,8 @@ impl Families {
         let first_trace_id = states.traces.next_trace_id.get();
 
         runtime
-            .tables()
-            .block_hash_index()
+            .tables
+            .block_hash_index
             .put(&block.block_hash, block.block_num)
             .await?;
 
@@ -111,8 +111,8 @@ impl Families {
         };
 
         runtime
-            .tables()
-            .block_records()
+            .tables
+            .block_records
             .put(
                 block.block_num,
                 &BlockRecord {
