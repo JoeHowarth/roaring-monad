@@ -174,7 +174,7 @@ async fn run_queries<A: WriteAuthority, M: MetaStore, B: BlobStore>(
                     from_block_hash: None,
                     to_block_hash: None,
                     order: QueryOrder::Ascending,
-                    resume_log_id: None,
+                    resume_id: None,
                     limit: max_results,
                     filter,
                 },

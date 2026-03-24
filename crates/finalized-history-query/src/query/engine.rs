@@ -30,6 +30,42 @@ pub(crate) trait IndexedQueryRequest {
     fn filter(&self) -> &Self::Filter;
 }
 
+impl<F: IndexedFilter> IndexedQueryRequest for crate::api::IndexedQueryRequest<F> {
+    type Filter = F;
+
+    fn start_block_num(&self) -> Option<u64> {
+        self.from_block
+    }
+
+    fn end_block_num(&self) -> Option<u64> {
+        self.to_block
+    }
+
+    fn start_block_hash(&self) -> Option<[u8; 32]> {
+        self.from_block_hash
+    }
+
+    fn end_block_hash(&self) -> Option<[u8; 32]> {
+        self.to_block_hash
+    }
+
+    fn order(&self) -> QueryOrder {
+        self.order
+    }
+
+    fn resume_id(&self) -> Option<u64> {
+        self.resume_id
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn filter(&self) -> &Self::Filter {
+        &self.filter
+    }
+}
+
 pub(crate) struct QueryLimits {
     pub budget: ExecutionBudget,
     pub max_or_terms: usize,

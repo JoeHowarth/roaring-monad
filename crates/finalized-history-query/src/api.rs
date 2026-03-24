@@ -20,28 +20,19 @@ use crate::traces::query::TracesQueryEngine;
 use crate::traces::types::Trace;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryLogsRequest {
+pub struct IndexedQueryRequest<F> {
     pub from_block: Option<u64>,
     pub to_block: Option<u64>,
     pub from_block_hash: Option<[u8; 32]>,
     pub to_block_hash: Option<[u8; 32]>,
     pub order: QueryOrder,
-    pub resume_log_id: Option<u64>,
+    pub resume_id: Option<u64>,
     pub limit: usize,
-    pub filter: LogFilter,
+    pub filter: F,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryTracesRequest {
-    pub from_block: Option<u64>,
-    pub to_block: Option<u64>,
-    pub from_block_hash: Option<[u8; 32]>,
-    pub to_block_hash: Option<[u8; 32]>,
-    pub order: QueryOrder,
-    pub resume_trace_id: Option<u64>,
-    pub limit: usize,
-    pub filter: TraceFilter,
-}
+pub type QueryLogsRequest = IndexedQueryRequest<LogFilter>;
+pub type QueryTracesRequest = IndexedQueryRequest<TraceFilter>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExecutionBudget {

@@ -1209,7 +1209,7 @@ fn trace_to_request(trace: &TraceEntry, max_results: usize) -> Result<QueryLogsR
         from_block: trace.from_block,
         to_block: trace.to_block,
         order: QueryOrder::Ascending,
-        resume_log_id: None,
+        resume_id: None,
         limit: max_results,
         filter: LogFilter {
             address: decode_clause20(&trace.address_or)?,

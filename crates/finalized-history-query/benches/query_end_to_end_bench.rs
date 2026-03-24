@@ -51,15 +51,15 @@ fn bench_pagination_heavy_queries(c: &mut Criterion) {
     group.bench_function("resume_token_walk", |b| {
         let filter = pagination_filter();
         b.iter(|| {
-            let mut resume_log_id = None;
+            let mut resume_id = None;
             let mut pages = 0usize;
             loop {
-                let page = query_page(&svc, 1, 600, black_box(filter.clone()), 256, resume_log_id);
+                let page = query_page(&svc, 1, 600, black_box(filter.clone()), 256, resume_id);
                 pages = pages.saturating_add(1);
                 if !page.meta.has_more || pages >= 8 {
                     break black_box(page.items.len());
                 }
-                resume_log_id = page.meta.next_resume_id;
+                resume_id = page.meta.next_resume_id;
             }
         })
     });

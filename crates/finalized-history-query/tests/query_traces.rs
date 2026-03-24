@@ -325,7 +325,7 @@ fn query_traces_rejects_is_top_level_only_filter() {
                     from_block_hash: None,
                     to_block_hash: None,
                     order: finalized_history_query::QueryOrder::Ascending,
-                    resume_trace_id: None,
+                    resume_id: None,
                     limit: 10,
                     filter: TraceFilter {
                         is_top_level: Some(true),
@@ -377,7 +377,7 @@ fn query_traces_resolves_block_hash_bounds() {
                     from_block_hash: Some([1; 32]),
                     to_block_hash: Some([1; 32]),
                     order: finalized_history_query::QueryOrder::Ascending,
-                    resume_trace_id: None,
+                    resume_id: None,
                     limit: 10,
                     filter: TraceFilter {
                         from: Some(Clause::One([5; 20])),

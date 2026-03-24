@@ -98,7 +98,7 @@ async fn scylla_minio_roundtrip_query() {
                 from_block_hash: None,
                 to_block_hash: None,
                 order: QueryOrder::Ascending,
-                resume_log_id: None,
+                resume_id: None,
                 limit: 100,
                 filter,
             },

@@ -468,7 +468,7 @@ async fn query_range(
                 from_block_hash: None,
                 to_block_hash: None,
                 order: QueryOrder::Ascending,
-                resume_log_id: None,
+                resume_id: None,
                 limit: usize::MAX,
                 filter: indexed_address_or_filter(&[1, 2, 3, 7, 8]),
             },
@@ -657,7 +657,7 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
                     from_block_hash: None,
                     to_block_hash: None,
                     order: QueryOrder::Ascending,
-                    resume_trace_id: None,
+                    resume_id: None,
                     limit: 10,
                     filter: finalized_history_query::TraceFilter {
                         from: Some(Clause::One([7; 20])),

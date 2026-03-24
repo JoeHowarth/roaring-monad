@@ -108,7 +108,7 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
                 from_block_hash: None,
                 to_block_hash: None,
                 order: QueryOrder::Ascending,
-                resume_log_id: None,
+                resume_id: None,
                 limit: usize::MAX,
                 filter: LogFilter {
                     address: None,
@@ -132,7 +132,7 @@ async fn minio_outage_surfaces_backend_failures_without_latching_service_state()
                 from_block_hash: None,
                 to_block_hash: None,
                 order: QueryOrder::Ascending,
-                resume_log_id: None,
+                resume_id: None,
                 limit: usize::MAX,
                 filter: LogFilter {
                     address: None,

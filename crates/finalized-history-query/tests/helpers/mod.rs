@@ -121,7 +121,7 @@ pub async fn query_page<A, M, B>(
     to_block: u64,
     filter: LogFilter,
     limit: usize,
-    resume_log_id: Option<u64>,
+    resume_id: Option<u64>,
 ) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Log>>
 where
     A: WriteAuthority,
@@ -135,7 +135,7 @@ where
             from_block_hash: None,
             to_block_hash: None,
             order: QueryOrder::Ascending,
-            resume_log_id,
+            resume_id,
             limit,
             filter,
         },
@@ -150,7 +150,7 @@ pub async fn query_trace_page<A, M, B>(
     to_block: u64,
     filter: TraceFilter,
     limit: usize,
-    resume_trace_id: Option<u64>,
+    resume_id: Option<u64>,
 ) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Trace>>
 where
     A: WriteAuthority,
@@ -164,7 +164,7 @@ where
             from_block_hash: None,
             to_block_hash: None,
             order: QueryOrder::Ascending,
-            resume_trace_id,
+            resume_id,
             limit,
             filter,
         },

@@ -340,7 +340,7 @@ pub fn query_page<A, M, B>(
     to_block: u64,
     filter: LogFilter,
     limit: usize,
-    resume_log_id: Option<u64>,
+    resume_id: Option<u64>,
 ) -> QueryPage<Log>
 where
     A: WriteAuthority,
@@ -354,7 +354,7 @@ where
             from_block_hash: None,
             to_block_hash: None,
             order: QueryOrder::Ascending,
-            resume_log_id,
+            resume_id,
             limit,
             filter,
         },
