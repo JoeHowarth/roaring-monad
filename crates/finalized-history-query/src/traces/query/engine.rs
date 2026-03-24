@@ -1,7 +1,7 @@
 use super::clause::{
-    ClauseKind, IndexedClauseSpec, build_clause_specs, is_too_broad, prepare_shard_clauses,
+    ClauseKind, IndexedClauseSpec, TracesStreamFamily, build_clause_specs, is_too_broad,
+    prepare_shard_clauses,
 };
-use super::stream_bitmap::load_prepared_clause_bitmap;
 use crate::api::{ExecutionBudget, QueryTracesRequest};
 use crate::config::Config;
 use crate::core::ids::{TraceId, TraceLocalId, TraceShard, compose_trace_id};
@@ -9,6 +9,7 @@ use crate::core::page::QueryPage;
 use crate::core::range::resolve_block_range;
 use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
+use crate::query::bitmap::load_prepared_clause_bitmap;
 use crate::query::normalized::{effective_limit, normalize_query};
 use crate::query::planner::PreparedClause;
 use crate::query::runner::{QueryDescriptor, build_page, empty_page, execute_indexed_query};
@@ -197,6 +198,12 @@ impl QueryDescriptor for TracesQueryDescriptor {
         local_from: u32,
         local_to: u32,
     ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap(tables, prepared_clause, local_from, local_to).await
+        load_prepared_clause_bitmap::<M, B, _, TracesStreamFamily>(
+            tables,
+            prepared_clause,
+            local_from,
+            local_to,
+        )
+        .await
     }
 }

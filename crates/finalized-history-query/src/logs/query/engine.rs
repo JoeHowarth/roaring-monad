@@ -1,7 +1,7 @@
 use super::clause::{
-    ClauseKind, IndexedClauseSpec, build_clause_specs, is_too_broad, prepare_shard_clauses,
+    ClauseKind, IndexedClauseSpec, LogsStreamFamily, build_clause_specs, is_too_broad,
+    prepare_shard_clauses,
 };
-use super::stream_bitmap::load_prepared_clause_bitmap;
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
 use crate::core::ids::{LogId, LogLocalId, LogShard};
@@ -13,6 +13,7 @@ use crate::logs::materialize::LogMaterializer;
 use crate::logs::state::resolve_log_window;
 use crate::logs::table_specs;
 use crate::logs::types::Log;
+use crate::query::bitmap::load_prepared_clause_bitmap;
 use crate::query::normalized::{effective_limit, normalize_query};
 use crate::query::planner::PreparedClause;
 use crate::query::runner::{QueryDescriptor, build_page, empty_page, execute_indexed_query};
@@ -167,6 +168,12 @@ impl QueryDescriptor for LogsQueryDescriptor {
         local_from: u32,
         local_to: u32,
     ) -> Result<roaring::RoaringBitmap> {
-        load_prepared_clause_bitmap(tables, prepared_clause, local_from, local_to).await
+        load_prepared_clause_bitmap::<M, B, _, LogsStreamFamily>(
+            tables,
+            prepared_clause,
+            local_from,
+            local_to,
+        )
+        .await
     }
 }
