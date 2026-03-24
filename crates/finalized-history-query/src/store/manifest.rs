@@ -1,10 +1,10 @@
 use crate::core::state::BLOCK_RECORD_TABLE;
+use crate::kernel::table_specs::BlobTableSpec;
 use crate::logs::keys::{
     BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE,
     LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE, OPEN_BITMAP_PAGE_TABLE,
 };
 use crate::logs::table_specs::{BitmapPageBlobSpec, BlockLogBlobSpec};
-use crate::kernel::table_specs::BlobTableSpec;
 use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
@@ -53,7 +53,11 @@ mod tests {
     fn required_storage_tables_are_unique() {
         assert_eq!(
             REQUIRED_POINT_TABLES.len(),
-            REQUIRED_POINT_TABLES.iter().copied().collect::<BTreeSet<_>>().len()
+            REQUIRED_POINT_TABLES
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
         );
         assert_eq!(
             REQUIRED_SCANNABLE_TABLES.len(),
@@ -65,7 +69,11 @@ mod tests {
         );
         assert_eq!(
             REQUIRED_BLOB_TABLES.len(),
-            REQUIRED_BLOB_TABLES.iter().copied().collect::<BTreeSet<_>>().len()
+            REQUIRED_BLOB_TABLES
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
         );
     }
 }

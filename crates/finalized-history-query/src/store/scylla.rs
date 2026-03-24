@@ -9,10 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
-use crate::core::state::BLOCK_RECORD_TABLE;
 use crate::error::{Error, Result};
 use crate::store::manifest::{REQUIRED_POINT_TABLES, REQUIRED_SCANNABLE_TABLES};
-use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
 };

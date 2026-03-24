@@ -149,7 +149,12 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     pub async fn status(&self) -> Result<ServiceStatus> {
-        service_status(&self.runtime, &self.publication_store, &self.ingest.families).await
+        service_status(
+            &self.runtime,
+            &self.publication_store,
+            &self.ingest.families,
+        )
+        .await
     }
 
     async fn ingest_blocks(&self, blocks: Vec<FinalizedBlock>) -> Result<IngestOutcome> {
