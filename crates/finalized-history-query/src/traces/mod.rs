@@ -21,9 +21,8 @@ use crate::traces::ingest::{
     persist_trace_artifacts, persist_trace_block_record, persist_trace_dir_by_block,
     persist_trace_stream_fragments,
 };
-use crate::traces::keys::{
-    TRACE_LOCAL_ID_MASK, TRACE_PRIMARY_DIR_LAYOUT, TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-};
+use crate::traces::keys::{TRACE_LOCAL_ID_MASK, TRACE_STREAM_PAGE_LOCAL_ID_SPAN};
+use crate::traces::table_specs::TRACE_PRIMARY_DIR_LAYOUT;
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;

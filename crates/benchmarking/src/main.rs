@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
-use finalized_history_query::config::{Config as IndexConfig, IngestMode as IndexIngestMode};
+use finalized_history_query::config::Config as IndexConfig;
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
 use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
@@ -604,7 +604,6 @@ async fn cmd_ingest_distributed(args: IngestDistributedArgs) -> Result<()> {
     })?;
 
     let config = IndexConfig {
-        ingest_mode: args.ingest_mode.into(),
         assume_empty_streams: args.assume_empty_streams,
         stream_append_concurrency: args.stream_append_concurrency.max(1),
         ..IndexConfig::default()
