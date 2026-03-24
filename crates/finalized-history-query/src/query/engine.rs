@@ -4,9 +4,7 @@ use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
 use crate::query::normalized::{effective_limit, plan_page};
 use crate::query::planner::IndexedClause;
-use crate::query::runner::{
-    QueryDescriptor, QueryMaterializer, build_page, empty_page, execute_indexed_query,
-};
+use crate::query::runner::{QueryMaterializer, build_page, empty_page, execute_indexed_query};
 use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -79,12 +77,11 @@ pub(crate) async fn resolve_request_block_bounds<
     Ok((from_block, to_block))
 }
 
-pub(crate) async fn execute_family_query<M, P, B, R, D, Q, W>(
+pub(crate) async fn execute_family_query<M, P, B, R, Q, W>(
     family_tables: FamilyQueryTables<'_, M, B>,
     publication_store: &P,
     request: &R,
     limits: QueryLimits,
-    descriptor: &D,
     materializer: &mut Q,
     select_window: W,
 ) -> Result<crate::core::page::QueryPage<Q::Output>>
@@ -93,9 +90,8 @@ where
     P: PublicationStore,
     B: BlobStore,
     R: IndexedQueryRequest,
-    D: QueryDescriptor,
-    D::Id: FamilyIdValue,
-    Q: QueryMaterializer<Id = D::Id, Filter = R::Filter>,
+    Q: QueryMaterializer<Filter = R::Filter>,
+    Q::Id: FamilyIdValue,
     W: Fn(&crate::core::state::BlockRecord) -> Option<crate::core::state::PrimaryWindowRecord>,
 {
     let tables = family_tables.tables;
@@ -126,14 +122,14 @@ where
     }
 
     let Some(id_window) =
-        resolve_primary_window::<_, _, D::Id, _>(tables, &block_range, select_window).await?
+        resolve_primary_window::<_, _, Q::Id, _>(tables, &block_range, select_window).await?
     else {
         return Ok(empty_page(&block_range));
     };
     let Some(normalized) = plan_page(
         &block_range,
         id_window,
-        request.resume_id().map(D::Id::new),
+        request.resume_id().map(Q::Id::new),
         effective_limit(request.limit(), limits.budget)?,
         "resume_id outside resolved block window",
     )?
@@ -143,7 +139,6 @@ where
 
     let matched = execute_indexed_query(
         family_tables.stream_tables,
-        descriptor,
         request.filter(),
         (normalized.id_range.start, normalized.id_range.end_inclusive),
         normalized.take,

@@ -1,6 +1,5 @@
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::logs::filter::LogFilter;
@@ -9,7 +8,6 @@ use crate::logs::types::Log;
 use crate::query::engine::{
     FamilyQueryTables, IndexedQueryRequest, QueryLimits, execute_family_query,
 };
-use crate::query::runner::QueryDescriptor;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -33,7 +31,6 @@ impl LogsQueryEngine {
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Log>> {
-        let descriptor = LogsQueryDescriptor;
         let mut materializer = LogMaterializer::new(tables);
         execute_family_query(
             FamilyQueryTables {
@@ -46,7 +43,6 @@ impl LogsQueryEngine {
                 budget,
                 max_or_terms: self.max_or_terms,
             },
-            &descriptor,
             &mut materializer,
             |record| record.logs,
         )
@@ -87,20 +83,5 @@ impl IndexedQueryRequest for QueryLogsRequest {
 
     fn filter(&self) -> &Self::Filter {
         &self.filter
-    }
-}
-
-struct LogsQueryDescriptor;
-
-impl QueryDescriptor for LogsQueryDescriptor {
-    type Id = LogId;
-
-    fn local_range_for_shard(
-        &self,
-        from: Self::Id,
-        to_inclusive: Self::Id,
-        shard_raw: u64,
-    ) -> (u32, u32) {
-        family_local_range_for_shard(from, to_inclusive, shard_raw)
     }
 }

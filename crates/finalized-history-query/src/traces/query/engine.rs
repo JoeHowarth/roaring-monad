@@ -1,12 +1,10 @@
 use crate::api::{ExecutionBudget, QueryTracesRequest};
 use crate::config::Config;
-use crate::core::ids::{TraceId, family_local_range_for_shard};
 use crate::core::page::QueryPage;
 use crate::error::Result;
 use crate::query::engine::{
     FamilyQueryTables, IndexedQueryRequest, QueryLimits, execute_family_query,
 };
-use crate::query::runner::QueryDescriptor;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -33,7 +31,6 @@ impl TracesQueryEngine {
         request: QueryTracesRequest,
         budget: ExecutionBudget,
     ) -> Result<QueryPage<Trace>> {
-        let descriptor = TracesQueryDescriptor;
         let mut materializer = TraceMaterializer::new(tables);
         execute_family_query(
             FamilyQueryTables {
@@ -46,7 +43,6 @@ impl TracesQueryEngine {
                 budget,
                 max_or_terms: self.max_or_terms,
             },
-            &descriptor,
             &mut materializer,
             |record| record.traces,
         )
@@ -87,20 +83,5 @@ impl IndexedQueryRequest for QueryTracesRequest {
 
     fn filter(&self) -> &Self::Filter {
         &self.filter
-    }
-}
-
-struct TracesQueryDescriptor;
-
-impl QueryDescriptor for TracesQueryDescriptor {
-    type Id = TraceId;
-
-    fn local_range_for_shard(
-        &self,
-        from: Self::Id,
-        to_inclusive: Self::Id,
-        shard_raw: u64,
-    ) -> (u32, u32) {
-        family_local_range_for_shard(from, to_inclusive, shard_raw)
     }
 }

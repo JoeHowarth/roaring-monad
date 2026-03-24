@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use roaring::RoaringBitmap;
 
 use crate::core::directory_resolver::ResolvedPrimaryLocation;
-use crate::core::ids::{LogId, TraceId, compose_log_id, compose_trace_id};
+use crate::core::ids::{
+    FamilyIdValue, LogId, TraceId, compose_log_id, compose_trace_id, family_local_range_for_shard,
+};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{ResolvedBlockRange, load_block_ref};
@@ -231,18 +233,6 @@ where
     Ok(out)
 }
 
-#[allow(async_fn_in_trait)]
-pub(crate) trait QueryDescriptor {
-    type Id: QueryId;
-
-    fn local_range_for_shard(
-        &self,
-        from: Self::Id,
-        to_inclusive: Self::Id,
-        shard_raw: u64,
-    ) -> (u32, u32);
-}
-
 pub(crate) fn empty_page<T>(block_range: &ResolvedBlockRange) -> QueryPage<T> {
     QueryPage {
         items: Vec::new(),
@@ -340,19 +330,18 @@ pub async fn cached_parent_block_ref<M: MetaStore, B: BlobStore>(
     .await
 }
 
-pub(crate) async fn execute_indexed_query<M, B, D, Q, F>(
+pub(crate) async fn execute_indexed_query<M, B, I, Q, F>(
     stream_tables: &StreamTables<M, B, StreamBitmapMeta>,
-    descriptor: &D,
     filter: &F,
-    id_window: (D::Id, D::Id),
+    id_window: (I, I),
     take: usize,
     materializer: &mut Q,
-) -> Result<Vec<MatchedQueryItem<D::Id, Q::Item>>>
+) -> Result<Vec<MatchedQueryItem<I, Q::Item>>>
 where
     M: MetaStore,
     B: BlobStore,
-    D: QueryDescriptor,
-    Q: QueryMaterializer<Id = D::Id, Filter = F>,
+    I: QueryId + FamilyIdValue,
+    Q: QueryMaterializer<Id = I, Filter = F>,
     F: IndexedFilter,
 {
     let (from_id, to_id_inclusive) = id_window;
@@ -361,7 +350,7 @@ where
 
     for shard_raw in from_id.shard_raw()..=to_id_inclusive.shard_raw() {
         let (local_from, local_to) =
-            descriptor.local_range_for_shard(from_id, to_id_inclusive, shard_raw);
+            family_local_range_for_shard(from_id, to_id_inclusive, shard_raw);
         let shard_clauses = prepare_shard_clauses(
             stream_tables,
             &clause_specs,
@@ -405,7 +394,7 @@ where
 
         let mut locals = shard_accumulator.into_iter().peekable();
         while let Some(local_raw) = locals.next() {
-            let id = D::Id::compose(shard_raw, local_raw);
+            let id = I::compose(shard_raw, local_raw);
             let Some(location) = materializer.resolve_id(id).await? else {
                 continue;
             };
