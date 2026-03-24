@@ -11,8 +11,7 @@ use crate::logs::ingest::{
     persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
 };
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::types::LogSequencingState;
-use crate::logs::types::StreamBitmapMeta;
+use crate::logs::types::{LogSequencingState, StreamBitmapMeta};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -56,6 +55,7 @@ impl LogsFamily {
             from_next_log_id,
         )
         .await?;
+
         persist_log_dir_by_block(
             &runtime.tables,
             block.block_num,
@@ -63,6 +63,7 @@ impl LogsFamily {
             block.logs.len() as u32,
         )
         .await?;
+
         let touched_pages =
             persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;
         opened_during.extend(

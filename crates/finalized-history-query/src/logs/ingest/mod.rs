@@ -1,8 +1,111 @@
-mod artifact;
-mod stream;
+use std::collections::{BTreeMap, BTreeSet};
 
-pub use artifact::{persist_log_artifacts, persist_log_dir_by_block};
-pub use stream::persist_stream_fragments;
+use bytes::Bytes;
+
+use crate::Log;
+use crate::config::Config;
+use crate::core::ids::LogId;
+use crate::error::{Error, Result};
+use crate::family::FinalizedBlock;
+use crate::ingest::bitmap_pages;
+use crate::kernel::codec::StorageCodec;
+use crate::kernel::sharded_streams::sharded_stream_id;
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::types::BlockLogHeader;
+use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
+
+pub fn collect_stream_appends(
+    block: &FinalizedBlock,
+    first_log_id: u64,
+) -> BTreeMap<String, Vec<u32>> {
+    let mut out: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+
+    for (index, log) in block.logs.iter().enumerate() {
+        let global_log_id = LogId::new(first_log_id + index as u64);
+        let shard = global_log_id.shard();
+        let local = global_log_id.local().get();
+
+        out.entry(sharded_stream_id("addr", &log.address, shard.get()))
+            .or_default()
+            .insert(local);
+
+        if let Some(topic0) = log.topics.first() {
+            out.entry(sharded_stream_id("topic0", topic0, shard.get()))
+                .or_default()
+                .insert(local);
+        }
+
+        for (topic_index, topic) in log.topics.iter().enumerate().skip(1).take(3) {
+            let kind = match topic_index {
+                1 => "topic1",
+                2 => "topic2",
+                3 => "topic3",
+                _ => continue,
+            };
+            out.entry(sharded_stream_id(kind, topic, shard.get()))
+                .or_default()
+                .insert(local);
+        }
+    }
+
+    out.into_iter()
+        .map(|(stream, values)| (stream, values.into_iter().collect()))
+        .collect()
+}
+
+pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block: &FinalizedBlock,
+    first_log_id: u64,
+) -> Result<Vec<(String, u32)>> {
+    let grouped_values = collect_stream_appends(block, first_log_id)
+        .into_iter()
+        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
+    bitmap_pages::persist_stream_fragments(
+        &tables.log_streams,
+        block.block_num,
+        grouped_values,
+        STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await
+}
+
+pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
+    _config: &Config,
+    tables: &Tables<M, B>,
+    block_num: u64,
+    logs: &[Log],
+    _first_log_id: u64,
+) -> Result<()> {
+    let mut out = Vec::<u8>::new();
+    let mut offsets = Vec::with_capacity(logs.len() + 1);
+    for log in logs {
+        offsets.push(
+            u32::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
+        );
+        out.extend_from_slice(&log.encode());
+    }
+    offsets.push(u32::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?);
+    let block_blob = Bytes::from(out);
+    let header = BlockLogHeader { offsets };
+    tables
+        .point_log_payloads
+        .put_block(block_num, block_blob, &header)
+        .await
+}
+
+pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block_num: u64,
+    first_log_id: u64,
+    count: u32,
+) -> Result<()> {
+    tables
+        .log_dir
+        .persist_block_fragment(block_num, first_log_id, count)
+        .await
+}
 
 #[cfg(test)]
 mod tests {
@@ -26,8 +129,10 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
 
-    use super::artifact::{persist_log_artifacts, persist_log_dir_by_block};
-    use super::stream::{collect_stream_appends, persist_stream_fragments};
+    use super::{
+        collect_stream_appends, persist_log_artifacts, persist_log_dir_by_block,
+        persist_stream_fragments,
+    };
     use crate::ingest::bitmap_pages;
     use crate::ingest::primary_dir::compact_sealed_primary_directory;
     use crate::kernel::sharded_streams::page_start_local;
