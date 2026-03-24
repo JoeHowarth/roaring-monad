@@ -504,7 +504,7 @@ fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-fs-nocache"))]
 fn set_no_cache(file: &File) -> Result<()> {
     use std::os::fd::AsRawFd;
 
@@ -518,7 +518,7 @@ fn set_no_cache(file: &File) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", feature = "macos-fs-nocache")))]
 fn set_no_cache(_file: &File) -> Result<()> {
     Ok(())
 }

@@ -151,7 +151,8 @@ File-system backed stores for local development and testing.
 - Scannable metadata tables live under `meta_scan/<table>/<hex_partition>/<hex_clustering>`
 - Blob tables map to directories under `blob/<table>/`
 - Versions are stored in `.ver` sidecar files
-- `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) is set on all file I/O on macOS to avoid polluting the OS page cache
+- By default the filesystem store uses normal buffered I/O on macOS, matching other platforms
+- Enabling the `macos-fs-nocache` crate feature sets `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) on all file I/O handles on macOS to avoid polluting the OS page cache
 
 Implements `MetaStore` (meta) and `BlobStore` (blob).
 
