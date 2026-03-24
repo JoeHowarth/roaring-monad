@@ -1,6 +1,8 @@
 # Config
 
-This document describes the `Config` struct fields, their purposes, and defaults.
+Read this after the architecture docs when you need the tunable surface.
+
+This doc describes the `Config` struct fields, their purposes, and defaults.
 
 All fields live in `src/config.rs`.
 

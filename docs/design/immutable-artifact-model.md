@@ -2,8 +2,9 @@
 
 This is the second design doc. Read [Bitmap-Indexed History Queries](bitmap-indexed-history-queries.md) first.
 
-This document is also introductory reading material. It focuses on the storage
-model that makes indefinite caching and append-only reads practical.
+This is also introductory reading material. It explains the storage and
+publication model that makes indefinite caching and append-only reads
+practical.
 
 ## The constraint
 

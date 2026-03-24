@@ -1,6 +1,8 @@
 # Caching
 
-This document describes the immutable artifact-table and bytes-cache design.
+Read this after the main ingest/query docs.
+
+This doc describes the immutable artifact-table and bytes-cache design.
 
 The shared cache implementation, cache metrics types, and generic cache-backed
 table helpers live under `src/kernel/*`. `src/tables.rs` assembles those shared

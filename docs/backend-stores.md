@@ -1,6 +1,9 @@
 # Backend Stores
 
-This document describes the store trait abstractions and their implementations.
+Read this after [storage-model.md](storage-model.md) and
+[write-authority.md](write-authority.md).
+
+This doc describes the store trait abstractions and their implementations.
 
 ## MetaStore
 

@@ -1,13 +1,16 @@
 # QueryX Support
 
-This document describes how `finalized-history-query` relates to the reference
-[`queryX`](reference/queryX) proposal, where the crate stands today, and how we
-intend to extend the current substrate to support the remaining families.
+Read this after [reference/queryX](reference/queryX) and before
+[overview.md](overview.md).
+
+This doc explains how `finalized-history-query` maps onto the `queryX`
+product shape: what this crate already provides, what still belongs in the RPC
+service and transport layer, and how the current substrate is meant to grow.
 
 ## Purpose
 
-The reference `queryX` document defines a broader RPC product shape than the
-crate currently exposes:
+The reference `queryX` doc defines a broader RPC product shape than this crate
+currently exposes:
 
 - `eth_queryBlocks`
 - `eth_queryTransactions`
@@ -15,8 +18,8 @@ crate currently exposes:
 - `eth_queryTraces`
 - `eth_queryTransfers`
 
-The crate is not trying to implement that whole RPC surface directly. Instead,
-it is becoming the storage/query substrate underneath that surface:
+This crate is not trying to implement that whole RPC surface directly. It is
+the storage/query substrate underneath that surface:
 
 - one shared finalized-history runtime
 - one shared finalized block envelope for ingest
@@ -25,8 +28,8 @@ it is becoming the storage/query substrate underneath that surface:
 - family-owned schema, indexing, and materialization logic
 
 The RPC crate remains responsible for transport concerns such as JSON-RPC
-request parsing, tag resolution policy, field selection syntax, response
-envelopes, and error mapping.
+request parsing, tag resolution policy, field selection syntax, joins and
+response envelopes, and error mapping.
 
 ## Where We Are Today
 

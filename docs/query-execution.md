@@ -1,6 +1,10 @@
 # Query Execution
 
-This document describes the shared query execution model used by logs and traces: normalized block/ID windows, shard-streaming planning, bitmap intersection, materialization, and pagination.
+Read this after [storage-model.md](storage-model.md).
+
+This doc describes the shared query execution model used by logs and traces:
+normalized block/ID windows, shard-streaming planning, bitmap intersection,
+materialization, and pagination.
 
 ## Core Terms
 

@@ -1,8 +1,10 @@
 # Bitmap-Indexed History Queries
 
-This is introductory reading material. It explains the core idea behind the
-history-query substrate in broad strokes, using logs as the main example while
-calling out where traces fit today.
+Read this early. It is the first conceptual doc for the codebase.
+
+This doc explains the core query idea behind the history-query substrate in
+broad strokes, using logs as the main example while calling out where traces
+fit today.
 
 ## The problem
 

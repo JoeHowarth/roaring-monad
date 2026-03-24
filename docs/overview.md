@@ -1,12 +1,26 @@
 # Finalized History Query Overview
 
-This is the developer documentation for `crates/finalized-history-query`.
+This is the main current-state architecture doc for
+`crates/finalized-history-query`.
 
-Topic-based docs live alongside this file. Historical design docs and migration plans live under `docs/historical/`. Active and completed design plans live under `docs/plans/`.
+If you are new to the repo, start with [README.md](README.md) for the
+recommended reading order. In particular:
+
+- read [reference/queryX](reference/queryX) and [queryx-support.md](queryx-support.md)
+  first for the product boundary
+- read the two docs under [design/](design/) next for the core mental model
+- then use this doc as the bridge into the current implementation
+
+Topic docs live alongside this file. Historical design docs and migration
+plans live under `docs/historical/`. Active and completed plans live under
+`docs/plans/`.
 
 ## Scope
 
-The crate implements finalized history queries for the logs and traces families, plus a shared ingest substrate for the logs, txs, and traces families.
+The crate implements the finalized-history query substrate that powers the
+`queryX` family of RPC methods. Today it exposes finalized-history queries for
+the logs and traces families, plus a shared ingest substrate for logs, txs,
+and traces.
 
 The main path:
 

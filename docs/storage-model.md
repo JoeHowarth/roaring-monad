@@ -1,6 +1,10 @@
 # Storage Model
 
-This document describes the published artifact model plus the logs and traces storage layouts.
+Read this after [overview.md](overview.md).
+
+This doc describes the published artifact model and the logs/traces storage
+layouts. It focuses on what gets stored and how reads resolve IDs back to
+payload bytes.
 
 ## Design Principles
 

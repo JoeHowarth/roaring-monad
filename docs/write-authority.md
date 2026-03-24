@@ -1,6 +1,10 @@
 # Write Authority
 
-This document describes the write-authority model: leases, session-based ownership, service roles, and writer preflight behavior.
+Read this after [ingest-pipeline.md](ingest-pipeline.md) if you are following
+the main architecture path.
+
+This doc describes the write-authority model: leases, session-based ownership,
+service roles, and writer preflight behavior.
 
 ## Service Roles
 

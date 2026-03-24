@@ -1,6 +1,9 @@
 # Ingest Pipeline
 
-This document describes the block ingestion flow, artifact writes, compaction triggers, and ingest-time recovery behavior.
+Read this after [storage-model.md](storage-model.md).
+
+This doc describes block ingestion, artifact write ordering, compaction
+triggers, and ingest-time recovery behavior.
 
 ## Block Ingestion Flow
 

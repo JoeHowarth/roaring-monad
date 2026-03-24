@@ -5,7 +5,10 @@
 > This document describes the current trace-family architecture in
 > `finalized-history-query`. Future rollout sequencing belongs in `docs/plans/`.
 
-This document describes the trace family design: storage layout, ingest
+Read this after [overview.md](overview.md), [storage-model.md](storage-model.md),
+and [query-execution.md](query-execution.md).
+
+This doc describes the trace family design: storage layout, ingest
 behavior, zero-copy accessors, indexing, and how native-transfer queries are
 served from the same underlying data.
 
