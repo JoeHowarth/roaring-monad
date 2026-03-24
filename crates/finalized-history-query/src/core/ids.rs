@@ -325,59 +325,64 @@ pub const fn compose_trace_id(shard: TraceShard, local: TraceLocalId) -> TraceId
     TraceId::from_family_id(FamilyId::compose(shard.get(), local.get()))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrimaryIdRange {
-    pub start: LogId,
-    pub end_inclusive: LogId,
+pub trait FamilyIdValue: Copy + Ord {
+    fn new(raw: u64) -> Self;
+    fn get(self) -> u64;
 }
 
-impl PrimaryIdRange {
-    pub fn new(start: LogId, end_inclusive: LogId) -> Option<Self> {
+impl FamilyIdValue for LogId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+}
+
+impl FamilyIdValue for TraceId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyIdRange<I> {
+    pub start: I,
+    pub end_inclusive: I,
+}
+
+impl<I: FamilyIdValue> FamilyIdRange<I> {
+    pub fn new(start: I, end_inclusive: I) -> Option<Self> {
         (start <= end_inclusive).then_some(Self {
             start,
             end_inclusive,
         })
     }
 
-    pub fn contains(&self, id: LogId) -> bool {
+    pub fn contains(&self, id: I) -> bool {
         self.start <= id && id <= self.end_inclusive
     }
 
-    pub fn resume_strictly_after(&self, id: LogId) -> Option<Self> {
-        let next_start = id.get().checked_add(1).map(LogId::new)?;
+    pub fn resume_strictly_after(&self, id: I) -> Option<Self> {
+        let next_start = id.get().checked_add(1).map(I::new)?;
         Self::new(next_start, self.end_inclusive)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TraceIdRange {
-    pub start: TraceId,
-    pub end_inclusive: TraceId,
-}
-
-impl TraceIdRange {
-    pub fn new(start: TraceId, end_inclusive: TraceId) -> Option<Self> {
-        (start <= end_inclusive).then_some(Self {
-            start,
-            end_inclusive,
-        })
-    }
-
-    pub fn contains(&self, id: TraceId) -> bool {
-        self.start <= id && id <= self.end_inclusive
-    }
-
-    pub fn resume_strictly_after(&self, id: TraceId) -> Option<Self> {
-        let next_start = id.get().checked_add(1).map(TraceId::new)?;
-        Self::new(next_start, self.end_inclusive)
-    }
-}
+pub type PrimaryIdRange = FamilyIdRange<LogId>;
+pub type TraceIdRange = FamilyIdRange<TraceId>;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        FamilyId, FamilyLocalId, FamilyShard, LogId, LogLocalId, LogShard, PrimaryIdRange, TraceId,
-        TraceIdRange, TraceLocalId, TraceShard, compose_log_id, compose_trace_id,
+        FamilyId, FamilyIdRange, FamilyLocalId, FamilyShard, LogId, LogLocalId, LogShard,
+        PrimaryIdRange, TraceId, TraceIdRange, TraceLocalId, TraceShard, compose_log_id,
+        compose_trace_id,
     };
     use crate::core::layout::MAX_LOCAL_ID;
 
@@ -483,5 +488,14 @@ mod tests {
                 .map(|err| err.raw()),
             Some(MAX_LOCAL_ID.saturating_add(1))
         );
+    }
+
+    #[test]
+    fn generic_family_id_range_works_for_both_wrappers() {
+        let log_range = FamilyIdRange::new(LogId::new(20), LogId::new(22)).expect("log range");
+        let trace_range =
+            FamilyIdRange::new(TraceId::new(30), TraceId::new(32)).expect("trace range");
+        assert!(log_range.contains(LogId::new(21)));
+        assert!(trace_range.contains(TraceId::new(31)));
     }
 }

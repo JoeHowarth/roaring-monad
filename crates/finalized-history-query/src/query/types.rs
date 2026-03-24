@@ -1,27 +1,17 @@
-use crate::core::ids::{LogId, PrimaryIdRange, TraceId, TraceIdRange};
+use crate::core::ids::{FamilyIdRange, FamilyIdValue};
 
 pub(crate) trait PrimaryId: Copy + Ord {
     fn new(raw: u64) -> Self;
     fn get(self) -> u64;
 }
 
-impl PrimaryId for LogId {
+impl<T: FamilyIdValue> PrimaryId for T {
     fn new(raw: u64) -> Self {
-        Self::new(raw)
+        FamilyIdValue::new(raw)
     }
 
     fn get(self) -> u64 {
-        self.get()
-    }
-}
-
-impl PrimaryId for TraceId {
-    fn new(raw: u64) -> Self {
-        Self::new(raw)
-    }
-
-    fn get(self) -> u64 {
-        self.get()
+        FamilyIdValue::get(self)
     }
 }
 
@@ -33,35 +23,19 @@ pub(crate) trait PrimaryRange: Copy {
     fn resume_strictly_after(self, id: Self::Id) -> Option<Self>;
 }
 
-impl PrimaryRange for PrimaryIdRange {
-    type Id = LogId;
+impl<T: FamilyIdValue> PrimaryRange for FamilyIdRange<T> {
+    type Id = T;
 
     fn new(start: Self::Id, end_inclusive: Self::Id) -> Option<Self> {
-        Self::new(start, end_inclusive)
+        FamilyIdRange::new(start, end_inclusive)
     }
 
     fn contains(self, id: Self::Id) -> bool {
-        PrimaryIdRange::contains(&self, id)
+        FamilyIdRange::contains(&self, id)
     }
 
     fn resume_strictly_after(self, id: Self::Id) -> Option<Self> {
-        PrimaryIdRange::resume_strictly_after(&self, id)
-    }
-}
-
-impl PrimaryRange for TraceIdRange {
-    type Id = TraceId;
-
-    fn new(start: Self::Id, end_inclusive: Self::Id) -> Option<Self> {
-        Self::new(start, end_inclusive)
-    }
-
-    fn contains(self, id: Self::Id) -> bool {
-        TraceIdRange::contains(&self, id)
-    }
-
-    fn resume_strictly_after(self, id: Self::Id) -> Option<Self> {
-        TraceIdRange::resume_strictly_after(&self, id)
+        FamilyIdRange::resume_strictly_after(&self, id)
     }
 }
 
