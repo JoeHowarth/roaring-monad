@@ -1,13 +1,11 @@
 use bytes::Bytes;
 
 use crate::config::Config;
-use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
-use crate::logs::table_specs::{LogDirByBlockSpec, LogDirSubBucketSpec};
 use crate::logs::types::{BlockLogHeader, Log};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::{PrimaryDirFragmentLayout, Tables};
+use crate::tables::Tables;
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
@@ -31,17 +29,7 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     tables
         .log_dir
-        .persist_block_fragment(
-            block_num,
-            first_log_id,
-            count,
-            PrimaryDirFragmentLayout {
-                sub_bucket_start: LogDirSubBucketSpec::sub_bucket_start,
-                sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
-                partition: LogDirByBlockSpec::partition,
-                clustering: LogDirByBlockSpec::clustering,
-            },
-        )
+        .persist_block_fragment(block_num, first_log_id, count)
         .await
 }
 

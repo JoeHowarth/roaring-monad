@@ -13,7 +13,7 @@ use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::logs::ingest::{
     persist_log_artifacts, persist_log_dir_by_block, persist_stream_fragments,
 };
-use crate::logs::keys::{LOG_PRIMARY_DIR_LAYOUT, STREAM_PAGE_LOCAL_ID_SPAN};
+use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::types::LogSequencingState;
 use crate::logs::types::StreamBitmapMeta;
 use crate::runtime::Runtime;
@@ -85,7 +85,6 @@ impl LogsFamily {
             &runtime.tables.log_dir,
             from_next_log_id,
             next_log_id,
-            LOG_PRIMARY_DIR_LAYOUT,
         )
         .await?;
 

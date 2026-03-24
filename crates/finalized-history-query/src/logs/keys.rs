@@ -1,8 +1,8 @@
 pub use crate::core::layout::{
-    DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE, LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID,
-    read_u64_be,
+    DIRECTORY_BUCKET_SIZE as LOG_DIRECTORY_BUCKET_SIZE,
+    DIRECTORY_SUB_BUCKET_SIZE as LOG_DIRECTORY_SUB_BUCKET_SIZE,
 };
-use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
+pub use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID, read_u64_be};
 use crate::store::traits::{ScannableTableId, TableId};
 
 pub const BLOCK_LOG_HEADER_TABLE: TableId = TableId::new("block_log_header");
@@ -14,15 +14,6 @@ pub const BITMAP_BY_BLOCK_TABLE: ScannableTableId = ScannableTableId::new("bitma
 pub const BITMAP_PAGE_META_TABLE: TableId = TableId::new("bitmap_page_meta");
 pub const OPEN_BITMAP_PAGE_TABLE: ScannableTableId = ScannableTableId::new("open_bitmap_page");
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
-pub(super) const LOG_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout = PrimaryDirCompactionLayout {
-    sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
-    bucket_span: DIRECTORY_BUCKET_SIZE,
-    sub_bucket_start: crate::logs::table_specs::LogDirSubBucketSpec::sub_bucket_start,
-    bucket_start: crate::logs::table_specs::LogDirBucketSpec::bucket_start,
-    missing_sentinel_error: "directory sub-bucket missing sentinel",
-    inconsistent_bucket_error: "inconsistent directory bucket boundary across sub-buckets",
-    missing_bucket_start_error: "missing directory bucket start block",
-};
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,8 @@
 use crate::core::layout::LOCAL_ID_BITS;
+pub use crate::core::layout::{
+    DIRECTORY_BUCKET_SIZE as TRACE_DIRECTORY_BUCKET_SIZE,
+    DIRECTORY_SUB_BUCKET_SIZE as TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;

@@ -1,11 +1,9 @@
 use bytes::Bytes;
 
-use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::tables::{PrimaryDirFragmentLayout, Tables};
-use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
+use crate::tables::Tables;
 use crate::traces::types::BlockTraceHeader;
 use alloy_rlp::{Header, PayloadView};
 
@@ -37,17 +35,7 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     tables
         .trace_dir
-        .persist_block_fragment(
-            block_num,
-            first_trace_id,
-            count,
-            PrimaryDirFragmentLayout {
-                sub_bucket_start: TraceDirSubBucketSpec::sub_bucket_start,
-                sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
-                partition: TraceDirByBlockSpec::partition,
-                clustering: TraceDirByBlockSpec::clustering,
-            },
-        )
+        .persist_block_fragment(block_num, first_trace_id, count)
         .await
 }
 
@@ -121,9 +109,9 @@ mod tests {
     use super::persist_trace_dir_by_block;
     use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::kernel::codec::StorageCodec;
+    use crate::kernel::table_specs::u64_key;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::traces::table_specs::TraceDirByBlockSpec;
     use crate::traces::types::DirByBlock;
     use crate::{store::traits::MetaStore, tables::Tables};
 
@@ -143,8 +131,8 @@ mod tests {
                 let fragment = meta
                     .scan_get(
                         crate::traces::keys::TRACE_DIR_BY_BLOCK_TABLE,
-                        &TraceDirByBlockSpec::partition(sub_bucket_start),
-                        &TraceDirByBlockSpec::clustering(700),
+                        &u64_key(sub_bucket_start),
+                        &u64_key(700),
                     )
                     .await
                     .expect("load directory fragment")

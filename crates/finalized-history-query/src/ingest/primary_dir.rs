@@ -3,25 +3,14 @@ use crate::kernel::compaction::{
     compact_directory_bucket_from_sub_buckets, compact_directory_sub_bucket_from_fragments,
     sealed_ranges,
 };
+use crate::kernel::table_specs::aligned_u64_start;
 use crate::store::traits::MetaStore;
 use crate::tables::PrimaryDirTables;
-
-#[derive(Clone, Copy)]
-pub struct PrimaryDirCompactionLayout {
-    pub sub_bucket_span: u64,
-    pub bucket_span: u64,
-    pub sub_bucket_start: fn(u64) -> u64,
-    pub bucket_start: fn(u64) -> u64,
-    pub missing_sentinel_error: &'static str,
-    pub inconsistent_bucket_error: &'static str,
-    pub missing_bucket_start_error: &'static str,
-}
 
 pub async fn compact_newly_sealed_primary_directory<M: MetaStore>(
     dir: &PrimaryDirTables<M>,
     from_next_primary_id: u64,
     next_primary_id: u64,
-    layout: PrimaryDirCompactionLayout,
 ) -> Result<()> {
     if next_primary_id <= from_next_primary_id {
         return Ok(());
@@ -30,8 +19,8 @@ pub async fn compact_newly_sealed_primary_directory<M: MetaStore>(
     for sub_bucket_start in sealed_ranges(
         from_next_primary_id,
         next_primary_id,
-        layout.sub_bucket_span,
-        layout.sub_bucket_start,
+        crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE,
+        sub_bucket_start,
     ) {
         compact_primary_directory_sub_bucket(dir, sub_bucket_start).await?;
     }
@@ -39,10 +28,10 @@ pub async fn compact_newly_sealed_primary_directory<M: MetaStore>(
     for bucket_start in sealed_ranges(
         from_next_primary_id,
         next_primary_id,
-        layout.bucket_span,
-        layout.bucket_start,
+        crate::core::layout::DIRECTORY_BUCKET_SIZE,
+        bucket_start,
     ) {
-        compact_primary_directory_bucket(dir, bucket_start, layout).await?;
+        compact_primary_directory_bucket(dir, bucket_start).await?;
     }
 
     Ok(())
@@ -53,20 +42,22 @@ pub async fn compact_sealed_primary_directory<M: MetaStore>(
     first_primary_id: u64,
     count: u32,
     next_primary_id: u64,
-    layout: PrimaryDirCompactionLayout,
 ) -> Result<()> {
     if count == 0 || next_primary_id <= first_primary_id {
         return Ok(());
     }
 
-    compact_newly_sealed_primary_directory(dir, first_primary_id, next_primary_id, layout).await
+    compact_newly_sealed_primary_directory(dir, first_primary_id, next_primary_id).await
 }
 
 async fn compact_primary_directory_sub_bucket<M: MetaStore>(
     dir: &PrimaryDirTables<M>,
     sub_bucket_start: u64,
 ) -> Result<()> {
-    let fragments = dir.load_sub_bucket_fragments(sub_bucket_start).await?;
+    let fragments = dir
+        .fragments
+        .load_sub_bucket_fragments(sub_bucket_start)
+        .await?;
     if fragments.is_empty() {
         return Ok(());
     }
@@ -80,32 +71,34 @@ async fn compact_primary_directory_sub_bucket<M: MetaStore>(
         return Ok(());
     };
 
-    dir.put_sub_bucket(
-        sub_bucket_start,
-        &crate::core::directory::PrimaryDirBucket {
-            start_block,
-            first_primary_ids,
-        },
-    )
-    .await
+    dir.sub_buckets
+        .put(
+            sub_bucket_start,
+            &crate::core::directory::PrimaryDirBucket {
+                start_block,
+                first_primary_ids,
+            },
+        )
+        .await
 }
 
 async fn compact_primary_directory_bucket<M: MetaStore>(
     dir: &PrimaryDirTables<M>,
     bucket_start: u64,
-    layout: PrimaryDirCompactionLayout,
 ) -> Result<()> {
-    let bucket_end = bucket_start.saturating_add(layout.bucket_span);
+    let bucket_end = bucket_start.saturating_add(crate::core::layout::DIRECTORY_BUCKET_SIZE);
     let mut sub_bucket_start = bucket_start;
     let mut sub_buckets = Vec::new();
 
     while sub_bucket_start < bucket_end {
-        let Some(sub_bucket) = dir.get_sub_bucket(sub_bucket_start).await? else {
-            sub_bucket_start = sub_bucket_start.saturating_add(layout.sub_bucket_span);
+        let Some(sub_bucket) = dir.sub_buckets.get(sub_bucket_start).await? else {
+            sub_bucket_start =
+                sub_bucket_start.saturating_add(crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE);
             continue;
         };
         sub_buckets.push(sub_bucket);
-        sub_bucket_start = sub_bucket_start.saturating_add(layout.sub_bucket_span);
+        sub_bucket_start =
+            sub_bucket_start.saturating_add(crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE);
     }
 
     let Some((start_block, first_primary_ids)) = compact_directory_bucket_from_sub_buckets(
@@ -113,20 +106,29 @@ async fn compact_primary_directory_bucket<M: MetaStore>(
         |sub_bucket| sub_bucket.start_block,
         |sub_bucket| sub_bucket.first_primary_ids.len(),
         |sub_bucket, index| sub_bucket.first_primary_ids[index],
-        layout.missing_sentinel_error,
-        layout.inconsistent_bucket_error,
-        layout.missing_bucket_start_error,
+        "directory bucket missing sentinel",
+        "inconsistent directory bucket boundary across sub-buckets",
+        "missing directory bucket start block",
     )?
     else {
         return Ok(());
     };
 
-    dir.put_bucket(
-        bucket_start,
-        &crate::core::directory::PrimaryDirBucket {
-            start_block,
-            first_primary_ids,
-        },
-    )
-    .await
+    dir.buckets
+        .put(
+            bucket_start,
+            &crate::core::directory::PrimaryDirBucket {
+                start_block,
+                first_primary_ids,
+            },
+        )
+        .await
+}
+
+fn sub_bucket_start(primary_id: u64) -> u64 {
+    aligned_u64_start(primary_id, crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE)
+}
+
+fn bucket_start(primary_id: u64) -> u64 {
+    aligned_u64_start(primary_id, crate::core::layout::DIRECTORY_BUCKET_SIZE)
 }

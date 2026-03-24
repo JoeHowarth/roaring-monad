@@ -12,8 +12,8 @@ use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::{page_stream_key, stream_page_key, u64_key};
 use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, DIRECTORY_SUB_BUCKET_SIZE,
-    LOG_DIR_BY_BLOCK_TABLE, MAX_LOCAL_ID, OPEN_BITMAP_PAGE_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
+    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, LOG_DIR_BY_BLOCK_TABLE,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, OPEN_BITMAP_PAGE_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
     BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
@@ -179,7 +179,7 @@ fn directory_fragments_exist_for_blocks_crossing_sub_bucket_boundaries() {
             shared_block_record(
                 [1; 32],
                 [0; 32],
-                Some((DIRECTORY_SUB_BUCKET_SIZE - 2, 0)),
+                Some((LOG_DIRECTORY_SUB_BUCKET_SIZE - 2, 0)),
                 Some((0, 0)),
             )
             .encode(),
