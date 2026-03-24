@@ -1,4 +1,4 @@
-use crate::core::clause::Clause;
+use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::traces::types::{Address20, Selector4};
 use crate::traces::view::CallFrameView;
 
@@ -27,9 +27,9 @@ impl TraceFilter {
     }
 
     pub fn has_indexed_clause(&self) -> bool {
-        has_indexed_value_20(&self.from)
-            || has_indexed_value_20(&self.to)
-            || has_indexed_value_4(&self.selector)
+        has_indexed_value(&self.from)
+            || has_indexed_value(&self.to)
+            || has_indexed_value(&self.selector)
             || self.has_value == Some(true)
     }
 }
@@ -47,15 +47,15 @@ impl TraceFilter {
                 return false;
             }
         }
-        if !match_address(&item.from, &self.from) {
+        if !clause_matches(&item.from, &self.from) {
             return false;
         }
-        if !match_optional_address(item.to, &self.to) {
+        if !optional_clause_matches(item.to, &self.to) {
             return false;
         }
         let selector = (item.input.len() >= 4)
             .then(|| <[u8; 4]>::try_from(&item.input[..4]).expect("4-byte selector slice"));
-        if !match_selector(selector, &self.selector) {
+        if !optional_clause_matches(selector, &self.selector) {
             return false;
         }
         true
@@ -67,7 +67,7 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
         Ok(from) => from,
         Err(_) => return false,
     };
-    if !match_address(from, &filter.from) {
+    if !clause_matches(from, &filter.from) {
         return false;
     }
 
@@ -75,7 +75,7 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
         Ok(to) => to,
         Err(_) => return false,
     };
-    if !match_optional_address(to.copied(), &filter.to) {
+    if !optional_clause_matches(to.copied(), &filter.to) {
         return false;
     }
 
@@ -83,7 +83,7 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
         Ok(selector) => selector,
         Err(_) => return false,
     };
-    if !match_selector(selector.copied(), &filter.selector) {
+    if !optional_clause_matches(selector.copied(), &filter.selector) {
         return false;
     }
 
@@ -102,44 +102,6 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
     }
 
     true
-}
-
-fn match_address(address: &[u8; 20], clause: &Option<Clause<[u8; 20]>>) -> bool {
-    match clause {
-        None | Some(Clause::Any) => true,
-        Some(Clause::One(value)) => value == address,
-        Some(Clause::Or(values)) => values.iter().any(|value| value == address),
-    }
-}
-
-fn match_optional_address(address: Option<[u8; 20]>, clause: &Option<Clause<[u8; 20]>>) -> bool {
-    match clause {
-        None | Some(Clause::Any) => true,
-        Some(Clause::One(value)) => address.as_ref() == Some(value),
-        Some(Clause::Or(values)) => address
-            .as_ref()
-            .map(|actual| values.iter().any(|value| value == actual))
-            .unwrap_or(false),
-    }
-}
-
-fn match_selector(selector: Option<[u8; 4]>, clause: &Option<Clause<[u8; 4]>>) -> bool {
-    match clause {
-        None | Some(Clause::Any) => true,
-        Some(Clause::One(value)) => selector.as_ref() == Some(value),
-        Some(Clause::Or(values)) => selector
-            .as_ref()
-            .map(|actual| values.iter().any(|value| value == actual))
-            .unwrap_or(false),
-    }
-}
-
-fn has_indexed_value_20(clause: &Option<Clause<[u8; 20]>>) -> bool {
-    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
-}
-
-fn has_indexed_value_4(clause: &Option<Clause<[u8; 4]>>) -> bool {
-    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
 }
 
 #[cfg(test)]

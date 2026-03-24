@@ -17,6 +17,29 @@ impl<T> Clause<T> {
     }
 }
 
+pub fn clause_matches<T: Eq>(actual: &T, clause: &Option<Clause<T>>) -> bool {
+    match clause {
+        None | Some(Clause::Any) => true,
+        Some(Clause::One(value)) => value == actual,
+        Some(Clause::Or(values)) => values.iter().any(|value| value == actual),
+    }
+}
+
+pub fn optional_clause_matches<T: Eq>(actual: Option<T>, clause: &Option<Clause<T>>) -> bool {
+    match clause {
+        None | Some(Clause::Any) => true,
+        Some(Clause::One(value)) => actual.as_ref() == Some(value),
+        Some(Clause::Or(values)) => actual
+            .as_ref()
+            .map(|actual| values.iter().any(|value| value == actual))
+            .unwrap_or(false),
+    }
+}
+
+pub fn has_indexed_value<T>(clause: &Option<Clause<T>>) -> bool {
+    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
+}
+
 // --- refs ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

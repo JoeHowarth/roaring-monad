@@ -1,4 +1,4 @@
-use crate::core::clause::Clause;
+use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::logs::types::{Address20, Topic32};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -32,72 +32,45 @@ impl LogFilter {
     }
 
     pub fn has_indexed_clause(&self) -> bool {
-        has_indexed_value_20(&self.address)
-            || has_indexed_value_32(&self.topic0)
-            || has_indexed_value_32(&self.topic1)
-            || has_indexed_value_32(&self.topic2)
-            || has_indexed_value_32(&self.topic3)
+        has_indexed_value(&self.address)
+            || has_indexed_value(&self.topic0)
+            || has_indexed_value(&self.topic1)
+            || has_indexed_value(&self.topic2)
+            || has_indexed_value(&self.topic3)
     }
 }
 
 pub fn exact_match(log: &impl crate::logs::log_ref::LogView, filter: &LogFilter) -> bool {
-    if !match_address(log.address(), &filter.address) {
+    if !clause_matches(log.address(), &filter.address) {
         return false;
     }
 
     let tc = log.topic_count();
-    if !match_topic(
+    if !optional_clause_matches(
         if tc > 0 { Some(*log.topic(0)) } else { None },
         &filter.topic0,
     ) {
         return false;
     }
-    if !match_topic(
+    if !optional_clause_matches(
         if tc > 1 { Some(*log.topic(1)) } else { None },
         &filter.topic1,
     ) {
         return false;
     }
-    if !match_topic(
+    if !optional_clause_matches(
         if tc > 2 { Some(*log.topic(2)) } else { None },
         &filter.topic2,
     ) {
         return false;
     }
-    if !match_topic(
+    if !optional_clause_matches(
         if tc > 3 { Some(*log.topic(3)) } else { None },
         &filter.topic3,
     ) {
         return false;
     }
     true
-}
-
-fn match_address(address: &[u8; 20], clause: &Option<Clause<[u8; 20]>>) -> bool {
-    match clause {
-        None | Some(Clause::Any) => true,
-        Some(Clause::One(value)) => value == address,
-        Some(Clause::Or(values)) => values.iter().any(|value| value == address),
-    }
-}
-
-fn match_topic(topic: Option<Topic32>, clause: &Option<Clause<Topic32>>) -> bool {
-    match clause {
-        None | Some(Clause::Any) => true,
-        Some(Clause::One(value)) => topic.as_ref() == Some(value),
-        Some(Clause::Or(values)) => topic
-            .as_ref()
-            .map(|actual| values.iter().any(|value| value == actual))
-            .unwrap_or(false),
-    }
-}
-
-fn has_indexed_value_20(clause: &Option<Clause<[u8; 20]>>) -> bool {
-    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
-}
-
-fn has_indexed_value_32(clause: &Option<Clause<Topic32>>) -> bool {
-    matches!(clause, Some(Clause::One(_) | Clause::Or(_)))
 }
 
 #[cfg(test)]
