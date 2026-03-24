@@ -16,6 +16,20 @@ use crate::tables::Tables;
 use super::planner::PreparedClause;
 pub type ShardBitmapSet = BTreeMap<u64, RoaringBitmap>;
 
+pub struct MaterializerCaches<F> {
+    pub directory_fragment_cache: HashMap<u64, Vec<F>>,
+    pub block_ref_cache: HashMap<u64, BlockRef>,
+}
+
+impl<F> Default for MaterializerCaches<F> {
+    fn default() -> Self {
+        Self {
+            directory_fragment_cache: HashMap::new(),
+            block_ref_cache: HashMap::new(),
+        }
+    }
+}
+
 pub trait QueryId: Copy + Ord {
     fn new(raw: u64) -> Self;
     fn get(self) -> u64;
@@ -326,6 +340,22 @@ where
     };
     cache.insert(block_num, block_ref);
     Ok(block_ref)
+}
+
+pub async fn cached_parent_block_ref<M: MetaStore, B: BlobStore>(
+    cache: &mut HashMap<u64, BlockRef>,
+    tables: &Tables<M, B>,
+    block_num: u64,
+    block_hash: [u8; 32],
+) -> Result<BlockRef> {
+    cached_block_ref_with_fallback(cache, tables, block_num, block_hash, async {
+        Ok(tables
+            .block_records()
+            .get(block_num)
+            .await?
+            .map(|record| record.parent_hash))
+    })
+    .await
 }
 
 pub(crate) async fn execute_indexed_query<M, B, D, Q>(

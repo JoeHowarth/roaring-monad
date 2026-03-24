@@ -1,12 +1,10 @@
-use std::collections::HashMap;
-
 use alloy_rlp::Header;
 
 use crate::core::directory_resolver::{ResolvedPrimaryLocation, resolve_primary_id};
 use crate::core::ids::TraceId;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
-use crate::query::runner::{QueryMaterializer, cached_block_ref_with_fallback};
+use crate::query::runner::{MaterializerCaches, QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
@@ -15,28 +13,15 @@ use crate::traces::types::Trace;
 
 pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
-    directory_fragment_cache: HashMap<u64, Vec<crate::traces::types::DirByBlock>>,
-    block_ref_cache: HashMap<u64, BlockRef>,
+    caches: MaterializerCaches<crate::traces::types::DirByBlock>,
 }
 
 impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
     pub fn new(tables: &'a Tables<M, B>) -> Self {
         Self {
             tables,
-            directory_fragment_cache: HashMap::new(),
-            block_ref_cache: HashMap::new(),
+            caches: MaterializerCaches::default(),
         }
-    }
-
-    pub(crate) async fn load_trace_at(
-        &mut self,
-        block_num: u64,
-        local_ordinal: usize,
-    ) -> Result<Option<Trace>> {
-        self.tables
-            .trace_payloads()
-            .load_trace_at(block_num, local_ordinal)
-            .await
     }
 }
 
@@ -49,7 +34,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, TraceId>(
             self.tables.trace_dir(),
-            &mut self.directory_fragment_cache,
+            &mut self.caches.directory_fragment_cache,
             id,
             TraceDirBucketSpec::bucket_start,
             TraceDirSubBucketSpec::sub_bucket_start,
@@ -68,6 +53,8 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
         let mut items = Vec::with_capacity(run.len());
         for (id, location) in run.iter().copied() {
             let Some(item) = self
+                .tables
+                .trace_payloads()
                 .load_trace_at(location.block_num, location.local_ordinal)
                 .await?
             else {
@@ -79,20 +66,11 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
-        let tables = self.tables;
-        let block_num = item.block_num;
-        cached_block_ref_with_fallback(
-            &mut self.block_ref_cache,
-            tables,
-            block_num,
+        cached_parent_block_ref(
+            &mut self.caches.block_ref_cache,
+            self.tables,
+            item.block_num,
             item.block_hash,
-            async {
-                Ok(tables
-                    .block_records()
-                    .get(block_num)
-                    .await?
-                    .map(|record| record.parent_hash))
-            },
         )
         .await
     }

@@ -5,24 +5,10 @@ use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
 use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
-use crate::query::runner::{QueryMaterializer, cached_block_ref_with_fallback};
+use crate::query::runner::{QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 
 use super::LogMaterializer;
-
-impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
-    pub(crate) async fn load_contiguous_run(
-        &mut self,
-        block_num: u64,
-        start_local_ordinal: usize,
-        end_local_ordinal_inclusive: usize,
-    ) -> Result<Vec<LogRef>> {
-        self.tables
-            .point_log_payloads()
-            .load_contiguous_run(block_num, start_local_ordinal, end_local_ordinal_inclusive)
-            .await
-    }
-}
 
 impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B> {
     type Id = LogId;
@@ -33,7 +19,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, LogId>(
             self.tables.log_dir(),
-            &mut self.directory_fragment_cache,
+            &mut self.caches.directory_fragment_cache,
             id,
             |value| LogDirBucketSpec::bucket_start(value.get()),
             |value| LogDirSubBucketSpec::sub_bucket_start(value.get()),
@@ -50,6 +36,8 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
             return Ok(None);
         };
         Ok(self
+            .tables
+            .point_log_payloads()
             .load_contiguous_run(
                 location.block_num,
                 location.local_ordinal,
@@ -69,6 +57,8 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
         };
         let last = run.last().expect("run must be non-empty").1;
         let run_items = self
+            .tables
+            .point_log_payloads()
             .load_contiguous_run(first.block_num, first.local_ordinal, last.local_ordinal)
             .await?;
         if run_items.len() != run.len() {
@@ -83,20 +73,11 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
-        let tables = self.tables;
-        let block_num = item.block_num();
-        cached_block_ref_with_fallback(
-            &mut self.block_ref_cache,
-            tables,
-            block_num,
+        cached_parent_block_ref(
+            &mut self.caches.block_ref_cache,
+            self.tables,
+            item.block_num(),
             *item.block_hash(),
-            async {
-                Ok(tables
-                    .block_records()
-                    .get(block_num)
-                    .await?
-                    .map(|record| record.parent_hash))
-            },
         )
         .await
     }

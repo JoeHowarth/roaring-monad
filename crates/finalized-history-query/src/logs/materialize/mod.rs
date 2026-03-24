@@ -1,9 +1,7 @@
 mod hydrate;
 
-use std::collections::HashMap;
-
-use crate::core::refs::BlockRef;
 use crate::logs::types::DirByBlock;
+use crate::query::runner::MaterializerCaches;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -12,18 +10,16 @@ pub struct LogMaterializer<'a, M: MetaStore, B: BlobStore> {
     // directory_fragment_cache stays as a per-request HashMap because fragments
     // are assembled from multiple scannable table reads (not a single stored
     // value), and each DirByBlock is only 25 bytes. Not worth BytesCache.
-    directory_fragment_cache: HashMap<u64, Vec<DirByBlock>>,
+    caches: MaterializerCaches<DirByBlock>,
     // block_ref_cache remains because BlockRef is a small Copy type
     // computed from multiple sources, not a direct decode of stored bytes.
-    block_ref_cache: HashMap<u64, BlockRef>,
 }
 
 impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
     pub fn new(tables: &'a Tables<M, B>) -> Self {
         Self {
             tables,
-            directory_fragment_cache: HashMap::new(),
-            block_ref_cache: HashMap::new(),
+            caches: MaterializerCaches::default(),
         }
     }
 }
@@ -383,12 +379,13 @@ mod tests {
                     ..BytesCacheConfig::disabled()
                 },
             );
-            let mut materializer = LogMaterializer::new(&tables);
-            let first = materializer
+            let first = tables
+                .point_log_payloads()
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("first contiguous load");
-            let second = materializer
+            let second = tables
+                .point_log_payloads()
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("second contiguous load");
