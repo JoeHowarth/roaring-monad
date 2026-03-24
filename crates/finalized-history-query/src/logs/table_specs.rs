@@ -1,10 +1,8 @@
 use crate::core::ids::{LogId, LogShard};
 use crate::core::layout::MAX_LOCAL_ID;
+use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::kernel::table_specs::{
-    aligned_u64_start, page_prefix, page_stream_key, stream_page_key, u64_key,
-};
-use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
+use crate::kernel::table_specs::{aligned_u64_start, stream_page_key, u64_key};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub struct BlockLogHeaderSpec;
@@ -33,7 +31,7 @@ impl PointTableSpec for LogDirBucketSpec {
 }
 impl LogDirBucketSpec {
     pub fn bucket_start(global_log_id: impl Into<LogId>) -> u64 {
-        aligned_u64_start(global_log_id.into().get(), LOG_DIRECTORY_BUCKET_SIZE)
+        aligned_u64_start(global_log_id.into().get(), DIRECTORY_BUCKET_SIZE)
     }
 
     pub fn key(bucket_start_log_id: u64) -> Vec<u8> {
@@ -47,7 +45,7 @@ impl PointTableSpec for LogDirSubBucketSpec {
 }
 impl LogDirSubBucketSpec {
     pub fn sub_bucket_start(global_log_id: impl Into<LogId>) -> u64 {
-        aligned_u64_start(global_log_id.into().get(), LOG_DIRECTORY_SUB_BUCKET_SIZE)
+        aligned_u64_start(global_log_id.into().get(), DIRECTORY_SUB_BUCKET_SIZE)
     }
 
     pub fn key(sub_bucket_start_log_id: u64) -> Vec<u8> {
@@ -96,19 +94,6 @@ impl BitmapByBlockSpec {
 pub struct OpenBitmapPageSpec;
 impl ScannableTableSpec for OpenBitmapPageSpec {
     const TABLE: ScannableTableId = ScannableTableId::new("open_bitmap_page");
-}
-impl OpenBitmapPageSpec {
-    pub fn partition(shard: LogShard) -> Vec<u8> {
-        u64_key(shard.get())
-    }
-
-    pub fn page_prefix(page_start_local: u32) -> Vec<u8> {
-        page_prefix(page_start_local)
-    }
-
-    pub fn clustering(page_start_local: u32, stream_id: &str) -> Vec<u8> {
-        page_stream_key(page_start_local, stream_id)
-    }
 }
 
 pub struct BlockLogBlobSpec;
