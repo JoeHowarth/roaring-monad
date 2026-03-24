@@ -296,9 +296,9 @@ Within a single block's trace ingest:
 All trace artifacts are written before the shared `publication_state` head
 advance, consistent with the existing publication ordering invariant.
 
-## Startup
+## State From Head
 
-`TracesFamily::load_startup_state` derives `TraceSequencingState` from the
+`TracesFamily::load_state_from_head` derives `TraceSequencingState` from the
 published `indexed_finalized_head` by reading the shared `block_record` for the
 head block and computing `next_trace_id = traces.first_primary_id + traces.count`.
 

@@ -153,7 +153,8 @@ pub async fn collect_newly_sealed_open_bitmap_pages<M: MetaStore>(
 }
 
 /// Scan the tracking table for markers that are sealed at the current frontier
-/// and return them. Called at startup to repair stale markers left by a crashed writer.
+/// and return them. Used during ownership-transition recovery to repair stale
+/// markers left by a crashed writer.
 pub async fn collect_all_sealed_open_bitmap_pages<M: MetaStore>(
     table: &OpenBitmapPageTable<M>,
     next_primary_id: u64,
@@ -174,9 +175,9 @@ pub async fn collect_all_sealed_open_bitmap_pages<M: MetaStore>(
     Ok(sealed)
 }
 
-/// Repair stale open bitmap page markers at startup. For each family, scans the
-/// tracking table for markers that are sealed at the current frontier, compacts
-/// them (idempotent), and deletes the markers.
+/// Repair stale open bitmap page markers after an ownership transition. For
+/// each family, scan the tracking table for markers that are sealed at the
+/// current frontier, compact them (idempotent), and delete the markers.
 pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     next_log_id: u64,

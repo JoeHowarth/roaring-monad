@@ -30,17 +30,17 @@ use crate::traces::table_specs::TRACE_PRIMARY_DIR_LAYOUT;
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
-pub use types::{Trace, TraceSequencingState, TraceStartupState};
+pub use types::{Trace, TraceSequencingState};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TracesFamily;
 
 impl TracesFamily {
-    pub async fn load_startup_state<M: MetaStore, B: BlobStore>(
+    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
         &self,
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
-    ) -> Result<TraceStartupState> {
+    ) -> Result<TraceSequencingState> {
         let next_trace_id = if indexed_finalized_head == 0 {
             0
         } else {
@@ -55,7 +55,7 @@ impl TracesFamily {
         &self,
         _config: &Config,
         runtime: &Runtime<M, B>,
-        state: &mut TraceStartupState,
+        state: &mut TraceSequencingState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_trace_id = state.next_trace_id.get();

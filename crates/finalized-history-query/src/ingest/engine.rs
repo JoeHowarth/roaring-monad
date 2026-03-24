@@ -38,7 +38,7 @@ where
         let state = session.state();
         let family_states = self
             .families
-            .load_startup_state(runtime, state.indexed_finalized_head)
+            .load_state_from_head(runtime, state.indexed_finalized_head)
             .await?;
 
         if state.continuity.requires_recovery() {

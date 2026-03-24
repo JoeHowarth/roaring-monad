@@ -625,16 +625,15 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
             svc.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = service_status(
+        let status = service_status(
             &writer_runtime,
             &MetaPublicationStore::new(meta.clone()),
             &Families::default(),
-            0,
         )
         .await
         .expect("status after failed trace publication");
-        assert_eq!(plan.head_state.indexed_finalized_head, 0);
-        assert_eq!(plan.trace_state.next_trace_id.get(), 0);
+        assert_eq!(status.head_state.indexed_finalized_head, 0);
+        assert_eq!(status.trace_state.next_trace_id.get(), 0);
 
         injector.clear();
         svc.ingest_finalized_block(block)
@@ -766,15 +765,14 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             takeover_writer.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = service_status(
+        let status = service_status(
             &runtime,
             &MetaPublicationStore::new(Arc::clone(&meta)),
             &Families::default(),
-            0,
         )
         .await
         .expect("post conflict status");
-        assert_eq!(plan.head_state.indexed_finalized_head, 2);
+        assert_eq!(status.head_state.indexed_finalized_head, 2);
         assert!(
             meta.get(
                 BITMAP_PAGE_META_TABLE,

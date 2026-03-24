@@ -18,7 +18,7 @@ The main path:
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
 7. `query_logs` and `query_traces` resolve finalized block windows
 8. each family maps that block window to its primary-ID window
-9. query, startup, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
+9. query, status, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 11. ingest writes seed those same typed caches immediately
 12. the query reads compacted page/sub-bucket summaries when present and falls back to immutable frontier fragments otherwise
@@ -84,9 +84,9 @@ This crate executes queries and ingest. It does not format JSON-RPC responses.
 
 The shared layer owns:
 
-- the explicit family boundary and concrete family registry used by startup and ingest
+- the explicit family boundary and concrete family registry used by status and ingest
 - the shared finalized block envelope used by concrete ingest entrypoints
-- the long-lived runtime that shares store handles and typed tables across query/startup/ingest
+- the long-lived runtime that shares store handles and typed tables across query/status/ingest
 - the multi-family ingest coordinator that validates sequence once and publishes once per batch
 - range resolution against finalized head
 - page and resume metadata types
@@ -133,7 +133,7 @@ The txs layer already participates in the shared family boundary:
 
 - `src/txs/*`
 
-Today txs still provide startup-state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
+Today txs still provide state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
 
 ## Main Types
 
@@ -253,9 +253,8 @@ class LogBlockWindow:
 class ServiceStatus:
     head_state: FinalizedHeadState
     log_state: LogSequencingState
-    tx_state: TxStartupState
-    trace_state: TraceStartupState
-    warm_streams: int
+    tx_state: TxFamilyState
+    trace_state: TraceSequencingState
 ```
 
 ## Persisted Key Schema
@@ -334,7 +333,7 @@ The crate intentionally does not implement:
 
 1. `src/lib.rs` — crate boundary, re-exports
 2. `src/api.rs` — transport-free request/result surface and service export
-3. `src/family.rs` — explicit startup/ingest family boundary under the concrete API
+3. `src/family.rs` — explicit status/ingest family boundary under the concrete API
 
 ### Pass 2: Shared substrate
 
@@ -358,12 +357,12 @@ The crate intentionally does not implement:
 
 ### Pass 3: Logs family
 
-21. `src/logs/types.rs` — logs-owned schema and startup projections
+21. `src/logs/types.rs` — logs-owned schema and sequencing projections
 22. `src/logs/keys.rs` — logs-family key layout and ID constants
 23. `src/logs/table_specs.rs` — logs-family table specs and key helpers
 24. `src/logs/codec.rs` — log, block log header, and block record encodings over shared directory payloads
 25. `src/logs/log_ref.rs` — zero-copy log views
-26. `src/logs/family.rs` — logs-specific startup and per-block ingest handler
+26. `src/logs/family.rs` — logs-specific state derivation and per-block ingest handler
 27. `src/logs/filter.rs` — log matching semantics, indexed clauses
 28. `src/logs/state.rs` — logs-window resolution over shared block records
 29. `src/logs/materialize/` — logs-specific hydration on top of shared ID resolution
@@ -372,7 +371,7 @@ The crate intentionally does not implement:
 
 ### Pass 4: Traces family
 
-29. `src/traces/types.rs` — traces-owned schema and startup projections
+29. `src/traces/types.rs` — traces-owned schema and sequencing projections
 30. `src/traces/keys.rs` — traces-family key layout and stream key helpers
 31. `src/traces/table_specs.rs` — traces-family table specs
 32. `src/traces/codec.rs` — trace block header and block record encodings
@@ -394,12 +393,12 @@ The crate intentionally does not implement:
 42. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
 43. `src/ingest/authority.rs` — `WriteAuthority` contract
 44. `src/ingest/authority/lease/` — lease-backed multi-writer authority
-45. `src/startup.rs` — startup view built on the family boundary
+45. `src/status.rs` — observational service state built on the family boundary
 
 ### Pass 7: End-to-end behavior
 
 46. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-47. `tests/startup.rs` — startup, session reuse, roles
+47. `tests/status.rs` — status, session reuse, roles
 48. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
 49. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
 50. `tests/cache_behavior.rs` — point log payload caching, range read coalescing

@@ -652,7 +652,7 @@
         <aside class="card summary">
           <p>
             The controls below switch between the main operational paths: steady publication,
-            standby startup, lease-expiry takeover, and crash recovery before republish.
+            standby status observation, lease-expiry takeover, and crash recovery before republish.
           </p>
           <div class="summary-grid">
             <div class="stat">
@@ -875,7 +875,7 @@
         },
         {
           id: "standby",
-          label: "Standby Startup",
+          label: "Standby Status",
           title: "A New RW Node Starts While Another Primary Is Healthy",
           steps: [
             {
@@ -883,7 +883,7 @@
               publication: { owner: "writer-a", session: "A1", epoch: 12, head: 121, leasePercent: 83, leaseLabel: "fresh lease held by another session" },
               nodes: [
                 { name: "Node A", role: "reader + writer", status: "primary", note: "healthy primary is still renewing", badge: "Primary" },
-                { name: "Node B", role: "reader + writer", status: "standby", note: "startup path is observational first", badge: "Standby", active: true },
+                { name: "Node B", role: "reader + writer", status: "standby", note: "status path is observational first", badge: "Standby", active: true },
                 { name: "Node C", role: "reader only", status: "reader", note: "query-only traffic continues normally", badge: "Reader" }
               ],
               stages: {
@@ -902,13 +902,13 @@
               visible: ["published head 121", "B follows as a reader"],
               visibleKinds: ["visible", "visible"],
               events: [
-                "Standby startup should not mutate ownership just by planning.",
+                "Standby status observation should not mutate ownership just by planning.",
                 "A fresh lease owned by another session blocks takeover.",
                 "The RW node can catch up and wait without disrupting the primary."
               ],
               callouts: [
                 ["No opportunistic steal", "A new RW node must not take over just because it starts."],
-                ["Read-only planning", "`startup_plan` should remain observational, not ownership-taking."],
+                ["Read-only observation", "`service_status` should remain observational, not ownership-taking."],
                 ["Hot standby model", "RW nodes can be ready without being primary."]
               ]
             },

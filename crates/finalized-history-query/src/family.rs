@@ -5,8 +5,8 @@ use crate::logs::family::LogsFamily;
 use crate::logs::types::{Log, LogSequencingState};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::{TraceStartupState, TracesFamily};
-use crate::txs::{Tx, TxStartupState, TxsFamily};
+use crate::traces::{TraceSequencingState, TracesFamily};
+use crate::txs::{Tx, TxFamilyState, TxsFamily};
 
 pub type Hash32 = [u8; 32];
 
@@ -23,8 +23,8 @@ pub struct FinalizedBlock {
 #[derive(Debug, Clone)]
 pub struct FamilyStates {
     pub logs: LogSequencingState,
-    pub txs: TxStartupState,
-    pub traces: TraceStartupState,
+    pub txs: TxFamilyState,
+    pub traces: TraceSequencingState,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub struct Families {
 }
 
 impl Families {
-    pub async fn load_startup_state<M, B>(
+    pub async fn load_state_from_head<M, B>(
         &self,
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,
@@ -62,15 +62,15 @@ impl Families {
         Ok(FamilyStates {
             logs: self
                 .logs
-                .load_startup_state(runtime, indexed_finalized_head)
+                .load_state_from_head(runtime, indexed_finalized_head)
                 .await?,
             txs: self
                 .txs
-                .load_startup_state(runtime, indexed_finalized_head)
+                .load_state_from_head(runtime, indexed_finalized_head)
                 .await?,
             traces: self
                 .traces
-                .load_startup_state(runtime, indexed_finalized_head)
+                .load_state_from_head(runtime, indexed_finalized_head)
                 .await?,
         })
     }

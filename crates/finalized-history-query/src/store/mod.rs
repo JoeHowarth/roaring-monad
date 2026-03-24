@@ -1,5 +1,6 @@
 pub mod blob;
 pub mod fs;
+pub mod manifest;
 pub mod meta;
 pub mod publication;
 pub mod traits;

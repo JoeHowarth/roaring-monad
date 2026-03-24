@@ -11,25 +11,25 @@ pub struct Tx {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TxStartupState;
+pub struct TxFamilyState;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TxsFamily;
 
 impl TxsFamily {
-    pub async fn load_startup_state<M: MetaStore, B: BlobStore>(
+    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
         &self,
         _runtime: &Runtime<M, B>,
         _indexed_finalized_head: u64,
-    ) -> Result<TxStartupState> {
-        Ok(TxStartupState)
+    ) -> Result<TxFamilyState> {
+        Ok(TxFamilyState)
     }
 
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
         _config: &Config,
         _runtime: &Runtime<M, B>,
-        _state: &mut TxStartupState,
+        _state: &mut TxFamilyState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
         if !block.txs.is_empty() {

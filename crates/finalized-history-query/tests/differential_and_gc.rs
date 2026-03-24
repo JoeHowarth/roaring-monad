@@ -404,7 +404,7 @@ fn differential_query_matches_naive() {
 }
 
 #[test]
-fn recovery_startup_smoke_check() {
+fn recovery_status_smoke_check() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -419,7 +419,6 @@ fn recovery_startup_smoke_check() {
             &runtime,
             &publication_store,
             &Families::default(),
-            0,
         )
         .await
         .expect("service status");

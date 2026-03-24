@@ -8,7 +8,7 @@ primitives into the crate's typed family-facing storage surface.
 
 ## Design Principle
 
-Query, startup, and ingest share one long-lived `Runtime<M, B>` that owns typed
+Query, status, and ingest share one long-lived `Runtime<M, B>` that owns typed
 table readers over cheap-clone store handles. Each table reader owns:
 
 - backend access for that artifact table

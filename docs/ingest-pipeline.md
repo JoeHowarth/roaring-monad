@@ -6,9 +6,9 @@ This document describes the block ingestion flow, artifact writes, compaction tr
 
 ```python
 async def ingest_finalized_blocks(blocks, lease):
-    family_states = load_family_startup_states(lease.indexed_finalized_head)
-    if lease.needs_recovery:
-        repair_stale_open_page_markers(family_states)
+    family_states = load_family_state_from_head(lease.indexed_finalized_head)
+    if lease.continuity in [Fresh, Reacquired]:
+        repair_after_ownership_transition(family_states)
     validate_contiguous_finalized_sequence_and_parent(blocks, lease.indexed_finalized_head)
     for block in blocks:
         await logs.ingest_block(block, family_states.logs)
@@ -28,7 +28,7 @@ Shared ingest helpers under `src/ingest/` now own the generic primary-directory 
 The current family set is:
 
 - logs: fully implemented and persists artifacts
-- txs: startup-state scaffold plus ingest slot, currently rejects non-empty tx payloads
+- txs: state scaffold plus ingest slot, currently rejects non-empty tx payloads
 - traces: fully implemented and persists trace artifacts plus trace indexes
 
 ## Artifact Write Order
@@ -96,9 +96,9 @@ When a stream fragment is written to a page for the first time in a batch, an op
 
 - `api.rs`: transport-free query and ingest entrypoints
 - `block.rs`: shared finalized block envelope carrying block identity plus family payloads
-- `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared startup/write aggregation
-- `runtime.rs`: shared store-handle + typed-table runtime used by query/startup-plan/ingest
-- `ingest/engine.rs`: generic publication orchestration from current head to new tail for the shared finalized block envelope
+- `family.rs`: concrete `Families { logs, txs, traces }` registry plus shared state derivation and per-family ingest aggregation
+- `runtime.rs`: shared store-handle + typed-table runtime used by query/status/ingest
+- `ingest/engine.rs`: generic writer preflight and publication orchestration from current head to new tail for the shared finalized block envelope
 - `ingest/primary_dir.rs`: shared primary-directory fragment persistence and sealed-boundary compaction
 - `ingest/bitmap_pages.rs`: shared stream-page fragment persistence and compacted-page writes
 - `logs/family.rs`: logs-specific sequencing recovery and per-block ingest handler

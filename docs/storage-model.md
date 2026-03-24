@@ -128,7 +128,7 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 `open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
 
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
-- startup repair: to clean up stale markers left by interrupted ingest
+- ownership-transition recovery: to clean up stale markers left by interrupted ingest
 
 ## Logs Block Headers
 

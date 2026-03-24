@@ -39,7 +39,7 @@ See [caching.md](caching.md) for cache design details.
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `assume_empty_streams` | `bool` | `false` | Skip stream fragment loading during startup when streams are known to be empty |
+| `assume_empty_streams` | `bool` | `false` | Skip stream fragment loading when deriving family state from the published head and streams are known to be empty |
 | `stream_append_concurrency` | `usize` | `96` | Maximum concurrent stream fragment write operations |
 
 ## Backend-Specific Config

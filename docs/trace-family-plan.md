@@ -158,12 +158,12 @@ methods.
 - `TraceSequencingState { next_trace_id: TraceId }`
 - derive from `trace_block_record` at the published head, same as logs
 
-#### 4b. Startup integration
+#### 4b. Status integration
 
 - update `FamilyStates` to hold `TraceSequencingState` instead of
-  `TraceStartupState`
-- update `StartupPlan` accordingly
-- update `TracesFamily::load_startup_state` to read `trace_block_record` and
+  the old trace startup alias
+- update `ServiceStatus` accordingly
+- update `TracesFamily::load_state_from_head` to read `trace_block_record` and
   derive `next_trace_id`
 
 ---

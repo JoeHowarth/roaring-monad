@@ -1,6 +1,6 @@
 # Write Authority
 
-This document describes the write-authority model: leases, session-based ownership, service roles, and startup behavior.
+This document describes the write-authority model: leases, session-based ownership, service roles, and writer preflight behavior.
 
 ## Service Roles
 
@@ -101,7 +101,7 @@ When a write-scoped session starts:
 2. if no cached lease exists, acquire ownership from store
 3. if a cached lease exists, re-check and renew it against the current upstream observation
 4. if cached state is stale but same-writer reacquire is possible, drop the cache and reacquire internally
-5. return a session holding `AuthorityState { indexed_finalized_head }`
+5. return a session holding `AuthorityState { indexed_finalized_head, continuity }`
 
 ### Renewal
 
@@ -138,9 +138,9 @@ async def ingest_finalized_blocks(owner_id, observed_upstream_finalized_block, b
     session = begin_write(
         observed_upstream_finalized_block
     )
-    family_states = load_family_startup_state(session.state().indexed_finalized_head)
-    if session.state().needs_recovery:
-        repair_stale_open_page_markers(family_states)
+    family_states = load_family_state_from_head(session.state().indexed_finalized_head)
+    if session.state().continuity in [Fresh, Reacquired]:
+        repair_after_ownership_transition(family_states)
     validate_sequence(blocks, session.state().indexed_finalized_head)
     ingest(blocks, family_states)
     publish(blocks[-1].block_num)
@@ -160,7 +160,7 @@ async def reader_only_status():
 `service_status(...)` is observational only:
 
 - loads `publication_state`
-- derives `next_log_id`
+- derives family state from the published head
 - never mutates ownership
 
 ## Takeover Flow

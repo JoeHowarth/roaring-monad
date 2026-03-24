@@ -23,7 +23,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 pub struct LogsFamily;
 
 impl LogsFamily {
-    pub async fn load_startup_state<M: MetaStore, B: BlobStore>(
+    pub async fn load_state_from_head<M: MetaStore, B: BlobStore>(
         &self,
         runtime: &Runtime<M, B>,
         indexed_finalized_head: u64,

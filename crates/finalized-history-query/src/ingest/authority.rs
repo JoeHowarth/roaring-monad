@@ -385,9 +385,10 @@ impl<P: PublicationStore> LeaseAuthority<P> {
                     .await?,
                 continuity: WriteContinuity::Continuous,
             },
-            None => self
-                .acquire_publication_with_session(observed_upstream_finalized_block)
-                .await?,
+            None => {
+                self.acquire_publication_with_session(observed_upstream_finalized_block)
+                    .await?
+            }
         };
         *guard = Some(outcome.lease);
         Ok(outcome)

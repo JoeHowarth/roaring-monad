@@ -281,7 +281,7 @@ family payloads.
 
 The family boundary should support:
 
-- family-owned startup state
+- family-owned state derived from the published head
 - family-owned per-block ingest behavior
 - family-owned filter/index/materialization logic
 - family-owned zero-copy extraction over authoritative blobs

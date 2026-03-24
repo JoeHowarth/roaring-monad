@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::family::FamilyStates;
 use crate::ingest::open_pages::repair_sealed_open_bitmap_pages;
-use crate::tables::Tables;
 use crate::store::traits::{BlobStore, MetaStore};
+use crate::tables::Tables;
 
 /// Repair mutable ingest state that may have been left behind by a previous
 /// writer session before resuming ingest from the published head.

@@ -11,18 +11,10 @@ use tokio::time::{Duration, sleep};
 
 use crate::core::state::BLOCK_RECORD_TABLE;
 use crate::error::{Error, Result};
-use crate::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BITMAP_PAGE_META_TABLE, BLOCK_HASH_INDEX_TABLE, BLOCK_LOG_HEADER_TABLE,
-    LOG_DIR_BUCKET_TABLE, LOG_DIR_BY_BLOCK_TABLE, LOG_DIR_SUB_BUCKET_TABLE, OPEN_BITMAP_PAGE_TABLE,
-};
+use crate::store::manifest::{REQUIRED_POINT_TABLES, REQUIRED_SCANNABLE_TABLES};
 use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{
     DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId, TableId,
-};
-use crate::traces::keys::{
-    BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE, TRACE_BITMAP_PAGE_META_TABLE,
-    TRACE_DIR_BUCKET_TABLE, TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE,
-    TRACE_OPEN_BITMAP_PAGE_TABLE,
 };
 
 const DEFAULT_FENCE_KEY: &str = "global";
@@ -143,6 +135,15 @@ struct PointTableSchema {
 }
 
 impl PointTableSchema {
+    const fn named(id: TableId) -> Self {
+        Self {
+            id,
+            table_name: id.as_str(),
+        }
+    }
+}
+
+impl PointTableSchema {
     async fn ensure(self, session: &Session) -> Result<()> {
         session
             .query_unpaged(
@@ -224,6 +225,15 @@ impl PointTableSchema {
 struct ScannableTableSchema {
     id: ScannableTableId,
     table_name: &'static str,
+}
+
+impl ScannableTableSchema {
+    const fn named(id: ScannableTableId) -> Self {
+        Self {
+            id,
+            table_name: id.as_str(),
+        }
+    }
 }
 
 impl ScannableTableSchema {
@@ -310,78 +320,27 @@ impl ScannableTableSchema {
     }
 }
 
-const POINT_TABLE_SCHEMAS: [PointTableSchema; 11] = [
-    PointTableSchema {
-        id: PUBLICATION_STATE_TABLE,
-        table_name: "publication_state",
-    },
-    PointTableSchema {
-        id: BLOCK_RECORD_TABLE,
-        table_name: "block_record",
-    },
-    PointTableSchema {
-        id: BLOCK_LOG_HEADER_TABLE,
-        table_name: "block_log_header",
-    },
-    PointTableSchema {
-        id: BLOCK_HASH_INDEX_TABLE,
-        table_name: "block_hash_index",
-    },
-    PointTableSchema {
-        id: LOG_DIR_BUCKET_TABLE,
-        table_name: "log_dir_bucket",
-    },
-    PointTableSchema {
-        id: LOG_DIR_SUB_BUCKET_TABLE,
-        table_name: "log_dir_sub_bucket",
-    },
-    PointTableSchema {
-        id: BITMAP_PAGE_META_TABLE,
-        table_name: "bitmap_page_meta",
-    },
-    PointTableSchema {
-        id: BLOCK_TRACE_HEADER_TABLE,
-        table_name: "block_trace_header",
-    },
-    PointTableSchema {
-        id: TRACE_DIR_BUCKET_TABLE,
-        table_name: "trace_dir_bucket",
-    },
-    PointTableSchema {
-        id: TRACE_DIR_SUB_BUCKET_TABLE,
-        table_name: "trace_dir_sub_bucket",
-    },
-    PointTableSchema {
-        id: TRACE_BITMAP_PAGE_META_TABLE,
-        table_name: "trace_bitmap_page_meta",
-    },
+const POINT_TABLE_SCHEMAS: [PointTableSchema; REQUIRED_POINT_TABLES.len()] = [
+    PointTableSchema::named(REQUIRED_POINT_TABLES[0]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[1]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[2]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[3]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[4]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[5]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[6]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[7]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[8]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[9]),
+    PointTableSchema::named(REQUIRED_POINT_TABLES[10]),
 ];
 
-const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; 6] = [
-    ScannableTableSchema {
-        id: LOG_DIR_BY_BLOCK_TABLE,
-        table_name: "log_dir_by_block",
-    },
-    ScannableTableSchema {
-        id: BITMAP_BY_BLOCK_TABLE,
-        table_name: "bitmap_by_block",
-    },
-    ScannableTableSchema {
-        id: OPEN_BITMAP_PAGE_TABLE,
-        table_name: "open_bitmap_page",
-    },
-    ScannableTableSchema {
-        id: TRACE_DIR_BY_BLOCK_TABLE,
-        table_name: "trace_dir_by_block",
-    },
-    ScannableTableSchema {
-        id: TRACE_BITMAP_BY_BLOCK_TABLE,
-        table_name: "trace_bitmap_by_block",
-    },
-    ScannableTableSchema {
-        id: TRACE_OPEN_BITMAP_PAGE_TABLE,
-        table_name: "trace_open_bitmap_page",
-    },
+const SCANNABLE_TABLE_SCHEMAS: [ScannableTableSchema; REQUIRED_SCANNABLE_TABLES.len()] = [
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[0]),
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[1]),
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[2]),
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[3]),
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[4]),
+    ScannableTableSchema::named(REQUIRED_SCANNABLE_TABLES[5]),
 ];
 
 impl ScyllaMetaStore {

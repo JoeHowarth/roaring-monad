@@ -245,7 +245,7 @@ fn ingest_rechecks_observation_for_a_cached_writer() {
 }
 
 #[test]
-fn reader_only_plan_is_observational_and_ingest_is_rejected() {
+fn reader_only_status_is_observational_and_ingest_is_rejected() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -267,7 +267,7 @@ fn reader_only_plan_is_observational_and_ingest_is_rejected() {
         .expect("seed block meta");
 
         let svc = FinalizedHistoryService::new_reader_only(Config::default(), meta.clone(), blob);
-        let plan = svc.status().await.expect("reader-only status");
+        let status = svc.status().await.expect("reader-only status");
         let state = publication_store
             .load()
             .await
@@ -278,7 +278,7 @@ fn reader_only_plan_is_observational_and_ingest_is_rejected() {
             .await
             .expect_err("reader-only ingest should fail");
 
-        assert_eq!(plan.head_state.indexed_finalized_head, 3);
+        assert_eq!(status.head_state.indexed_finalized_head, 3);
         assert_eq!(state.owner_id, 11);
         assert_eq!(state.session_id, [11u8; 16]);
         assert!(matches!(err, Error::ReadOnlyMode(_)));
@@ -317,7 +317,7 @@ fn continuous_writer_ingest_skips_open_page_repair_scans() {
 }
 
 #[test]
-fn startup_plan_should_not_take_publication_ownership() {
+fn status_does_not_take_publication_ownership() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -335,7 +335,7 @@ fn startup_plan_should_not_take_publication_ownership() {
             blob.clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let _ = service_status(&runtime, &publication_store, &Families::default(), 0)
+        let _ = service_status(&runtime, &publication_store, &Families::default())
             .await
             .expect("status should succeed");
 
@@ -417,7 +417,7 @@ fn service_can_publish_a_contiguous_batch() {
 }
 
 #[test]
-fn startup_recovers_trace_state_from_published_head_only() {
+fn status_recovers_trace_state_from_published_head_only() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -452,17 +452,17 @@ fn startup_recovers_trace_state_from_published_head_only() {
             blob,
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = service_status(&runtime, &publication_store, &Families::default(), 0)
+        let status = service_status(&runtime, &publication_store, &Families::default())
             .await
             .expect("status");
 
-        assert_eq!(plan.head_state.indexed_finalized_head, 2);
-        assert_eq!(plan.trace_state.next_trace_id.get(), 43);
+        assert_eq!(status.head_state.indexed_finalized_head, 2);
+        assert_eq!(status.trace_state.next_trace_id.get(), 43);
     });
 }
 
 #[test]
-fn startup_rejects_missing_trace_records_for_nonzero_published_head() {
+fn status_rejects_missing_trace_records_for_nonzero_published_head() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let blob = InMemoryBlobStore::default();
@@ -488,7 +488,7 @@ fn startup_rejects_missing_trace_records_for_nonzero_published_head() {
             blob,
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let err = service_status(&runtime, &publication_store, &Families::default(), 0)
+        let err = service_status(&runtime, &publication_store, &Families::default())
             .await
             .expect_err("status should fail closed when published trace head metadata is missing");
 

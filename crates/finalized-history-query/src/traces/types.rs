@@ -76,5 +76,3 @@ pub struct StreamBitmapMeta {
 pub struct TraceSequencingState {
     pub next_trace_id: TraceId,
 }
-
-pub type TraceStartupState = TraceSequencingState;
