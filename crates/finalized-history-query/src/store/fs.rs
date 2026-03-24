@@ -714,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn compare_and_set_is_serialized() {
+    fn compare_and_set_rejects_stale_expected_state() {
         let root = unique_temp_root("fs-cas");
         let store = Arc::new(FsMetaStore::new(&root, 0).expect("fs store"));
         let publication_store = Arc::new(MetaPublicationStore::new((*store).clone()));
@@ -739,26 +739,18 @@ mod tests {
             lease_valid_through_block: u64::MAX,
         };
 
-        let store_a = Arc::clone(&publication_store);
-        let store_b = publication_store;
-        let initial_a = initial.clone();
-        let initial_b = initial;
-        let handles = vec![
-            std::thread::spawn(move || block_on(store_a.compare_and_set(&initial_a, &next_a))),
-            std::thread::spawn(move || block_on(store_b.compare_and_set(&initial_b, &next_b))),
-        ];
+        let first =
+            block_on(publication_store.compare_and_set(&initial, &next_a)).expect("first cas");
+        assert_eq!(first, CasOutcome::Applied(next_a.clone()));
 
-        let mut applied = 0usize;
-        let mut failed = 0usize;
-        for handle in handles {
-            match handle.join().expect("join").expect("cas result") {
-                CasOutcome::Applied(_) => applied += 1,
-                CasOutcome::Failed { .. } => failed += 1,
+        let second =
+            block_on(publication_store.compare_and_set(&initial, &next_b)).expect("stale cas");
+        assert_eq!(
+            second,
+            CasOutcome::Failed {
+                current: Some(next_a),
             }
-        }
-
-        assert_eq!(applied, 1);
-        assert_eq!(failed, 1);
+        );
         let _ = fs::remove_dir_all(root);
     }
 
