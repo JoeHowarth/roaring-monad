@@ -9,6 +9,7 @@ use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder,
 };
 use finalized_history_query::config::Config;
+use finalized_history_query::core::directory_resolver::ResolvedPrimaryLocation;
 use finalized_history_query::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use finalized_history_query::core::refs::BlockRef;
 use finalized_history_query::kernel::codec::StorageCodec;
@@ -164,16 +165,6 @@ pub struct StubPrimary {
     pub block_ref: BlockRef,
 }
 
-impl finalized_history_query::query::runner::CandidateLocation for StubPrimary {
-    fn block_num(self) -> u64 {
-        self.block_ref.number
-    }
-
-    fn local_ordinal(self) -> usize {
-        self.id.local().get() as usize
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct PassThroughMaterializer {
     block_span: u64,
@@ -190,27 +181,37 @@ impl PassThroughMaterializer {
 impl QueryMaterializer for PassThroughMaterializer {
     type Filter = ();
     type Id = LogId;
-    type Location = StubPrimary;
     type Item = StubPrimary;
     type Output = StubPrimary;
 
-    async fn resolve_id(&mut self, id: LogId) -> Result<Option<Self::Location>> {
+    async fn resolve_id(&mut self, id: LogId) -> Result<Option<ResolvedPrimaryLocation>> {
         let block_num = (id.get() / self.block_span).saturating_add(1);
-        Ok(Some(StubPrimary {
-            id,
-            block_ref: BlockRef {
-                number: block_num,
-                hash: bench_hash(block_num),
-                parent_hash: bench_hash(block_num.saturating_sub(1)),
-            },
+        Ok(Some(ResolvedPrimaryLocation {
+            block_num,
+            local_ordinal: id.local().get() as usize,
         }))
     }
 
     async fn load_run(
         &mut self,
-        run: &[(Self::Id, Self::Location)],
+        run: &[(Self::Id, ResolvedPrimaryLocation)],
     ) -> Result<Vec<(Self::Id, Self::Item)>> {
-        Ok(run.to_vec())
+        Ok(run
+            .iter()
+            .map(|(id, location)| {
+                (
+                    *id,
+                    StubPrimary {
+                        id: *id,
+                        block_ref: BlockRef {
+                            number: location.block_num,
+                            hash: bench_hash(location.block_num),
+                            parent_hash: bench_hash(location.block_num.saturating_sub(1)),
+                        },
+                    },
+                )
+            })
+            .collect())
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {

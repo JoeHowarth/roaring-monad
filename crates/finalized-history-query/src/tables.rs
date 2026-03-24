@@ -76,6 +76,47 @@ impl<M: MetaStore> PrimaryDirTables<M> {
             .put_raw(partition, clustering, fragment)
             .await
     }
+
+    pub async fn persist_block_fragment(
+        &self,
+        block_num: u64,
+        first_primary_id: u64,
+        count: u32,
+        sub_bucket_start: impl Fn(u64) -> u64,
+        next_sub_bucket_delta: u64,
+        partition: impl Fn(u64) -> Vec<u8>,
+        clustering: impl Fn(u64) -> Vec<u8>,
+    ) -> Result<()> {
+        let fragment = PrimaryDirFragment {
+            block_num,
+            first_primary_id,
+            end_primary_id_exclusive: first_primary_id.saturating_add(u64::from(count)),
+        };
+
+        let mut current_sub_bucket_start = sub_bucket_start(first_primary_id);
+        let last_sub_bucket_start = if count == 0 {
+            current_sub_bucket_start
+        } else {
+            sub_bucket_start(fragment.end_primary_id_exclusive.saturating_sub(1))
+        };
+        let clustering = clustering(block_num);
+
+        loop {
+            self.put_fragment(
+                partition(current_sub_bucket_start),
+                clustering.clone(),
+                &fragment,
+            )
+            .await?;
+            if current_sub_bucket_start == last_sub_bucket_start {
+                break;
+            }
+            current_sub_bucket_start =
+                current_sub_bucket_start.saturating_add(next_sub_bucket_delta);
+        }
+
+        Ok(())
+    }
 }
 
 pub struct Tables<M: MetaStore, B: BlobStore> {

@@ -5,8 +5,8 @@ use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::kernel::codec::StorageCodec;
 use crate::logs::keys::LOG_DIRECTORY_SUB_BUCKET_SIZE;
-use crate::logs::table_specs::LogDirSubBucketSpec;
-use crate::logs::types::{BlockLogHeader, BlockRecord, DirByBlock, Log};
+use crate::logs::table_specs::{LogDirByBlockSpec, LogDirSubBucketSpec};
+use crate::logs::types::{BlockLogHeader, BlockRecord, Log};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -48,35 +48,18 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
     first_log_id: u64,
     count: u32,
 ) -> Result<()> {
-    let fragment = DirByBlock {
-        block_num,
-        first_primary_id: first_log_id,
-        end_primary_id_exclusive: first_log_id.saturating_add(u64::from(count)),
-    };
-
-    let mut sub_bucket_start = LogDirSubBucketSpec::sub_bucket_start(first_log_id);
-    let last_sub_bucket_start = if count == 0 {
-        sub_bucket_start
-    } else {
-        LogDirSubBucketSpec::sub_bucket_start(fragment.end_primary_id_exclusive.saturating_sub(1))
-    };
-
-    loop {
-        tables
-            .log_dir()
-            .put_fragment(
-                LogDirSubBucketSpec::key(sub_bucket_start),
-                crate::logs::table_specs::LogDirByBlockSpec::clustering(block_num),
-                &fragment,
-            )
-            .await?;
-        if sub_bucket_start == last_sub_bucket_start {
-            break;
-        }
-        sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
-    }
-
-    Ok(())
+    tables
+        .log_dir()
+        .persist_block_fragment(
+            block_num,
+            first_log_id,
+            count,
+            LogDirSubBucketSpec::sub_bucket_start,
+            LOG_DIRECTORY_SUB_BUCKET_SIZE,
+            LogDirByBlockSpec::partition,
+            LogDirByBlockSpec::clustering,
+        )
+        .await
 }
 
 fn encode_block_log_blob(logs: &[Log]) -> Result<(Bytes, BlockLogHeader)> {

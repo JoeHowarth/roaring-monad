@@ -7,7 +7,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
-use crate::traces::types::{BlockTraceHeader, DirByBlock, TraceBlockRecord};
+use crate::traces::types::{BlockTraceHeader, TraceBlockRecord};
 use alloy_rlp::{Header, PayloadView};
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
@@ -55,35 +55,18 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
     first_trace_id: u64,
     count: u32,
 ) -> Result<()> {
-    let fragment = DirByBlock {
-        block_num,
-        first_primary_id: first_trace_id,
-        end_primary_id_exclusive: first_trace_id.saturating_add(u64::from(count)),
-    };
-
-    let mut sub_bucket_start = TraceDirSubBucketSpec::sub_bucket_start(first_trace_id);
-    let last_sub_bucket_start = if count == 0 {
-        sub_bucket_start
-    } else {
-        TraceDirSubBucketSpec::sub_bucket_start(fragment.end_primary_id_exclusive.saturating_sub(1))
-    };
-
-    loop {
-        tables
-            .trace_dir()
-            .put_fragment(
-                TraceDirByBlockSpec::partition(sub_bucket_start),
-                TraceDirByBlockSpec::clustering(block_num),
-                &fragment,
-            )
-            .await?;
-        if sub_bucket_start == last_sub_bucket_start {
-            break;
-        }
-        sub_bucket_start = sub_bucket_start.saturating_add(TRACE_DIRECTORY_SUB_BUCKET_SIZE);
-    }
-
-    Ok(())
+    tables
+        .trace_dir()
+        .persist_block_fragment(
+            block_num,
+            first_trace_id,
+            count,
+            TraceDirSubBucketSpec::sub_bucket_start,
+            TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+            TraceDirByBlockSpec::partition,
+            TraceDirByBlockSpec::clustering,
+        )
+        .await
 }
 
 fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize)> {
@@ -151,4 +134,51 @@ fn empty_trace_header() -> BlockTraceHeader {
 
 fn offset_in(root: &[u8], slice: &[u8]) -> u64 {
     crate::core::offsets::byte_offset_in(root, slice)
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::executor::block_on;
+
+    use super::persist_trace_dir_by_block;
+    use crate::kernel::codec::StorageCodec;
+    use crate::store::blob::InMemoryBlobStore;
+    use crate::store::meta::InMemoryMetaStore;
+    use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
+    use crate::traces::table_specs::TraceDirByBlockSpec;
+    use crate::traces::types::DirByBlock;
+    use crate::{store::traits::MetaStore, tables::Tables};
+
+    #[test]
+    fn persist_trace_dir_by_block_writes_each_spanned_sub_bucket() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
+            let first_trace_id = TRACE_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let count = 7u32;
+
+            persist_trace_dir_by_block(&tables, 700, first_trace_id, count)
+                .await
+                .expect("persist fragments");
+
+            for sub_bucket_start in [0, TRACE_DIRECTORY_SUB_BUCKET_SIZE] {
+                let fragment = meta
+                    .scan_get(
+                        crate::traces::keys::TRACE_DIR_BY_BLOCK_TABLE,
+                        &TraceDirByBlockSpec::partition(sub_bucket_start),
+                        &TraceDirByBlockSpec::clustering(700),
+                    )
+                    .await
+                    .expect("load directory fragment")
+                    .expect("directory fragment present");
+                let fragment = DirByBlock::decode(&fragment.value).expect("decode directory");
+                assert_eq!(fragment.block_num, 700);
+                assert_eq!(fragment.first_primary_id, first_trace_id);
+                assert_eq!(
+                    fragment.end_primary_id_exclusive,
+                    first_trace_id + u64::from(count)
+                );
+            }
+        });
+    }
 }
