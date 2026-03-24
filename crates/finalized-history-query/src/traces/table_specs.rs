@@ -1,7 +1,5 @@
-use crate::core::ids::TraceId;
-use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::kernel::table_specs::{aligned_u64_start, stream_page_key, u64_key};
+use crate::kernel::table_specs::{stream_page_key, u64_key};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
@@ -23,27 +21,16 @@ pub struct TraceDirBucketSpec;
 impl PointTableSpec for TraceDirBucketSpec {
     const TABLE: TableId = TRACE_DIR_BUCKET_TABLE;
 }
-impl TraceDirBucketSpec {
-    pub fn bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        aligned_u64_start(global_trace_id.into().get(), DIRECTORY_BUCKET_SIZE)
-    }
-}
 
 pub struct TraceDirSubBucketSpec;
 impl PointTableSpec for TraceDirSubBucketSpec {
     const TABLE: TableId = TRACE_DIR_SUB_BUCKET_TABLE;
-}
-impl TraceDirSubBucketSpec {
-    pub fn sub_bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        aligned_u64_start(global_trace_id.into().get(), DIRECTORY_SUB_BUCKET_SIZE)
-    }
 }
 
 pub struct TraceDirByBlockSpec;
 impl ScannableTableSpec for TraceDirByBlockSpec {
     const TABLE: ScannableTableId = TRACE_DIR_BY_BLOCK_TABLE;
 }
-impl TraceDirByBlockSpec {}
 
 pub struct TraceBitmapPageMetaSpec;
 impl PointTableSpec for TraceBitmapPageMetaSpec {
