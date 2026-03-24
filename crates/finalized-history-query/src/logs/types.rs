@@ -1,3 +1,4 @@
+use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::ids::LogId;
 use crate::core::state::BlockRecordLike;
 use crate::family::Hash32;
@@ -17,18 +18,8 @@ pub struct Log {
     pub block_hash: Hash32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct DirBucket {
-    pub start_block: u64,
-    pub first_log_ids: Vec<u64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct DirByBlock {
-    pub block_num: u64,
-    pub first_log_id: u64,
-    pub end_log_id_exclusive: u64,
-}
+pub type DirBucket = PrimaryDirBucket;
+pub type DirByBlock = PrimaryDirFragment;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct BlockLogHeader {

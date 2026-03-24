@@ -695,11 +695,11 @@ pub fn seed_materialized_blocks(
                 .first()
                 .map(|(block_num, _, _)| *block_num)
                 .expect("bucket must contain at least one block");
-            let mut first_log_ids = entries
+            let mut first_primary_ids = entries
                 .iter()
                 .map(|(_, first_log_id, _)| *first_log_id)
                 .collect::<Vec<_>>();
-            first_log_ids.push(
+            first_primary_ids.push(
                 entries
                     .last()
                     .map(|(_, _, end_exclusive)| *end_exclusive)
@@ -711,7 +711,7 @@ pub fn seed_materialized_blocks(
                 &LogDirBucketSpec::key(bucket_start),
                 DirBucket {
                     start_block,
-                    first_log_ids,
+                    first_primary_ids,
                 }
                 .encode(),
             )

@@ -1,3 +1,4 @@
+pub mod directory;
 pub mod ids;
 pub mod layout;
 pub mod offsets;

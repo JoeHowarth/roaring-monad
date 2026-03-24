@@ -1,3 +1,4 @@
+use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::core::state::BlockRecordLike;
@@ -27,18 +28,8 @@ pub struct Trace {
     pub depth: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
-pub struct DirBucket {
-    pub start_block: u64,
-    pub first_trace_ids: Vec<u64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct DirByBlock {
-    pub block_num: u64,
-    pub first_trace_id: u64,
-    pub end_trace_id_exclusive: u64,
-}
+pub type DirBucket = PrimaryDirBucket;
+pub type DirByBlock = PrimaryDirFragment;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct BlockTraceHeader {

@@ -150,13 +150,13 @@ mod tests {
             assert_eq!(
                 DirByBlock::decode(&fragment1.value)
                     .expect("decode fragment1")
-                    .end_log_id_exclusive,
+                    .end_primary_id_exclusive,
                 first_log_id + count as u64
             );
             assert_eq!(
                 DirBucket::decode(&sub_bucket.value)
                     .expect("decode sub bucket")
-                    .first_log_ids,
+                    .first_primary_ids,
                 vec![first_log_id, first_log_id + count as u64]
             );
         });
@@ -294,7 +294,7 @@ mod tests {
             let bucket = DirBucket::decode(&bucket.value).expect("decode directory bucket");
             assert_eq!(bucket.start_block, 700);
             assert_eq!(
-                bucket.first_log_ids,
+                bucket.first_primary_ids,
                 vec![first_log_id, first_log_id + count as u64]
             );
         });

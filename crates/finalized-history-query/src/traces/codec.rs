@@ -3,63 +3,7 @@ use bytes::Bytes;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::codec::fixed_codec;
-use crate::traces::types::{
-    BlockTraceHeader, DirBucket, DirByBlock, StreamBitmapMeta, TraceBlockRecord,
-};
-
-impl StorageCodec for DirBucket {
-    fn encode(&self) -> Bytes {
-        assert!(u32::try_from(self.first_trace_ids.len()).is_ok());
-        let mut out = Vec::with_capacity(1 + 8 + 4 + self.first_trace_ids.len() * 8);
-        out.push(1);
-        out.extend_from_slice(&self.start_block.to_be_bytes());
-        out.extend_from_slice(&(self.first_trace_ids.len() as u32).to_be_bytes());
-        for first_trace_id in &self.first_trace_ids {
-            out.extend_from_slice(&first_trace_id.to_be_bytes());
-        }
-        Bytes::from(out)
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 1 + 8 + 4 + 8 {
-            return Err(Error::Decode("trace directory bucket too short"));
-        }
-        if bytes[0] != 1 {
-            return Err(Error::Decode("unsupported trace directory bucket version"));
-        }
-        let start_block = u64::from_be_bytes(
-            bytes[1..9]
-                .try_into()
-                .map_err(|_| Error::Decode("trace directory bucket start_block"))?,
-        );
-        let count = u32::from_be_bytes(
-            bytes[9..13]
-                .try_into()
-                .map_err(|_| Error::Decode("trace directory bucket count"))?,
-        ) as usize;
-        if count < 2 {
-            return Err(Error::Decode("trace directory bucket missing sentinel"));
-        }
-        let expected_len = 1 + 8 + 4 + count * 8;
-        if bytes.len() != expected_len {
-            return Err(Error::Decode("invalid trace directory bucket length"));
-        }
-        let mut first_trace_ids = Vec::with_capacity(count);
-        let mut pos = 13usize;
-        for _ in 0..count {
-            first_trace_ids.push(u64::from_be_bytes(
-                bytes[pos..pos + 8]
-                    .try_into()
-                    .map_err(|_| Error::Decode("trace directory bucket first_trace_id"))?,
-            ));
-            pos += 8;
-        }
-        Ok(Self {
-            start_block,
-            first_trace_ids,
-        })
-    }
-}
+use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta, TraceBlockRecord};
 
 impl StorageCodec for BlockTraceHeader {
     fn encode(&self) -> Bytes {
@@ -136,19 +80,6 @@ impl StorageCodec for BlockTraceHeader {
 }
 
 fixed_codec! {
-    impl DirByBlock {
-        length_error = "invalid trace_dir fragment length";
-        version = 1;
-        version_error = "unsupported trace_dir fragment version";
-        fields {
-            block_num: u64,
-            first_trace_id: u64,
-            end_trace_id_exclusive: u64,
-        }
-    }
-}
-
-fixed_codec! {
     impl StreamBitmapMeta {
         length_error = "invalid trace stream bitmap meta length";
         version = 1;
@@ -178,17 +109,18 @@ fixed_codec! {
 mod tests {
     use super::*;
     use crate::core::offsets::BucketedOffsets;
+    use crate::traces::types::DirBucket;
 
     #[test]
     fn roundtrip_large_trace_dir_bucket() {
         let count = (u16::MAX as usize) + 2;
-        let mut first_trace_ids = Vec::with_capacity(count);
+        let mut first_primary_ids = Vec::with_capacity(count);
         for i in 0..count {
-            first_trace_ids.push(i as u64);
+            first_primary_ids.push(i as u64);
         }
         let bucket = DirBucket {
             start_block: 123,
-            first_trace_ids,
+            first_primary_ids,
         };
 
         let enc = bucket.encode();

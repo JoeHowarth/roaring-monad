@@ -57,15 +57,15 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let fragment = DirByBlock {
         block_num,
-        first_trace_id,
-        end_trace_id_exclusive: first_trace_id.saturating_add(u64::from(count)),
+        first_primary_id: first_trace_id,
+        end_primary_id_exclusive: first_trace_id.saturating_add(u64::from(count)),
     };
 
     let mut sub_bucket_start = TraceDirSubBucketSpec::sub_bucket_start(first_trace_id);
     let last_sub_bucket_start = if count == 0 {
         sub_bucket_start
     } else {
-        TraceDirSubBucketSpec::sub_bucket_start(fragment.end_trace_id_exclusive.saturating_sub(1))
+        TraceDirSubBucketSpec::sub_bucket_start(fragment.end_primary_id_exclusive.saturating_sub(1))
     };
 
     loop {

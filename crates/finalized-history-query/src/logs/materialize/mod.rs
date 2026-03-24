@@ -133,7 +133,7 @@ mod tests {
                 &LogDirBucketSpec::key(0),
                 DirBucket {
                     start_block: 700,
-                    first_log_ids: vec![11, 13],
+                    first_primary_ids: vec![11, 13],
                 }
                 .encode(),
                 PutCond::Any,
@@ -170,8 +170,8 @@ mod tests {
                 &LogDirByBlockSpec::clustering(700),
                 DirByBlock {
                     block_num: 700,
-                    first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
+                    first_primary_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                    end_primary_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
                 }
                 .encode(),
                 PutCond::Any,
@@ -208,7 +208,7 @@ mod tests {
                 &LogDirBucketSpec::key(LogDirBucketSpec::bucket_start(log_id.get())),
                 DirBucket {
                     start_block: 700,
-                    first_log_ids: vec![
+                    first_primary_ids: vec![
                         first_log_id,
                         first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 10,
                     ],
@@ -266,8 +266,8 @@ mod tests {
                 &LogDirByBlockSpec::clustering(block_num),
                 DirByBlock {
                     block_num,
-                    first_log_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    end_log_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
+                    first_primary_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+                    end_primary_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
                 }
                 .encode(),
                 PutCond::Any,
@@ -431,18 +431,18 @@ mod tests {
             for fragment in [
                 DirByBlock {
                     block_num: 703,
-                    first_log_id: sub_bucket_start + 7,
-                    end_log_id_exclusive: sub_bucket_start + 9,
+                    first_primary_id: sub_bucket_start + 7,
+                    end_primary_id_exclusive: sub_bucket_start + 9,
                 },
                 DirByBlock {
                     block_num: 701,
-                    first_log_id: sub_bucket_start,
-                    end_log_id_exclusive: sub_bucket_start + 3,
+                    first_primary_id: sub_bucket_start,
+                    end_primary_id_exclusive: sub_bucket_start + 3,
                 },
                 DirByBlock {
                     block_num: 702,
-                    first_log_id: sub_bucket_start + 3,
-                    end_log_id_exclusive: sub_bucket_start + 7,
+                    first_primary_id: sub_bucket_start + 3,
+                    end_primary_id_exclusive: sub_bucket_start + 7,
                 },
             ] {
                 meta.scan_put(

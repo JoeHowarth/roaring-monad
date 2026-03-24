@@ -29,13 +29,13 @@ impl<'a, M: MetaStore, B: BlobStore> LogMaterializer<'a, M, B> {
 
         let fragments = self.load_directory_fragments(sub_bucket_start).await?;
         let Some(fragment) = fragments.iter().find(|fragment| {
-            id.get() >= fragment.first_log_id && id.get() < fragment.end_log_id_exclusive
+            id.get() >= fragment.first_primary_id && id.get() < fragment.end_primary_id_exclusive
         }) else {
             return Ok(None);
         };
         Ok(Some(ResolvedLogLocation {
             block_num: fragment.block_num,
-            local_ordinal: usize::try_from(id.get() - fragment.first_log_id)
+            local_ordinal: usize::try_from(id.get() - fragment.first_primary_id)
                 .map_err(|_| Error::Decode("local ordinal overflow"))?,
         }))
     }
@@ -77,12 +77,12 @@ fn containing_bucket_entry_ref(bucket: &DirBucketRef, id: LogId) -> Option<usize
     if bucket.count() < 2 {
         return None;
     }
-    let upper = bucket.partition_point(|first_log_id| first_log_id <= id.get());
+    let upper = bucket.partition_point(|first_primary_id| first_primary_id <= id.get());
     if upper == 0 || upper >= bucket.count() {
         return None;
     }
     let entry_index = upper - 1;
-    let end = bucket.first_log_id(upper);
+    let end = bucket.first_primary_id(upper);
     if id.get() < end {
         Some(entry_index)
     } else {
@@ -96,7 +96,7 @@ fn resolved_location_from_bucket_ref(
     id: LogId,
 ) -> Result<Option<ResolvedLogLocation>> {
     let block_num = bucket.start_block() + entry_index as u64;
-    let local_ordinal = usize::try_from(id.get() - bucket.first_log_id(entry_index))
+    let local_ordinal = usize::try_from(id.get() - bucket.first_primary_id(entry_index))
         .map_err(|_| Error::Decode("local ordinal overflow"))?;
     Ok(Some(ResolvedLogLocation {
         block_num,

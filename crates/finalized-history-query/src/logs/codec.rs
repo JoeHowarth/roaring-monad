@@ -3,9 +3,7 @@ use bytes::Bytes;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::codec::fixed_codec;
-use crate::logs::types::{
-    BlockLogHeader, BlockRecord, DirBucket, DirByBlock, Log, StreamBitmapMeta, Topic32,
-};
+use crate::logs::types::{BlockLogHeader, BlockRecord, Log, StreamBitmapMeta, Topic32};
 
 pub fn validate_log(log: &Log) -> bool {
     log.topics.len() <= 4
@@ -97,60 +95,6 @@ impl StorageCodec for Log {
     }
 }
 
-impl StorageCodec for DirBucket {
-    fn encode(&self) -> Bytes {
-        assert!(u32::try_from(self.first_log_ids.len()).is_ok());
-        let mut out = Vec::with_capacity(1 + 8 + 4 + self.first_log_ids.len() * 8);
-        out.push(1);
-        out.extend_from_slice(&self.start_block.to_be_bytes());
-        out.extend_from_slice(&(self.first_log_ids.len() as u32).to_be_bytes());
-        for first_log_id in &self.first_log_ids {
-            out.extend_from_slice(&first_log_id.to_be_bytes());
-        }
-        Bytes::from(out)
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 1 + 8 + 4 + 8 {
-            return Err(Error::Decode("log directory bucket too short"));
-        }
-        if bytes[0] != 1 {
-            return Err(Error::Decode("unsupported log directory bucket version"));
-        }
-        let start_block = u64::from_be_bytes(
-            bytes[1..9]
-                .try_into()
-                .map_err(|_| Error::Decode("log directory bucket start_block"))?,
-        );
-        let count = u32::from_be_bytes(
-            bytes[9..13]
-                .try_into()
-                .map_err(|_| Error::Decode("log directory bucket count"))?,
-        ) as usize;
-        if count < 2 {
-            return Err(Error::Decode("log directory bucket missing sentinel"));
-        }
-        let expected_len = 1 + 8 + 4 + count * 8;
-        if bytes.len() != expected_len {
-            return Err(Error::Decode("invalid log directory bucket length"));
-        }
-        let mut first_log_ids = Vec::with_capacity(count);
-        let mut pos = 13usize;
-        for _ in 0..count {
-            first_log_ids.push(u64::from_be_bytes(
-                bytes[pos..pos + 8]
-                    .try_into()
-                    .map_err(|_| Error::Decode("log directory bucket first_log_id"))?,
-            ));
-            pos += 8;
-        }
-        Ok(Self {
-            start_block,
-            first_log_ids,
-        })
-    }
-}
-
 impl StorageCodec for BlockLogHeader {
     fn encode(&self) -> Bytes {
         assert!(u32::try_from(self.offsets.len()).is_ok());
@@ -197,19 +141,6 @@ impl StorageCodec for BlockLogHeader {
 }
 
 fixed_codec! {
-    impl DirByBlock {
-        length_error = "invalid log_dir fragment length";
-        version = 1;
-        version_error = "unsupported log_dir fragment version";
-        fields {
-            block_num: u64,
-            first_log_id: u64,
-            end_log_id_exclusive: u64,
-        }
-    }
-}
-
-fixed_codec! {
     impl StreamBitmapMeta {
         length_error = "invalid stream bitmap meta length";
         version = 1;
@@ -238,17 +169,18 @@ fixed_codec! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logs::types::DirBucket;
 
     #[test]
     fn roundtrip_large_log_dir_bucket() {
         let count = (u16::MAX as usize) + 2;
-        let mut first_log_ids = Vec::with_capacity(count);
+        let mut first_primary_ids = Vec::with_capacity(count);
         for i in 0..count {
-            first_log_ids.push(i as u64);
+            first_primary_ids.push(i as u64);
         }
         let bucket = DirBucket {
             start_block: 123,
-            first_log_ids,
+            first_primary_ids,
         };
 
         let enc = bucket.encode();

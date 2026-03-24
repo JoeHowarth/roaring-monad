@@ -201,7 +201,7 @@ impl std::fmt::Debug for BlockLogHeaderRef {
 ///   version:       u8 (must be 1)
 ///   start_block:   u64 BE
 ///   count:         u32 BE
-///   first_log_ids: count * u64 BE
+///   first_primary_ids: count * u64 BE
 #[derive(Clone)]
 pub struct DirBucketRef {
     buf: Bytes,
@@ -249,19 +249,22 @@ impl DirBucketRef {
         self.count as usize
     }
 
-    pub fn first_log_id(&self, i: usize) -> u64 {
-        assert!(i < self.count as usize, "first_log_id index out of bounds");
+    pub fn first_primary_id(&self, i: usize) -> u64 {
+        assert!(
+            i < self.count as usize,
+            "first_primary_id index out of bounds"
+        );
         let pos = 13 + i * 8;
         u64::from_be_bytes(self.buf[pos..pos + 8].try_into().unwrap())
     }
 
-    /// Binary search over the first_log_ids array.
+    /// Binary search over the first_primary_ids array.
     pub fn partition_point(&self, f: impl Fn(u64) -> bool) -> usize {
         let mut lo = 0usize;
         let mut hi = self.count as usize;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if f(self.first_log_id(mid)) {
+            if f(self.first_primary_id(mid)) {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -428,7 +431,7 @@ mod tests {
 
         let bucket = DirBucket {
             start_block: 0,
-            first_log_ids: vec![10, 20, 30, 40],
+            first_primary_ids: vec![10, 20, 30, 40],
         };
         let encoded = bucket.encode();
         let bucket_ref = DirBucketRef::new(encoded).expect("construct DirBucketRef");

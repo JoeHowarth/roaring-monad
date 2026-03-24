@@ -125,18 +125,18 @@ async fn compact_trace_directory_sub_bucket<M: MetaStore, B: BlobStore>(
         return Ok(());
     }
 
-    let Some((start_block, first_trace_ids)) = compact_directory_sub_bucket_from_fragments(
+    let Some((start_block, first_primary_ids)) = compact_directory_sub_bucket_from_fragments(
         &fragments,
         |fragment| fragment.block_num,
-        |fragment| fragment.first_trace_id,
-        |fragment| fragment.end_trace_id_exclusive,
+        |fragment| fragment.first_primary_id,
+        |fragment| fragment.end_primary_id_exclusive,
     ) else {
         return Ok(());
     };
 
     let bucket = DirBucket {
         start_block,
-        first_trace_ids,
+        first_primary_ids,
     };
     tables
         .trace_dir_sub_buckets()
@@ -162,11 +162,11 @@ async fn compact_trace_directory_bucket<M: MetaStore, B: BlobStore>(
         sub_bucket_start = sub_bucket_start.saturating_add(TRACE_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
-    let Some((start_block, first_trace_ids)) = compact_directory_bucket_from_sub_buckets(
+    let Some((start_block, first_primary_ids)) = compact_directory_bucket_from_sub_buckets(
         &sub_buckets,
         |sub_bucket| sub_bucket.start_block,
-        |sub_bucket| sub_bucket.first_trace_ids.len(),
-        |sub_bucket, index| sub_bucket.first_trace_ids[index],
+        |sub_bucket| sub_bucket.first_primary_ids.len(),
+        |sub_bucket, index| sub_bucket.first_primary_ids[index],
         "trace directory bucket missing sentinel",
         "inconsistent trace directory bucket boundary across sub-buckets",
         "missing trace directory bucket start block",
@@ -181,7 +181,7 @@ async fn compact_trace_directory_bucket<M: MetaStore, B: BlobStore>(
             bucket_start,
             &DirBucket {
                 start_block,
-                first_trace_ids,
+                first_primary_ids,
             },
         )
         .await?;

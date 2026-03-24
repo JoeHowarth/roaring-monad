@@ -50,15 +50,15 @@ pub async fn persist_log_dir_by_block<M: MetaStore, B: BlobStore>(
 ) -> Result<()> {
     let fragment = DirByBlock {
         block_num,
-        first_log_id,
-        end_log_id_exclusive: first_log_id.saturating_add(u64::from(count)),
+        first_primary_id: first_log_id,
+        end_primary_id_exclusive: first_log_id.saturating_add(u64::from(count)),
     };
 
     let mut sub_bucket_start = LogDirSubBucketSpec::sub_bucket_start(first_log_id);
     let last_sub_bucket_start = if count == 0 {
         sub_bucket_start
     } else {
-        LogDirSubBucketSpec::sub_bucket_start(fragment.end_log_id_exclusive.saturating_sub(1))
+        LogDirSubBucketSpec::sub_bucket_start(fragment.end_primary_id_exclusive.saturating_sub(1))
     };
 
     loop {

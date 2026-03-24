@@ -80,18 +80,18 @@ async fn compact_directory_sub_bucket<M: MetaStore, B: BlobStore>(
         return Ok(());
     }
 
-    let Some((start_block, first_log_ids)) = compact_directory_sub_bucket_from_fragments(
+    let Some((start_block, first_primary_ids)) = compact_directory_sub_bucket_from_fragments(
         &fragments,
         |fragment| fragment.block_num,
-        |fragment| fragment.first_log_id,
-        |fragment| fragment.end_log_id_exclusive,
+        |fragment| fragment.first_primary_id,
+        |fragment| fragment.end_primary_id_exclusive,
     ) else {
         return Ok(());
     };
 
     let bucket = DirBucket {
         start_block,
-        first_log_ids,
+        first_primary_ids,
     };
     tables
         .log_dir_sub_buckets()
@@ -117,11 +117,11 @@ async fn compact_directory_bucket<M: MetaStore, B: BlobStore>(
         sub_bucket_start = sub_bucket_start.saturating_add(LOG_DIRECTORY_SUB_BUCKET_SIZE);
     }
 
-    let Some((start_block, first_log_ids)) = compact_directory_bucket_from_sub_buckets(
+    let Some((start_block, first_primary_ids)) = compact_directory_bucket_from_sub_buckets(
         &sub_buckets,
         |sub_bucket| sub_bucket.start_block(),
         |sub_bucket| sub_bucket.count(),
-        |sub_bucket, index| sub_bucket.first_log_id(index),
+        |sub_bucket, index| sub_bucket.first_primary_id(index),
         "directory sub-bucket missing sentinel",
         "inconsistent directory bucket boundary across sub-buckets",
         "missing directory bucket start block",
@@ -136,7 +136,7 @@ async fn compact_directory_bucket<M: MetaStore, B: BlobStore>(
             bucket_start,
             &DirBucket {
                 start_block,
-                first_log_ids,
+                first_primary_ids,
             },
         )
         .await?;

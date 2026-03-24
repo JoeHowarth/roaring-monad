@@ -57,7 +57,7 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         {
             return Ok(Some(ResolvedTraceLocation {
                 block_num: bucket.start_block + entry_index as u64,
-                local_ordinal: usize::try_from(id.get() - bucket.first_trace_ids[entry_index])
+                local_ordinal: usize::try_from(id.get() - bucket.first_primary_ids[entry_index])
                     .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
             }));
         }
@@ -72,21 +72,21 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
         {
             return Ok(Some(ResolvedTraceLocation {
                 block_num: bucket.start_block + entry_index as u64,
-                local_ordinal: usize::try_from(id.get() - bucket.first_trace_ids[entry_index])
+                local_ordinal: usize::try_from(id.get() - bucket.first_primary_ids[entry_index])
                     .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
             }));
         }
 
         let fragments = self.load_directory_fragments(sub_bucket_start).await?;
         let Some(fragment) = fragments.iter().find(|fragment| {
-            id.get() >= fragment.first_trace_id && id.get() < fragment.end_trace_id_exclusive
+            id.get() >= fragment.first_primary_id && id.get() < fragment.end_primary_id_exclusive
         }) else {
             return Ok(None);
         };
 
         Ok(Some(ResolvedTraceLocation {
             block_num: fragment.block_num,
-            local_ordinal: usize::try_from(id.get() - fragment.first_trace_id)
+            local_ordinal: usize::try_from(id.get() - fragment.first_primary_id)
                 .map_err(|_| Error::Decode("trace local ordinal overflow"))?,
         }))
     }
@@ -191,16 +191,16 @@ pub(crate) fn rlp_element_len(buf: &[u8]) -> Result<usize> {
 }
 
 fn containing_bucket_entry(bucket: &DirBucket, id: TraceId) -> Option<usize> {
-    if bucket.first_trace_ids.len() < 2 {
+    if bucket.first_primary_ids.len() < 2 {
         return None;
     }
     let upper = bucket
-        .first_trace_ids
-        .partition_point(|first_trace_id| *first_trace_id <= id.get());
-    if upper == 0 || upper >= bucket.first_trace_ids.len() {
+        .first_primary_ids
+        .partition_point(|first_primary_id| *first_primary_id <= id.get());
+    if upper == 0 || upper >= bucket.first_primary_ids.len() {
         return None;
     }
     let entry_index = upper - 1;
-    let end = bucket.first_trace_ids[upper];
+    let end = bucket.first_primary_ids[upper];
     (id.get() < end).then_some(entry_index)
 }
