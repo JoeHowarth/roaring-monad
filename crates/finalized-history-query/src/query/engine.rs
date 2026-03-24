@@ -2,7 +2,7 @@ use crate::api::{ExecutionBudget, QueryOrder};
 use crate::core::ids::FamilyIdValue;
 use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
-use crate::query::normalized::{effective_limit, normalize_query};
+use crate::query::normalized::{effective_limit, plan_page};
 use crate::query::runner::{
     QueryDescriptor, QueryMaterializer, build_page, empty_page, execute_indexed_query,
 };
@@ -122,7 +122,7 @@ where
     else {
         return Ok(empty_page(&block_range));
     };
-    let Some(normalized) = normalize_query(
+    let Some(normalized) = plan_page(
         &block_range,
         id_window,
         request.resume_id().map(D::Id::new),

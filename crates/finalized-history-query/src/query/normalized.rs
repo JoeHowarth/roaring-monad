@@ -4,7 +4,7 @@ use crate::core::range::ResolvedBlockRange;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone)]
-pub(crate) struct NormalizedQuery<I> {
+pub(crate) struct PlannedQuery<I> {
     pub block_range: ResolvedBlockRange,
     pub id_range: FamilyIdRange<I>,
     pub effective_limit: usize,
@@ -25,13 +25,13 @@ pub(crate) fn effective_limit(limit: usize, budget: ExecutionBudget) -> Result<u
     }
 }
 
-pub(crate) fn normalize_query<I: FamilyIdValue + Copy + Ord>(
+pub(crate) fn plan_page<I: FamilyIdValue + Copy + Ord>(
     block_range: &ResolvedBlockRange,
     mut id_range: FamilyIdRange<I>,
     resume_after: Option<I>,
     effective_limit: usize,
     resume_outside_message: &'static str,
-) -> Result<Option<NormalizedQuery<I>>> {
+) -> Result<Option<PlannedQuery<I>>> {
     if let Some(resume_id) = resume_after {
         if !id_range.contains(resume_id) {
             return Err(Error::InvalidParams(resume_outside_message));
@@ -42,7 +42,7 @@ pub(crate) fn normalize_query<I: FamilyIdValue + Copy + Ord>(
         id_range = resumed_range;
     }
 
-    Ok(Some(NormalizedQuery {
+    Ok(Some(PlannedQuery {
         block_range: block_range.clone(),
         id_range,
         effective_limit,
