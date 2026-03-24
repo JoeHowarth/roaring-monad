@@ -1,6 +1,7 @@
 use crate::core::ids::TraceId;
 use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
+use crate::kernel::table_specs::{aligned_u64_start, stream_page_key, u64_key};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
@@ -26,7 +27,7 @@ impl PointTableSpec for BlockTraceHeaderSpec {
 }
 impl BlockTraceHeaderSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
+        u64_key(block_num)
     }
 }
 
@@ -36,12 +37,11 @@ impl PointTableSpec for TraceDirBucketSpec {
 }
 impl TraceDirBucketSpec {
     pub fn bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        let global_trace_id = global_trace_id.into().get();
-        (global_trace_id / TRACE_DIRECTORY_BUCKET_SIZE) * TRACE_DIRECTORY_BUCKET_SIZE
+        aligned_u64_start(global_trace_id.into().get(), TRACE_DIRECTORY_BUCKET_SIZE)
     }
 
     pub fn key(bucket_start_trace_id: u64) -> Vec<u8> {
-        bucket_start_trace_id.to_be_bytes().to_vec()
+        u64_key(bucket_start_trace_id)
     }
 }
 
@@ -51,12 +51,14 @@ impl PointTableSpec for TraceDirSubBucketSpec {
 }
 impl TraceDirSubBucketSpec {
     pub fn sub_bucket_start(global_trace_id: impl Into<TraceId>) -> u64 {
-        let global_trace_id = global_trace_id.into().get();
-        (global_trace_id / TRACE_DIRECTORY_SUB_BUCKET_SIZE) * TRACE_DIRECTORY_SUB_BUCKET_SIZE
+        aligned_u64_start(
+            global_trace_id.into().get(),
+            TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+        )
     }
 
     pub fn key(sub_bucket_start_trace_id: u64) -> Vec<u8> {
-        sub_bucket_start_trace_id.to_be_bytes().to_vec()
+        u64_key(sub_bucket_start_trace_id)
     }
 }
 
@@ -66,11 +68,11 @@ impl ScannableTableSpec for TraceDirByBlockSpec {
 }
 impl TraceDirByBlockSpec {
     pub fn partition(sub_bucket_start_trace_id: u64) -> Vec<u8> {
-        sub_bucket_start_trace_id.to_be_bytes().to_vec()
+        u64_key(sub_bucket_start_trace_id)
     }
 
     pub fn clustering(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
+        u64_key(block_num)
     }
 }
 
@@ -80,9 +82,7 @@ impl PointTableSpec for TraceBitmapPageMetaSpec {
 }
 impl TraceBitmapPageMetaSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-        let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
-        key
+        stream_page_key(stream_id, page_start_local)
     }
 }
 
@@ -92,13 +92,11 @@ impl ScannableTableSpec for TraceBitmapByBlockSpec {
 }
 impl TraceBitmapByBlockSpec {
     pub fn partition(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-        let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
-        key
+        stream_page_key(stream_id, page_start_local)
     }
 
     pub fn clustering(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
+        u64_key(block_num)
     }
 }
 
@@ -108,7 +106,7 @@ impl BlobTableSpec for BlockTraceBlobSpec {
 }
 impl BlockTraceBlobSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
+        u64_key(block_num)
     }
 }
 
@@ -118,8 +116,6 @@ impl BlobTableSpec for TraceBitmapPageBlobSpec {
 }
 impl TraceBitmapPageBlobSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
-        let mut key = format!("{stream_id}/").into_bytes();
-        key.extend_from_slice(&u64::from(page_start_local).to_be_bytes());
-        key
+        stream_page_key(stream_id, page_start_local)
     }
 }

@@ -3,7 +3,7 @@ use bytes::Bytes;
 use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::table_specs::PointTableSpec;
+use crate::kernel::table_specs::{PointTableSpec, u64_key};
 use crate::store::traits::TableId;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -18,7 +18,7 @@ impl PointTableSpec for BlockRecordSpec {
 
 impl BlockRecordSpec {
     pub fn key(block_num: u64) -> Vec<u8> {
-        block_num.to_be_bytes().to_vec()
+        u64_key(block_num)
     }
 }
 
