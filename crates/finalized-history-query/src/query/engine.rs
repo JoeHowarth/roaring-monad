@@ -1,7 +1,6 @@
 use crate::api::{ExecutionBudget, QueryOrder};
 use crate::core::ids::FamilyIdValue;
 use crate::core::range::resolve_block_range;
-use crate::core::state::load_block_num_by_hash;
 use crate::error::{Error, Result};
 use crate::query::normalized::{effective_limit, normalize_query};
 use crate::query::runner::{
@@ -45,7 +44,9 @@ pub(crate) async fn resolve_request_block_bounds<
 ) -> Result<(u64, u64)> {
     let from_block = match (request.start_block_num(), request.start_block_hash()) {
         (Some(number), None) => number,
-        (None, Some(hash)) => load_block_num_by_hash(tables, &hash)
+        (None, Some(hash)) => tables
+            .block_hash_index
+            .get(&hash)
             .await?
             .ok_or(Error::InvalidParams("unknown from_block_hash"))?,
         _ => {
@@ -56,7 +57,9 @@ pub(crate) async fn resolve_request_block_bounds<
     };
     let to_block = match (request.end_block_num(), request.end_block_hash()) {
         (Some(number), None) => number,
-        (None, Some(hash)) => load_block_num_by_hash(tables, &hash)
+        (None, Some(hash)) => tables
+            .block_hash_index
+            .get(&hash)
             .await?
             .ok_or(Error::InvalidParams("unknown to_block_hash"))?,
         _ => {

@@ -148,10 +148,3 @@ pub async fn load_block_identity<M: MetaStore, B: BlobStore>(
         .await
         .map(|opt| opt.map(|block_record| BlockIdentity::from((block_num, &block_record))))
 }
-
-pub async fn load_block_num_by_hash<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_hash: &[u8; 32],
-) -> Result<Option<u64>> {
-    tables.block_hash_index.get(block_hash).await
-}
