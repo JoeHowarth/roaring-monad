@@ -14,7 +14,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::logs) enum ClauseKind {
+pub(crate) enum ClauseKind {
     Address,
     Topic0,
     Topic1,
@@ -26,7 +26,7 @@ pub(in crate::logs) type IndexedClauseSpec = IndexedClause<ClauseKind>;
 
 pub(in crate::logs) type PreparedShardClause = PreparedClause<ClauseKind>;
 
-pub(in crate::logs) struct LogsStreamFamily;
+pub(crate) struct LogsStreamFamily;
 
 pub(in crate::logs) fn build_clause_specs(filter: &LogFilter) -> Vec<IndexedClauseSpec> {
     let mut clauses = Vec::new();
