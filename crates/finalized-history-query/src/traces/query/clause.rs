@@ -11,8 +11,8 @@ use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
 use crate::traces::keys::{
     MAX_TRACE_LOCAL_ID, TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id,
+    trace_stream_page_start_local,
 };
-use crate::traces::table_specs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::traces) enum ClauseKind {
@@ -110,11 +110,11 @@ impl StreamIndexFamily for TracesStreamFamily {
     }
 
     fn first_page_start(local_from: u32) -> u32 {
-        table_specs::stream_page_start_local(local_from)
+        trace_stream_page_start_local(local_from)
     }
 
     fn last_page_start(local_to: u32) -> u32 {
-        table_specs::stream_page_start_local(local_to)
+        trace_stream_page_start_local(local_to)
     }
 
     fn next_page_start(page_start: u32) -> u32 {

@@ -8,10 +8,12 @@ use crate::ingest::open_pages::{
     OpenBitmapPage, collect_newly_sealed_open_bitmap_pages, delete_open_bitmap_page,
     mark_open_bitmap_page_if_absent,
 };
+use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::logs::ingest::{
-    compact_newly_sealed_directory, parse_stream_shard, persist_log_artifacts,
-    persist_log_block_record, persist_log_dir_by_block, persist_stream_fragments,
+    parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
+    persist_stream_fragments,
 };
+use crate::logs::keys::LOG_PRIMARY_DIR_LAYOUT;
 use crate::logs::types::LogSequencingState;
 use crate::logs::types::StreamBitmapMeta;
 use crate::runtime::Runtime;
@@ -80,7 +82,13 @@ impl LogsFamily {
             mark_open_bitmap_page_if_absent(runtime.tables(), page).await?;
         }
 
-        compact_newly_sealed_directory(runtime.tables(), from_next_log_id, next_log_id).await?;
+        compact_newly_sealed_primary_directory(
+            runtime.tables().log_dir(),
+            from_next_log_id,
+            next_log_id,
+            LOG_PRIMARY_DIR_LAYOUT,
+        )
+        .await?;
 
         for page in collect_newly_sealed_open_bitmap_pages(
             runtime.tables(),

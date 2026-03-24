@@ -1,13 +1,11 @@
-use crate::core::ids::{TraceId, TraceShard, compose_trace_id};
+use crate::core::ids::{TraceId, TraceShard};
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 use crate::traces::keys::{
     BLOCK_TRACE_BLOB_TABLE, BLOCK_TRACE_HEADER_TABLE, TRACE_BITMAP_BY_BLOCK_TABLE,
     TRACE_BITMAP_PAGE_BLOB_TABLE, TRACE_BITMAP_PAGE_META_TABLE, TRACE_BLOCK_RECORD_TABLE,
     TRACE_DIR_BUCKET_TABLE, TRACE_DIR_BY_BLOCK_TABLE, TRACE_DIR_SUB_BUCKET_TABLE,
-    TRACE_DIRECTORY_BUCKET_SIZE, TRACE_DIRECTORY_SUB_BUCKET_SIZE, TRACE_OPEN_BITMAP_PAGE_TABLE,
-    TRACE_STREAM_PAGE_LOCAL_ID_SPAN, trace_bucket_start, trace_stream_page_start_local,
-    trace_sub_bucket_start, u64_be_trace,
+    TRACE_OPEN_BITMAP_PAGE_TABLE, trace_bucket_start, trace_sub_bucket_start, u64_be_trace,
 };
 
 pub struct TraceBlockRecordSpec;
@@ -142,38 +140,4 @@ impl TraceBitmapPageBlobSpec {
         key.extend_from_slice(&u64_be_trace(u64::from(page_start_local)));
         key
     }
-}
-
-pub fn trace_shard(global_trace_id: impl Into<TraceId>) -> TraceShard {
-    global_trace_id.into().shard()
-}
-
-pub fn trace_local(global_trace_id: impl Into<TraceId>) -> crate::core::ids::TraceLocalId {
-    global_trace_id.into().local()
-}
-
-pub fn compose_global_trace_id(
-    shard: TraceShard,
-    local: crate::core::ids::TraceLocalId,
-) -> TraceId {
-    compose_trace_id(shard, local)
-}
-
-pub fn stream_page_start_local(local_id: u32) -> u32 {
-    trace_stream_page_start_local(local_id)
-}
-
-#[allow(dead_code)]
-pub const fn directory_bucket_size() -> u64 {
-    TRACE_DIRECTORY_BUCKET_SIZE
-}
-
-#[allow(dead_code)]
-pub const fn directory_sub_bucket_size() -> u64 {
-    TRACE_DIRECTORY_SUB_BUCKET_SIZE
-}
-
-#[allow(dead_code)]
-pub const fn stream_page_span() -> u32 {
-    TRACE_STREAM_PAGE_LOCAL_ID_SPAN
 }

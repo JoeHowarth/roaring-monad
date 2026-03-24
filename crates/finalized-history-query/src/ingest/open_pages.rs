@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use crate::core::ids::{LogId, LogShard};
 use crate::core::layout::read_u64_be;
 use crate::error::{Error, Result};
+use crate::kernel::sharded_streams::page_start_local;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::table_specs::{self};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -24,11 +24,11 @@ struct FrontierPosition {
 impl FrontierPosition {
     fn from_next_log_id(next_log_id: u64) -> Self {
         let frontier_id = LogId::new(next_log_id);
-        let shard = table_specs::log_shard(frontier_id);
-        let local = table_specs::log_local(frontier_id).get();
+        let shard = frontier_id.shard();
+        let local = frontier_id.local().get();
         Self {
             shard,
-            page_start_local: table_specs::stream_page_start_local(local),
+            page_start_local: page_start_local(local, STREAM_PAGE_LOCAL_ID_SPAN),
         }
     }
 }
@@ -36,9 +36,9 @@ impl FrontierPosition {
 impl OpenBitmapPage {
     pub fn is_sealed_at(&self, next_log_id: u64) -> bool {
         let frontier_id = LogId::new(next_log_id);
-        let frontier_shard = table_specs::log_shard(frontier_id);
-        let frontier_local = table_specs::log_local(frontier_id).get();
-        let frontier_open_page = table_specs::stream_page_start_local(frontier_local);
+        let frontier_shard = frontier_id.shard();
+        let frontier_local = frontier_id.local().get();
+        let frontier_open_page = page_start_local(frontier_local, STREAM_PAGE_LOCAL_ID_SPAN);
 
         if self.shard < frontier_shard {
             return true;

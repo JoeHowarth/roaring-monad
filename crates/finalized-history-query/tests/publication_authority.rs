@@ -10,8 +10,9 @@ use finalized_history_query::family::Families;
 use finalized_history_query::ingest::authority::LeaseAuthority;
 use finalized_history_query::ingest::engine::IngestEngine;
 use finalized_history_query::kernel::codec::StorageCodec;
+use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
-    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
+    BITMAP_BY_BLOCK_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
     self, BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, BlockRecordSpec, LogDirByBlockSpec,
@@ -85,7 +86,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             &[1; 20],
             finalized_history_query::core::ids::LogShard::new(0).unwrap(),
         );
-        let page_start = table_specs::stream_page_start_local(0);
+        let page_start = page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN);
         assert!(
             svc.meta_store()
                 .scan_get(

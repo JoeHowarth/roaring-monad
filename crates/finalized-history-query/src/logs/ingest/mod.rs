@@ -1,11 +1,9 @@
 mod artifact;
-mod compaction;
 mod stream;
 
 pub use artifact::{
     parse_stream_shard, persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
 };
-pub use compaction::compact_newly_sealed_directory;
 pub use stream::persist_stream_fragments;
 
 #[cfg(test)]
@@ -21,8 +19,8 @@ mod tests {
         LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
     };
     use crate::logs::table_specs::{
-        self, BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec,
-        BlockLogBlobSpec, BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
+        BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
+        BlockLogHeaderSpec, BlockRecordSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
     };
     use crate::store::blob::InMemoryBlobStore;
@@ -35,10 +33,11 @@ mod tests {
     use super::artifact::{
         persist_log_artifacts, persist_log_block_record, persist_log_dir_by_block,
     };
-    use super::compaction::compact_sealed_directory;
-    use super::stream::{
-        collect_stream_appends, compact_sealed_stream_pages, persist_stream_fragments,
-    };
+    use super::stream::{collect_stream_appends, persist_stream_fragments};
+    use crate::ingest::bitmap_pages;
+    use crate::ingest::primary_dir::compact_sealed_primary_directory;
+    use crate::kernel::sharded_streams::page_start_local;
+    use crate::logs::keys::LOG_PRIMARY_DIR_LAYOUT;
     use crate::logs::types::{BlockLogHeader, DirBucket, DirByBlock, Log, StreamBitmapMeta};
 
     fn sample_log(block_num: u64, tx_idx: u32, log_idx: u32, seed: u8) -> Log {
@@ -113,9 +112,15 @@ mod tests {
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&tables, first_log_id, count, first_log_id + count as u64)
-                .await
-                .expect("compact directory");
+            compact_sealed_primary_directory(
+                tables.log_dir(),
+                first_log_id,
+                count,
+                first_log_id + count as u64,
+                LOG_PRIMARY_DIR_LAYOUT,
+            )
+            .await
+            .expect("compact directory");
 
             let fragment0 = meta
                 .scan_get(
@@ -193,16 +198,28 @@ mod tests {
             let touched_pages = persist_stream_fragments(&tables, &block, first_log_id)
                 .await
                 .expect("persist stream fragments");
-            compact_sealed_stream_pages(&tables, &touched_pages)
+            for (stream_id, page_start) in &touched_pages {
+                let _ = bitmap_pages::compact_stream_page(
+                    tables.log_streams(),
+                    stream_id,
+                    *page_start,
+                    |count, min_local, max_local| StreamBitmapMeta {
+                        count,
+                        min_local,
+                        max_local,
+                    },
+                )
                 .await
-                .expect("compact stream pages");
+                .expect("compact stream page");
+            }
 
             let sid = collect_stream_appends(&block, first_log_id)
                 .into_keys()
                 .next()
                 .expect("stream");
-            let first_page = table_specs::stream_page_start_local(
-                table_specs::log_local(LogId::new(first_log_id)).get(),
+            let first_page = page_start_local(
+                LogId::new(first_log_id).local().get(),
+                STREAM_PAGE_LOCAL_ID_SPAN,
             );
             let fragment = meta
                 .scan_get(
@@ -282,9 +299,15 @@ mod tests {
             persist_log_dir_by_block(&tables, 700, first_log_id, count)
                 .await
                 .expect("persist fragments");
-            compact_sealed_directory(&tables, first_log_id, count, first_log_id + count as u64)
-                .await
-                .expect("compact directory");
+            compact_sealed_primary_directory(
+                tables.log_dir(),
+                first_log_id,
+                count,
+                first_log_id + count as u64,
+                LOG_PRIMARY_DIR_LAYOUT,
+            )
+            .await
+            .expect("compact directory");
 
             let bucket = meta
                 .get(LOG_DIR_BUCKET_TABLE, &LogDirBucketSpec::key(0))

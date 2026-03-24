@@ -1,28 +1,10 @@
 use crate::core::ids::{LogId, PrimaryIdRange};
 use crate::core::range::ResolvedBlockRange;
 use crate::error::Result;
-use crate::logs::types::BlockRecord;
 use crate::logs::types::LogBlockWindow;
 use crate::query::window::{PrimaryWindowSource, resolve_primary_window};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-
-pub async fn load_log_block_record<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-) -> Result<Option<BlockRecord>> {
-    tables.block_records().get(block_num).await
-}
-
-pub async fn load_log_block_window<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-) -> Result<Option<LogBlockWindow>> {
-    Ok(load_log_block_record(tables, block_num)
-        .await?
-        .as_ref()
-        .map(LogBlockWindow::from))
-}
 
 pub async fn resolve_log_window<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
@@ -43,7 +25,12 @@ impl PrimaryWindowSource for LogWindowSource {
         tables: &Tables<M, B>,
         block_num: u64,
     ) -> Result<Option<Self::Window>> {
-        load_log_block_window(tables, block_num).await
+        Ok(tables
+            .block_records()
+            .get(block_num)
+            .await?
+            .as_ref()
+            .map(LogBlockWindow::from))
     }
 }
 
@@ -54,6 +41,7 @@ mod tests {
     use crate::kernel::codec::StorageCodec;
     use crate::logs::keys::BLOCK_RECORD_TABLE;
     use crate::logs::table_specs::BlockRecordSpec;
+    use crate::logs::types::BlockRecord;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{MetaStore, PutCond};

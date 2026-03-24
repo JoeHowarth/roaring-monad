@@ -7,7 +7,6 @@ use crate::ingest::bitmap_pages;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::keys::{TRACE_STREAM_PAGE_LOCAL_ID_SPAN, has_value_stream_id, stream_id};
-use crate::traces::table_specs;
 use crate::traces::view::BlockTraceIter;
 
 pub fn collect_trace_stream_appends(
@@ -19,8 +18,8 @@ pub fn collect_trace_stream_appends(
     for (index, iterated) in BlockTraceIter::new(&block.trace_rlp)?.enumerate() {
         let iterated = iterated?;
         let global_trace_id = TraceId::new(first_trace_id + index as u64);
-        let shard = table_specs::trace_shard(global_trace_id);
-        let local = table_specs::trace_local(global_trace_id).get();
+        let shard = global_trace_id.shard();
+        let local = global_trace_id.local().get();
         let view = iterated.view;
 
         out.entry(stream_id("from", view.from_addr()?, shard))

@@ -2,6 +2,7 @@ use crate::core::clause::Clause;
 use crate::core::ids::{LogLocalId, LogShard};
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::error::Result;
+use crate::kernel::sharded_streams::page_start_local;
 use crate::logs::filter::LogFilter;
 use crate::logs::keys::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::table_specs;
@@ -111,11 +112,11 @@ impl StreamIndexFamily for LogsStreamFamily {
     }
 
     fn first_page_start(local_from: u32) -> u32 {
-        table_specs::stream_page_start_local(local_from)
+        page_start_local(local_from, STREAM_PAGE_LOCAL_ID_SPAN)
     }
 
     fn last_page_start(local_to: u32) -> u32 {
-        table_specs::stream_page_start_local(local_to)
+        page_start_local(local_to, STREAM_PAGE_LOCAL_ID_SPAN)
     }
 
     fn next_page_start(page_start: u32) -> u32 {

@@ -1,4 +1,5 @@
 pub use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID, read_u64_be};
+use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 use crate::store::traits::{ScannableTableId, TableId};
 
 pub const BLOCK_RECORD_TABLE: TableId = TableId::new("block_record");
@@ -13,6 +14,15 @@ pub const OPEN_BITMAP_PAGE_TABLE: ScannableTableId = ScannableTableId::new("open
 pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
 pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
+pub(super) const LOG_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout = PrimaryDirCompactionLayout {
+    sub_bucket_span: LOG_DIRECTORY_SUB_BUCKET_SIZE,
+    bucket_span: LOG_DIRECTORY_BUCKET_SIZE,
+    sub_bucket_start: crate::logs::table_specs::LogDirSubBucketSpec::sub_bucket_start,
+    bucket_start: crate::logs::table_specs::LogDirBucketSpec::bucket_start,
+    missing_sentinel_error: "directory sub-bucket missing sentinel",
+    inconsistent_bucket_error: "inconsistent directory bucket boundary across sub-buckets",
+    missing_bucket_start_error: "missing directory bucket start block",
+};
 
 pub fn u64_be(v: u64) -> [u8; 8] {
     v.to_be_bytes()
@@ -32,8 +42,8 @@ mod tests {
     fn shard_local_ranges_respect_24_bit_locals() {
         let from = LogId::new(u64::from(MAX_LOCAL_ID) - 2);
         let to = LogId::new(u64::from(MAX_LOCAL_ID) + 2);
-        let first_shard = table_specs::log_shard(from);
-        let second_shard = table_specs::log_shard(to);
+        let first_shard = from.shard();
+        let second_shard = to.shard();
 
         assert_eq!(first_shard.get() + 1, second_shard.get());
         assert_eq!(
@@ -52,13 +62,10 @@ mod tests {
     #[test]
     fn log_id_split_roundtrip_preserves_shards_above_u32_max() {
         let value = LogId::new(((u64::from(u32::MAX) + 1) << LOCAL_ID_BITS) | 7);
-        let split_shard = table_specs::log_shard(value);
-        let local = table_specs::log_local(value);
+        let split_shard = value.shard();
+        let local = value.local();
 
         assert_eq!(split_shard.get(), u64::from(u32::MAX) + 1);
-        assert_eq!(
-            table_specs::compose_global_log_id(split_shard, local),
-            value
-        );
+        assert_eq!(crate::core::ids::compose_log_id(split_shard, local), value);
     }
 }

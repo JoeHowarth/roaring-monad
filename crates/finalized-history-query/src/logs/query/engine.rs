@@ -4,7 +4,7 @@ use super::clause::{
 };
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
-use crate::core::ids::{LogId, LogLocalId, LogShard};
+use crate::core::ids::{LogId, LogLocalId, LogShard, compose_log_id};
 use crate::core::page::QueryPage;
 use crate::core::range::resolve_block_range;
 use crate::error::{Error, Result};
@@ -137,7 +137,7 @@ impl QueryDescriptor for LogsQueryDescriptor {
     }
 
     fn compose_id(&self, shard: Self::Shard, local_raw: u32) -> Self::Id {
-        table_specs::compose_global_log_id(
+        compose_log_id(
             shard,
             LogLocalId::new(local_raw).expect("bitmap values must fit local-id"),
         )

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use finalized_history_query::api::FinalizedHistoryService;
 use finalized_history_query::kernel::codec::StorageCodec;
+use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_BY_BLOCK_TABLE,
     LOG_DIRECTORY_SUB_BUCKET_SIZE, MAX_LOCAL_ID, STREAM_PAGE_LOCAL_ID_SPAN,
@@ -141,7 +142,7 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
             &[5; 20],
             finalized_history_query::core::ids::LogShard::new(0).unwrap(),
         );
-        let page_start = table_specs::stream_page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1);
+        let page_start = page_start_local(STREAM_PAGE_LOCAL_ID_SPAN - 1, STREAM_PAGE_LOCAL_ID_SPAN);
         assert!(
             svc.meta_store()
                 .get(

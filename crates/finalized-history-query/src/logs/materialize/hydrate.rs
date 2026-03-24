@@ -4,7 +4,6 @@ use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
-use crate::logs::state::load_log_block_record;
 use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
 use crate::query::runner::{QueryMaterializer, cached_block_ref_with_fallback};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -92,7 +91,9 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
             block_num,
             *item.block_hash(),
             async {
-                Ok(load_log_block_record(tables, block_num)
+                Ok(tables
+                    .block_records()
+                    .get(block_num)
                     .await?
                     .map(|record| record.parent_hash))
             },

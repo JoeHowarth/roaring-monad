@@ -1,10 +1,8 @@
-use crate::core::ids::{LogId, LogShard, compose_log_id};
+use crate::core::ids::{LogId, LogShard};
 use crate::core::layout::{LOCAL_ID_BITS, MAX_LOCAL_ID};
-use crate::kernel::sharded_streams::{page_start_local, sharded_stream_id};
+use crate::kernel::sharded_streams::sharded_stream_id;
 pub use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::logs::keys::{
-    LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN, u64_be,
-};
+use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE, u64_be};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub struct BlockRecordSpec;
@@ -153,41 +151,20 @@ impl BitmapPageBlobSpec {
     }
 }
 
-pub fn log_shard(global_log_id: impl Into<crate::core::ids::LogId>) -> LogShard {
-    global_log_id.into().shard()
-}
-
-pub fn log_local(
-    global_log_id: impl Into<crate::core::ids::LogId>,
-) -> crate::core::ids::LogLocalId {
-    global_log_id.into().local()
-}
-
-pub fn compose_global_log_id(
-    shard: LogShard,
-    local: crate::core::ids::LogLocalId,
-) -> crate::core::ids::LogId {
-    compose_log_id(shard, local)
-}
-
-pub fn stream_page_start_local(local_id: u32) -> u32 {
-    page_start_local(local_id, STREAM_PAGE_LOCAL_ID_SPAN)
-}
-
 pub fn local_range_for_shard(
     from: crate::core::ids::LogId,
     to_inclusive: crate::core::ids::LogId,
     shard: LogShard,
 ) -> (crate::core::ids::LogLocalId, crate::core::ids::LogLocalId) {
-    let from_shard = log_shard(from);
-    let to_shard = log_shard(to_inclusive);
+    let from_shard = from.shard();
+    let to_shard = to_inclusive.shard();
     let local_from = if shard == from_shard {
-        log_local(from)
+        from.local()
     } else {
         crate::core::ids::LogLocalId::new(0).expect("0 is a valid local id")
     };
     let local_to = if shard == to_shard {
-        log_local(to_inclusive)
+        to_inclusive.local()
     } else {
         crate::core::ids::LogLocalId::new(MAX_LOCAL_ID).expect("MAX_LOCAL_ID is valid")
     };

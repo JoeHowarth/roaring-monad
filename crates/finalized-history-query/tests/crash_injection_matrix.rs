@@ -13,9 +13,10 @@ use finalized_history_query::config::Config;
 use finalized_history_query::error::{Error, Result};
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
+use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::logs::keys::{
     BITMAP_PAGE_META_TABLE, BLOCK_RECORD_TABLE, LOG_DIR_SUB_BUCKET_TABLE,
-    LOG_DIRECTORY_SUB_BUCKET_SIZE,
+    LOG_DIRECTORY_SUB_BUCKET_SIZE, STREAM_PAGE_LOCAL_ID_SPAN,
 };
 use finalized_history_query::logs::table_specs::{
     self, BitmapPageMetaSpec, BlockRecordSpec, LogDirSubBucketSpec,
@@ -690,8 +691,10 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             &[7; 20],
             finalized_history_query::core::ids::LogShard::new(0).unwrap(),
         );
-        let page_start =
-            table_specs::stream_page_start_local((seed_first_log_id as u32).saturating_sub(0));
+        let page_start = page_start_local(
+            (seed_first_log_id as u32).saturating_sub(0),
+            STREAM_PAGE_LOCAL_ID_SPAN,
+        );
         assert!(
             meta.get(
                 BITMAP_PAGE_META_TABLE,

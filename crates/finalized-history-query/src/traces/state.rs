@@ -4,24 +4,7 @@ use crate::error::{Error, Result};
 use crate::query::window::{PrimaryWindowSource, resolve_primary_window};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::types::{TraceBlockRecord, TraceBlockWindow};
-
-pub async fn load_trace_block_record<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-) -> Result<Option<TraceBlockRecord>> {
-    tables.trace_block_records().get(block_num).await
-}
-
-pub async fn load_trace_block_window<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block_num: u64,
-) -> Result<Option<TraceBlockWindow>> {
-    Ok(load_trace_block_record(tables, block_num)
-        .await?
-        .as_ref()
-        .map(TraceBlockWindow::from))
-}
+use crate::traces::types::TraceBlockWindow;
 
 pub async fn derive_next_trace_id<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
@@ -62,6 +45,11 @@ impl PrimaryWindowSource for TraceWindowSource {
         tables: &Tables<M, B>,
         block_num: u64,
     ) -> Result<Option<Self::Window>> {
-        load_trace_block_window(tables, block_num).await
+        Ok(tables
+            .trace_block_records()
+            .get(block_num)
+            .await?
+            .as_ref()
+            .map(TraceBlockWindow::from))
     }
 }
