@@ -22,7 +22,7 @@ use finalized_history_query::logs::keys::{
 };
 use finalized_history_query::logs::table_specs::{BitmapByBlockSpec, BitmapPageMetaSpec};
 use finalized_history_query::logs::types::Log;
-use finalized_history_query::startup::startup_plan;
+use finalized_history_query::status::service_status;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::PublicationState;
@@ -625,14 +625,14 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
             svc.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(
+        let plan = service_status(
             &writer_runtime,
             &MetaPublicationStore::new(meta.clone()),
             &Families::default(),
             0,
         )
         .await
-        .expect("startup after failed trace publication");
+        .expect("status after failed trace publication");
         assert_eq!(plan.head_state.indexed_finalized_head, 0);
         assert_eq!(plan.trace_state.next_trace_id.get(), 0);
 
@@ -766,14 +766,14 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             takeover_writer.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(
+        let plan = service_status(
             &runtime,
             &MetaPublicationStore::new(Arc::clone(&meta)),
             &Families::default(),
             0,
         )
         .await
-        .expect("post conflict startup plan");
+        .expect("post conflict status");
         assert_eq!(plan.head_state.indexed_finalized_head, 2);
         assert!(
             meta.get(

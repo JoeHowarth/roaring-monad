@@ -8,7 +8,7 @@ use crate::traces::TraceStartupState;
 use crate::txs::TxStartupState;
 
 #[derive(Debug, Clone)]
-pub struct StartupPlan {
+pub struct ServiceStatus {
     pub head_state: FinalizedHeadState,
     pub log_state: LogSequencingState,
     pub tx_state: TxStartupState,
@@ -16,17 +16,17 @@ pub struct StartupPlan {
     pub warm_streams: usize,
 }
 
-pub async fn startup_plan<M: MetaStore, P: PublicationStore, B: BlobStore>(
+pub async fn service_status<M: MetaStore, P: PublicationStore, B: BlobStore>(
     runtime: &Runtime<M, B>,
     publication_store: &P,
     families: &Families,
     warm_streams: usize,
-) -> Result<StartupPlan> {
+) -> Result<ServiceStatus> {
     let head_state = publication_store.load_finalized_head_state().await?;
     let family_states = families
         .load_startup_state(runtime, head_state.indexed_finalized_head)
         .await?;
-    Ok(StartupPlan {
+    Ok(ServiceStatus {
         head_state,
         log_state: family_states.logs,
         tx_state: family_states.txs,

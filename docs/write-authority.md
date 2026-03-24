@@ -13,7 +13,7 @@ Two roles are available at the `FinalizedHistoryService` constructor layer:
 | Reader+writer | `new_reader_writer(...)` | Yes    | LeaseAuthority        | Yes                           |
 
 
-Reader-only nodes load `startup_plan(...)` state observationally and never attempt ownership.
+Reader-only nodes load `service_status(...)` state observationally and never attempt ownership.
 
 ## Write Authority Boundary
 
@@ -155,9 +155,9 @@ async def reader_only_status():
     return service.status()  # observational only, never mutates ownership
 ```
 
-### `startup_plan(...)`
+### `service_status(...)`
 
-`startup_plan(...)` is observational only:
+`service_status(...)` is observational only:
 
 - loads `publication_state`
 - derives `next_log_id`

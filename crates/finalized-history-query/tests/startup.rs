@@ -14,7 +14,7 @@ use finalized_history_query::core::state::{
 use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::logs::keys::OPEN_BITMAP_PAGE_TABLE;
-use finalized_history_query::startup::startup_plan;
+use finalized_history_query::status::service_status;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::{MetaPublicationStore, PublicationStore};
@@ -335,9 +335,9 @@ fn startup_plan_should_not_take_publication_ownership() {
             blob.clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let _ = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+        let _ = service_status(&runtime, &publication_store, &Families::default(), 0)
             .await
-            .expect("startup plan should succeed");
+            .expect("status should succeed");
 
         let publication_state = meta
             .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
@@ -452,9 +452,9 @@ fn startup_recovers_trace_state_from_published_head_only() {
             blob,
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let plan = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+        let plan = service_status(&runtime, &publication_store, &Families::default(), 0)
             .await
-            .expect("startup plan");
+            .expect("status");
 
         assert_eq!(plan.head_state.indexed_finalized_head, 2);
         assert_eq!(plan.trace_state.next_trace_id.get(), 43);
@@ -488,9 +488,9 @@ fn startup_rejects_missing_trace_records_for_nonzero_published_head() {
             blob,
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
-        let err = startup_plan(&runtime, &publication_store, &Families::default(), 0)
+        let err = service_status(&runtime, &publication_store, &Families::default(), 0)
             .await
-            .expect_err("startup should fail closed when published trace head metadata is missing");
+            .expect_err("status should fail closed when published trace head metadata is missing");
 
         assert!(matches!(err, finalized_history_query::Error::NotFound));
     });

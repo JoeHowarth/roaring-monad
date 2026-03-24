@@ -11,8 +11,8 @@ use crate::logs::filter::LogFilter;
 use crate::logs::query::LogsQueryEngine;
 use crate::logs::types::Log;
 use crate::runtime::Runtime;
-pub use crate::startup::StartupPlan;
-use crate::startup::startup_plan;
+pub use crate::status::ServiceStatus;
+use crate::status::service_status;
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::filter::TraceFilter;
@@ -148,8 +148,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .map(|state| state.indexed_finalized_head)
     }
 
-    pub async fn status(&self) -> Result<StartupPlan> {
-        startup_plan(
+    pub async fn status(&self) -> Result<ServiceStatus> {
+        service_status(
             &self.runtime,
             &self.publication_store,
             &self.ingest.families,

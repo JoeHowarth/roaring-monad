@@ -8,7 +8,7 @@ pub mod kernel;
 pub mod logs;
 pub mod query;
 pub mod runtime;
-pub mod startup;
+pub mod status;
 pub mod store;
 pub mod streams;
 pub mod tables;

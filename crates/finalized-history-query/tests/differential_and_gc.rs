@@ -8,7 +8,6 @@ use finalized_history_query::config::Config;
 use finalized_history_query::core::ids::LogId;
 use finalized_history_query::family::Families;
 use finalized_history_query::logs::types::Log;
-use finalized_history_query::startup::startup_plan;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
@@ -416,9 +415,14 @@ fn recovery_startup_smoke_check() {
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
         let publication_store = MetaPublicationStore::new(std::sync::Arc::new(meta));
-        let rec = startup_plan(&runtime, &publication_store, &Families::default(), 0)
-            .await
-            .expect("startup plan");
+        let rec = finalized_history_query::status::service_status(
+            &runtime,
+            &publication_store,
+            &Families::default(),
+            0,
+        )
+        .await
+        .expect("service status");
         assert_eq!(rec.head_state.indexed_finalized_head, 0);
         assert_eq!(rec.log_state.next_log_id, LogId::new(0));
     });
