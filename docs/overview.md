@@ -73,7 +73,7 @@ The crate is organized in three layers.
 ### Family adapters
 
 - `src/logs/*`
-- `src/txs.rs`
+- `src/txs/*`
 - `src/traces/*`
 
 The RPC crate stays outside this boundary. It owns transport concerns such as JSON-RPC parsing, tag policy, field selection, envelope formatting, and error mapping.
@@ -152,7 +152,7 @@ The traces layer owns:
 
 The txs layer already participates in the shared family boundary:
 
-- `src/txs.rs`
+- `src/txs/*`
 
 Today txs still provide state scaffolds and a concrete family slot in the shared ingest coordinator. Non-empty tx payloads are still rejected until that family grows real storage, codecs, and ingest behavior.
 

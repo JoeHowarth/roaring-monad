@@ -5,7 +5,8 @@ use roaring::RoaringBitmap;
 
 use crate::core::directory_resolver::ResolvedPrimaryLocation;
 use crate::core::ids::{
-    FamilyIdValue, LogId, TraceId, compose_log_id, compose_trace_id, family_local_range_for_shard,
+    FamilyIdValue, LogId, TraceId, TxId, compose_log_id, compose_trace_id,
+    family_local_range_for_shard,
 };
 use crate::core::layout::MAX_LOCAL_ID;
 use crate::core::page::{QueryPage, QueryPageMeta};
@@ -92,6 +93,28 @@ impl QueryId for TraceId {
             crate::core::ids::TraceLocalId::new(local_raw)
                 .expect("query local id must fit TraceLocalId"),
         )
+    }
+}
+
+impl QueryId for TxId {
+    fn new(raw: u64) -> Self {
+        Self::new(raw)
+    }
+
+    fn get(self) -> u64 {
+        self.get()
+    }
+
+    fn shard_raw(self) -> u64 {
+        self.into_family_id().shard_raw()
+    }
+
+    fn local_raw(self) -> u32 {
+        self.into_family_id().local_raw()
+    }
+
+    fn compose(_shard_raw: u64, _local_raw: u32) -> Self {
+        todo!("tx query-id composition is not implemented")
     }
 }
 
