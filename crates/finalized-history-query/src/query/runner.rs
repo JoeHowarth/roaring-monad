@@ -14,8 +14,6 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
 use super::planner::PreparedClause;
-use super::types::PrimaryId;
-
 pub type ShardBitmapSet = BTreeMap<u64, RoaringBitmap>;
 
 pub trait QueryId: Copy + Ord {
@@ -218,7 +216,7 @@ where
 
 #[allow(async_fn_in_trait)]
 pub(crate) trait QueryDescriptor {
-    type Id: PrimaryId;
+    type Id: QueryId;
     type Shard: Copy;
     type ClauseKind: Copy;
     type ClauseSpec: Clone;
