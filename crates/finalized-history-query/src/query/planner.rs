@@ -1,4 +1,3 @@
-use crate::core::clause::Clause;
 use crate::error::Result;
 use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::query::bitmap;
@@ -74,15 +73,4 @@ pub(crate) async fn prepare_shard_clauses<M: MetaStore, B: BlobStore>(
             .then_with(|| left.stream_ids.cmp(&right.stream_ids))
     });
     Ok(prepared)
-}
-
-pub(crate) fn clause_values<T>(clause: &Clause<T>) -> Vec<Vec<u8>>
-where
-    T: Copy + Into<Vec<u8>>,
-{
-    match clause {
-        Clause::Any => Vec::new(),
-        Clause::One(value) => vec![(*value).into()],
-        Clause::Or(values) => values.iter().copied().map(Into::into).collect(),
-    }
 }

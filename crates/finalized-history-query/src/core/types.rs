@@ -15,6 +15,17 @@ impl<T> Clause<T> {
             Self::Or(values) => values.len(),
         }
     }
+
+    pub fn indexed_values(&self) -> Vec<Vec<u8>>
+    where
+        T: Copy + Into<Vec<u8>>,
+    {
+        match self {
+            Self::Any => Vec::new(),
+            Self::One(value) => vec![(*value).into()],
+            Self::Or(values) => values.iter().copied().map(Into::into).collect(),
+        }
+    }
 }
 
 pub fn clause_matches<T: Eq>(actual: &T, clause: &Option<Clause<T>>) -> bool {

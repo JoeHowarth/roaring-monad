@@ -1,4 +1,3 @@
-use super::clause::build_clause_specs;
 use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
 use crate::core::ids::{LogId, family_local_range_for_shard};
@@ -99,7 +98,7 @@ impl QueryDescriptor for LogsQueryDescriptor {
     type Filter = LogFilter;
 
     fn build_clause_specs(&self, filter: &Self::Filter) -> Vec<IndexedClause> {
-        build_clause_specs(filter)
+        filter.indexed_clauses()
     }
 
     fn local_range_for_shard(

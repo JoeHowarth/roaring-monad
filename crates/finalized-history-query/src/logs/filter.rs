@@ -1,6 +1,7 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::logs::types::{Address20, Topic32};
 use crate::query::engine::IndexedFilter;
+use crate::query::planner::{IndexedClause, indexed_clause};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LogFilter {
@@ -38,6 +39,44 @@ impl IndexedFilter for LogFilter {
             || has_indexed_value(&self.topic1)
             || has_indexed_value(&self.topic2)
             || has_indexed_value(&self.topic3)
+    }
+}
+
+impl LogFilter {
+    pub(crate) fn indexed_clauses(&self) -> Vec<IndexedClause> {
+        let mut clauses = Vec::new();
+
+        if let Some(clause) = &self.address
+            && let Some(clause) = indexed_clause("addr", clause.indexed_values())
+        {
+            clauses.push(clause);
+        }
+
+        if let Some(clause) = &self.topic1
+            && let Some(clause) = indexed_clause("topic1", clause.indexed_values())
+        {
+            clauses.push(clause);
+        }
+
+        if let Some(clause) = &self.topic2
+            && let Some(clause) = indexed_clause("topic2", clause.indexed_values())
+        {
+            clauses.push(clause);
+        }
+
+        if let Some(clause) = &self.topic3
+            && let Some(clause) = indexed_clause("topic3", clause.indexed_values())
+        {
+            clauses.push(clause);
+        }
+
+        if let Some(clause) = &self.topic0
+            && let Some(clause) = indexed_clause("topic0", clause.indexed_values())
+        {
+            clauses.push(clause);
+        }
+
+        clauses
     }
 }
 
