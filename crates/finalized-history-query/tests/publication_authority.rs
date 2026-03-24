@@ -55,8 +55,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
 
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
         let publication_state = svc
-            .runtime
-            .meta_store
+            .meta_store()
             .get(PUBLICATION_STATE_TABLE, PUBLICATION_STATE_SUFFIX)
             .await
             .expect("publication state get")
@@ -73,8 +72,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
             expected_lease_valid_through_block
         );
         assert!(
-            svc.runtime
-                .meta_store
+            svc.meta_store()
                 .scan_get(
                     LOG_DIR_BY_BLOCK_TABLE,
                     &LogDirByBlockSpec::partition(0),
@@ -94,8 +92,7 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         );
         let page_start = page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN);
         assert!(
-            svc.runtime
-                .meta_store
+            svc.meta_store()
                 .scan_get(
                     BITMAP_BY_BLOCK_TABLE,
                     &BitmapByBlockSpec::partition(&sid, page_start),

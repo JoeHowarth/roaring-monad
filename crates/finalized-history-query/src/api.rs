@@ -61,7 +61,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     publication_store: MetaPublicationStore<M>,
     logs_query: LogsQueryEngine,
     traces_query: TracesQueryEngine,
-    pub runtime: Runtime<M, B>,
+    pub(crate) runtime: Runtime<M, B>,
     allows_writes: bool,
 }
 
@@ -90,6 +90,14 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     pub fn cache_metrics(&self) -> BytesCacheMetrics {
         self.runtime.tables.metrics_snapshot()
+    }
+
+    pub fn meta_store(&self) -> &M {
+        &self.runtime.meta_store
+    }
+
+    pub fn blob_store(&self) -> &B {
+        &self.runtime.blob_store
     }
 
     pub async fn query_logs(

@@ -584,8 +584,8 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
         assert_eq!(svc.indexed_finalized_head().await.expect("head"), 0);
 
         let writer_runtime = finalized_history_query::runtime::Runtime::new(
-            svc.runtime.meta_store.clone(),
-            svc.runtime.blob_store.clone(),
+            svc.meta_store().clone(),
+            svc.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
         let plan = startup_plan(
@@ -749,8 +749,8 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
             .expect("retry should overwrite unpublished artifacts");
 
         let runtime = finalized_history_query::runtime::Runtime::new(
-            takeover_writer.runtime.meta_store.clone(),
-            takeover_writer.runtime.blob_store.clone(),
+            takeover_writer.meta_store().clone(),
+            takeover_writer.blob_store().clone(),
             finalized_history_query::tables::BytesCacheConfig::default(),
         );
         let plan = startup_plan(
