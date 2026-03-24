@@ -297,7 +297,6 @@ mod tests {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
-                crc32: 0,
                 bitmap: fragment_bitmap,
             };
             let partition = BitmapByBlockSpec::partition(stream, page_start);
@@ -355,7 +354,6 @@ mod tests {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
-                crc32: 0,
                 bitmap,
             };
 
@@ -439,7 +437,6 @@ mod tests {
                 min_local: 11,
                 max_local: 11,
                 count: 1,
-                crc32: 0,
                 bitmap,
             };
 
@@ -516,7 +513,6 @@ mod tests {
                     min_local: local,
                     max_local: local,
                     count: 1,
-                    crc32: 0,
                     bitmap,
                 };
                 meta.scan_put(

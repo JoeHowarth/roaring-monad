@@ -4,7 +4,6 @@ use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
 use crate::logs::filter::{LogFilter, exact_match};
 use crate::logs::log_ref::LogRef;
-use crate::logs::table_specs::{LogDirBucketSpec, LogDirSubBucketSpec};
 use crate::query::runner::{QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -21,8 +20,6 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
             &self.tables.log_dir,
             &mut self.caches.directory_fragment_cache,
             id,
-            |value| LogDirBucketSpec::bucket_start(value.get()),
-            |value| LogDirSubBucketSpec::sub_bucket_start(value.get()),
         )
         .await?
         .map(|location| ResolvedPrimaryLocation {

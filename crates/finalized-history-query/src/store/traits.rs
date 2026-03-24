@@ -501,6 +501,15 @@ impl<T: MetaStore> MetaStore for Arc<T> {
 ///
 /// Rust cannot enforce "cheap clone" mechanically, so this is a semantic
 /// contract for implementors of the trait.
+///
+/// `get_blob` must return bytes that have passed backend-managed integrity
+/// validation. Backends may satisfy this with native checksum features or side
+/// metadata, but they must preserve the exact stored blob bytes rather than
+/// rewriting payloads to inject integrity headers.
+///
+/// `read_range` may use a backend-native partial-read fast path and therefore
+/// does not imply end-to-end payload verification unless an implementation
+/// documents otherwise.
 #[allow(async_fn_in_trait)]
 pub trait BlobStore: Clone + Send + Sync {
     fn table(&self, table: BlobTableId) -> BlobTable<Self>

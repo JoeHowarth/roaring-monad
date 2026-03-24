@@ -1,10 +1,10 @@
 use bytes::Bytes;
 
+use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{PrimaryDirFragmentLayout, Tables};
-use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
 use crate::traces::table_specs::{TraceDirByBlockSpec, TraceDirSubBucketSpec};
 use crate::traces::types::BlockTraceHeader;
 use alloy_rlp::{Header, PayloadView};
@@ -43,7 +43,7 @@ pub async fn persist_trace_dir_by_block<M: MetaStore, B: BlobStore>(
             count,
             PrimaryDirFragmentLayout {
                 sub_bucket_start: TraceDirSubBucketSpec::sub_bucket_start,
-                sub_bucket_span: TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+                sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
                 partition: TraceDirByBlockSpec::partition,
                 clustering: TraceDirByBlockSpec::clustering,
             },
@@ -119,10 +119,10 @@ mod tests {
     use futures::executor::block_on;
 
     use super::persist_trace_dir_by_block;
+    use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::kernel::codec::StorageCodec;
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
-    use crate::traces::keys::TRACE_DIRECTORY_SUB_BUCKET_SIZE;
     use crate::traces::table_specs::TraceDirByBlockSpec;
     use crate::traces::types::DirByBlock;
     use crate::{store::traits::MetaStore, tables::Tables};
@@ -132,14 +132,14 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let tables = Tables::without_cache(meta.clone(), InMemoryBlobStore::default());
-            let first_trace_id = TRACE_DIRECTORY_SUB_BUCKET_SIZE - 3;
+            let first_trace_id = DIRECTORY_SUB_BUCKET_SIZE - 3;
             let count = 7u32;
 
             persist_trace_dir_by_block(&tables, 700, first_trace_id, count)
                 .await
                 .expect("persist fragments");
 
-            for sub_bucket_start in [0, TRACE_DIRECTORY_SUB_BUCKET_SIZE] {
+            for sub_bucket_start in [0, DIRECTORY_SUB_BUCKET_SIZE] {
                 let fragment = meta
                     .scan_get(
                         crate::traces::keys::TRACE_DIR_BY_BLOCK_TABLE,

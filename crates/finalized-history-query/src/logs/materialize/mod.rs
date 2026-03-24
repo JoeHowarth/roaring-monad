@@ -34,8 +34,8 @@ mod tests {
 
     use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::LogId;
+    use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
     use crate::kernel::codec::StorageCodec;
-    use crate::logs::keys::{LOG_DIRECTORY_BUCKET_SIZE, LOG_DIRECTORY_SUB_BUCKET_SIZE};
     use crate::logs::table_specs::{
         BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec,
         LogDirSubBucketSpec,
@@ -142,15 +142,15 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE + 5);
+            let log_id = LogId::new(DIRECTORY_SUB_BUCKET_SIZE + 5);
             meta.scan_put(
                 crate::logs::keys::LOG_DIR_BY_BLOCK_TABLE,
                 &LogDirByBlockSpec::partition(LogDirSubBucketSpec::sub_bucket_start(log_id.get())),
                 &LogDirByBlockSpec::clustering(700),
                 DirByBlock {
                     block_num: 700,
-                    first_primary_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    end_primary_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 10,
+                    first_primary_id: DIRECTORY_SUB_BUCKET_SIZE,
+                    end_primary_id_exclusive: DIRECTORY_SUB_BUCKET_SIZE + 10,
                 }
                 .encode(),
                 PutCond::Any,
@@ -180,8 +180,8 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let first_log_id = LOG_DIRECTORY_BUCKET_SIZE - 3;
-            let log_id = LogId::new(first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 5);
+            let first_log_id = DIRECTORY_BUCKET_SIZE - 3;
+            let log_id = LogId::new(first_log_id + DIRECTORY_BUCKET_SIZE + 5);
             meta.put(
                 crate::logs::keys::LOG_DIR_BUCKET_TABLE,
                 &LogDirBucketSpec::key(LogDirBucketSpec::bucket_start(log_id.get())),
@@ -189,7 +189,7 @@ mod tests {
                     start_block: 700,
                     first_primary_ids: vec![
                         first_log_id,
-                        first_log_id + LOG_DIRECTORY_BUCKET_SIZE + 10,
+                        first_log_id + DIRECTORY_BUCKET_SIZE + 10,
                     ],
                 }
                 .encode(),
@@ -209,7 +209,7 @@ mod tests {
                 resolved,
                 Some(ResolvedPrimaryLocation {
                     block_num: 700,
-                    local_ordinal: (LOG_DIRECTORY_BUCKET_SIZE + 5) as usize,
+                    local_ordinal: (DIRECTORY_BUCKET_SIZE + 5) as usize,
                 })
             );
         });
@@ -227,7 +227,7 @@ mod tests {
             let read_range_count = Arc::clone(&blob.read_range_count);
             let get_blob_count = Arc::clone(&blob.get_blob_count);
             let block_num = 700u64;
-            let log_id = LogId::new(LOG_DIRECTORY_SUB_BUCKET_SIZE);
+            let log_id = LogId::new(DIRECTORY_SUB_BUCKET_SIZE);
             let log = Log {
                 address: [7u8; 20],
                 topics: vec![[8u8; 32]],
@@ -245,8 +245,8 @@ mod tests {
                 &LogDirByBlockSpec::clustering(block_num),
                 DirByBlock {
                     block_num,
-                    first_primary_id: LOG_DIRECTORY_SUB_BUCKET_SIZE,
-                    end_primary_id_exclusive: LOG_DIRECTORY_SUB_BUCKET_SIZE + 1,
+                    first_primary_id: DIRECTORY_SUB_BUCKET_SIZE,
+                    end_primary_id_exclusive: DIRECTORY_SUB_BUCKET_SIZE + 1,
                 }
                 .encode(),
                 PutCond::Any,
@@ -406,7 +406,7 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let sub_bucket_start = LOG_DIRECTORY_SUB_BUCKET_SIZE;
+            let sub_bucket_start = DIRECTORY_SUB_BUCKET_SIZE;
 
             for fragment in [
                 DirByBlock {

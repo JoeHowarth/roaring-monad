@@ -102,7 +102,13 @@ pub trait BlobStore: Send + Sync {
 The storage boundary also exposes `BlobTable<B>` / `BlobTableRef<'_, B>` so
 higher-level code can bind a blob table once and then work with suffix keys.
 
-`read_range` has a default implementation that loads the full blob and slices locally. Backends with native range-read support can override this.
+`read_range` has a default implementation that loads the full blob and slices locally. Backends with native range-read support can override this. Those partial-read fast paths are not required to perform end-to-end payload verification.
+
+`get_blob` integrity is guaranteed at the `BlobStore` boundary. Backends verify
+full-object bytes before returning them with native checksum facilities when
+available or with side metadata when not. Blob values remain
+backend-transparent: implementations store and return the exact artifact bytes
+rather than injecting checksum headers into the payload format.
 
 Normal artifact writes use unconditional blob puts. Immutability is a
 convention enforced by writer behavior and rollout discipline rather
@@ -151,6 +157,7 @@ File-system backed stores for local development and testing.
 - Scannable metadata tables live under `meta_scan/<table>/<hex_partition>/<hex_clustering>`
 - Blob tables map to directories under `blob/<table>/`
 - Versions are stored in `.ver` sidecar files
+- Blob integrity uses sidecar checksum metadata so reads reject corrupted blob contents
 - By default the filesystem store uses normal buffered I/O on macOS, matching other platforms
 - Enabling the `macos-fs-nocache` crate feature sets `F_NOCACHE` (`fcntl(F_NOCACHE, 1)`) on all file I/O handles on macOS to avoid polluting the OS page cache
 
@@ -215,5 +222,6 @@ S3-compatible object storage implementation for `BlobStore`.
 
 - Objects are stored under `<object_prefix>/<table>/<hex_key>`
 - Bucket is auto-created if it doesn't exist
+- Puts request S3-managed object checksums, `get_blob` enables checksum validation, and `read_range` uses native partial reads without full-object verification
 - `list_prefix` uses S3 `ListObjectsV2` with continuation tokens
 - Retryable errors use the same exponential backoff pattern as Scylla

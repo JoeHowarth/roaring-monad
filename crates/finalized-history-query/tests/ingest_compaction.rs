@@ -258,7 +258,6 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
                 min_local: STREAM_PAGE_LOCAL_ID_SPAN - 1,
                 max_local: STREAM_PAGE_LOCAL_ID_SPAN - 1,
                 count: 1,
-                crc32: 0,
                 bitmap,
             })
             .expect("encode bitmap fragment"),

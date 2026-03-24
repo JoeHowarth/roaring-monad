@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::ids::FamilyIdValue;
+use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
 use crate::error::{Error, Result};
+use crate::kernel::table_specs::aligned_u64_start;
 use crate::store::traits::MetaStore;
 use crate::tables::PrimaryDirTables;
 
@@ -16,21 +19,19 @@ pub async fn resolve_primary_id<M, I>(
     dir: &PrimaryDirTables<M>,
     fragment_cache: &mut HashMap<u64, Vec<PrimaryDirFragment>>,
     id: I,
-    bucket_start: fn(I) -> u64,
-    sub_bucket_start: fn(I) -> u64,
 ) -> Result<Option<ResolvedPrimaryLocation>>
 where
     M: MetaStore,
     I: FamilyIdValue,
 {
-    let bucket_start = bucket_start(id);
+    let bucket_start = aligned_u64_start(id.get(), DIRECTORY_BUCKET_SIZE);
     if let Some(bucket) = dir.get_bucket(bucket_start).await?
         && let Some(location) = resolved_location_from_bucket(&bucket, id)?
     {
         return Ok(Some(location));
     }
 
-    let sub_bucket_start = sub_bucket_start(id);
+    let sub_bucket_start = aligned_u64_start(id.get(), DIRECTORY_SUB_BUCKET_SIZE);
     if let Some(bucket) = dir.get_sub_bucket(sub_bucket_start).await?
         && let Some(location) = resolved_location_from_bucket(&bucket, id)?
     {
@@ -56,8 +57,7 @@ pub async fn load_directory_fragments<'a, M: MetaStore>(
     fragment_cache: &'a mut HashMap<u64, Vec<PrimaryDirFragment>>,
     sub_bucket_start: u64,
 ) -> Result<&'a [PrimaryDirFragment]> {
-    if let std::collections::hash_map::Entry::Vacant(entry) = fragment_cache.entry(sub_bucket_start)
-    {
+    if let Entry::Vacant(entry) = fragment_cache.entry(sub_bucket_start) {
         entry.insert(dir.load_sub_bucket_fragments(sub_bucket_start).await?);
     }
     Ok(fragment_cache

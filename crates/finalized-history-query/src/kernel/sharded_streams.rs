@@ -102,7 +102,6 @@ pub fn compacted_bitmap_blob(bitmap: RoaringBitmap, page_start: u32) -> Option<(
             min_local,
             max_local,
             count,
-            crc32: 0,
             bitmap,
         },
     ))

@@ -1,4 +1,7 @@
-pub use crate::core::layout::{LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID, read_u64_be};
+pub use crate::core::layout::{
+    DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE, LOCAL_ID_BITS, LOCAL_ID_MASK, MAX_LOCAL_ID,
+    read_u64_be,
+};
 use crate::ingest::primary_dir::PrimaryDirCompactionLayout;
 use crate::store::traits::{ScannableTableId, TableId};
 
@@ -10,12 +13,10 @@ pub const LOG_DIR_BY_BLOCK_TABLE: ScannableTableId = ScannableTableId::new("log_
 pub const BITMAP_BY_BLOCK_TABLE: ScannableTableId = ScannableTableId::new("bitmap_by_block");
 pub const BITMAP_PAGE_META_TABLE: TableId = TableId::new("bitmap_page_meta");
 pub const OPEN_BITMAP_PAGE_TABLE: ScannableTableId = ScannableTableId::new("open_bitmap_page");
-pub const LOG_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
-pub const LOG_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 pub(super) const LOG_PRIMARY_DIR_LAYOUT: PrimaryDirCompactionLayout = PrimaryDirCompactionLayout {
-    sub_bucket_span: LOG_DIRECTORY_SUB_BUCKET_SIZE,
-    bucket_span: LOG_DIRECTORY_BUCKET_SIZE,
+    sub_bucket_span: DIRECTORY_SUB_BUCKET_SIZE,
+    bucket_span: DIRECTORY_BUCKET_SIZE,
     sub_bucket_start: crate::logs::table_specs::LogDirSubBucketSpec::sub_bucket_start,
     bucket_start: crate::logs::table_specs::LogDirBucketSpec::bucket_start,
     missing_sentinel_error: "directory sub-bucket missing sentinel",

@@ -2603,6 +2603,7 @@ dependencies = [
  "roaring",
  "scylla",
  "serde",
+ "sha2",
  "thiserror",
  "tokio",
 ]

@@ -2,6 +2,7 @@ use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Region};
+use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode};
 use bytes::Bytes;
 use tokio::time::{Duration, sleep};
 
@@ -90,6 +91,7 @@ impl BlobStore for MinioBlobStore {
                 .put_object()
                 .bucket(&self.bucket)
                 .key(&object_key)
+                .checksum_algorithm(ChecksumAlgorithm::Sha256)
                 .body(payload.clone().into())
                 .send()
                 .await
@@ -107,6 +109,7 @@ impl BlobStore for MinioBlobStore {
                 .get_object()
                 .bucket(&self.bucket)
                 .key(&object_key)
+                .checksum_mode(ChecksumMode::Enabled)
                 .send()
                 .await;
 

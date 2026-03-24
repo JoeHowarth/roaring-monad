@@ -11,6 +11,7 @@ use crate::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
     TableId,
 };
+use sha2::{Digest, Sha256};
 
 /// Cheap clone handle to the same filesystem-backed metadata namespace.
 #[derive(Debug, Clone)]
@@ -399,16 +400,25 @@ impl FsBlobStore {
         p.push(hex(key));
         p
     }
+
+    fn checksum_path(&self, table: BlobTableId, key: &[u8]) -> PathBuf {
+        let mut checksum = self.key_path(table, key);
+        checksum.set_extension("sha256");
+        checksum
+    }
 }
 
 impl BlobStore for FsBlobStore {
     async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
         let path = self.key_path(table, key);
+        let checksum_path = self.checksum_path(table, key);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::Backend(format!("create fs blob table dir: {e}")))?;
         }
-        write_file_bytes(&path, &value)
+        let checksum = sha256_digest(&value);
+        write_file_bytes(&path, &value)?;
+        write_file_bytes(&checksum_path, checksum.as_slice())
     }
 
     async fn get_blob(&self, table: BlobTableId, key: &[u8]) -> Result<Option<Bytes>> {
@@ -416,12 +426,19 @@ impl BlobStore for FsBlobStore {
         if !p.exists() {
             return Ok(None);
         }
+        let checksum_path = self.checksum_path(table, key);
         let b = read_file_bytes(&p)?;
+        let expected = read_checksum_file(&checksum_path)?;
+        let actual = sha256_digest(&b);
+        if actual != expected {
+            return Err(Error::Backend("fs blob integrity check failed".to_string()));
+        }
         Ok(Some(Bytes::from(b)))
     }
 
     async fn delete_blob(&self, table: BlobTableId, key: &[u8]) -> Result<()> {
         let _ = fs::remove_file(self.key_path(table, key));
+        let _ = fs::remove_file(self.checksum_path(table, key));
         Ok(())
     }
 
@@ -502,6 +519,20 @@ fn write_file_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     drop(file);
     fs::rename(&tmp_path, path).map_err(|e| Error::Backend(format!("fs rename: {e}")))?;
     Ok(())
+}
+
+fn read_checksum_file(path: &Path) -> Result<[u8; 32]> {
+    let bytes = read_file_bytes(path)?;
+    bytes.try_into().map_err(|_| {
+        Error::Backend(format!(
+            "fs blob integrity metadata has invalid length: {}",
+            path.display()
+        ))
+    })
+}
+
+fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 #[cfg(all(target_os = "macos", feature = "macos-fs-nocache"))]
@@ -608,6 +639,9 @@ fn collect_keys_from_group_dir(
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if skip_ver && name.ends_with(".ver") {
+            continue;
+        }
+        if name.ends_with(".sha256") {
             continue;
         }
         let key = unhex(&name)?;
@@ -800,6 +834,31 @@ mod tests {
             assert_eq!(blob_seen.len(), ENTRY_COUNT);
             assert_eq!(blob_unique.len(), ENTRY_COUNT);
         });
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn get_blob_rejects_corrupted_blob_contents() {
+        let root = unique_temp_root("fs-blob-integrity");
+        let blob_store = FsBlobStore::new(&root).expect("fs blob store");
+        let key = b"blob-key";
+
+        block_on(async {
+            blob_store
+                .put_blob(TEST_BLOB_TABLE, key, Bytes::from_static(b"original"))
+                .await
+                .expect("seed blob");
+        });
+
+        let path = blob_store.key_path(TEST_BLOB_TABLE, key);
+        fs::write(&path, b"corrupted").expect("corrupt blob bytes");
+
+        let err = block_on(blob_store.get_blob(TEST_BLOB_TABLE, key)).unwrap_err();
+        assert!(
+            err.to_string().contains("checksum") || err.to_string().contains("integrity"),
+            "expected integrity error, got: {err}"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

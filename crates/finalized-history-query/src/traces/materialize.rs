@@ -8,7 +8,6 @@ use crate::query::runner::{MaterializerCaches, QueryMaterializer, cached_parent_
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::filter::TraceFilter;
-use crate::traces::table_specs::{TraceDirBucketSpec, TraceDirSubBucketSpec};
 use crate::traces::types::Trace;
 
 pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
@@ -36,8 +35,6 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
             &self.tables.trace_dir,
             &mut self.caches.directory_fragment_cache,
             id,
-            TraceDirBucketSpec::bucket_start,
-            TraceDirSubBucketSpec::sub_bucket_start,
         )
         .await?
         .map(|location| ResolvedPrimaryLocation {
