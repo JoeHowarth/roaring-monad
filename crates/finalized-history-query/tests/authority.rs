@@ -106,6 +106,110 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
 }
 
 #[test]
+fn first_ingest_bootstraps_publication_ownership() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        let outcome = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+            .await
+            .expect("ingest");
+        assert_eq!(outcome.indexed_finalized_head, 1);
+        assert_eq!(svc.indexed_finalized_head().await.expect("head"), 1);
+    });
+}
+
+#[test]
+fn first_ingest_uses_configured_lease_blocks() {
+    block_on(async {
+        let observed_upstream_finalized_block = 41;
+        let config = Config {
+            observe_upstream_finalized_block: Arc::new(move || {
+                Some(observed_upstream_finalized_block)
+            }),
+            publication_lease_blocks: 7,
+            ..Config::default()
+        };
+        let svc = FinalizedHistoryService::new_reader_writer(
+            config,
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect("ingest");
+        let publication_state = MetaPublicationStore::new(svc.meta_store().clone())
+            .load()
+            .await
+            .expect("load publication state")
+            .expect("publication state");
+
+        assert_eq!(
+            publication_state.lease_valid_through_block,
+            observed_upstream_finalized_block + 6
+        );
+    });
+}
+
+#[test]
+fn lease_writer_ingest_fails_closed_without_observed_finalized_block() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            Config::default(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        let err = svc
+            .ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect_err("missing observation should fail closed");
+
+        assert!(matches!(err, Error::LeaseObservationUnavailable));
+    });
+}
+
+#[test]
+fn ingest_rechecks_observation_for_a_cached_writer() {
+    block_on(async {
+        let observation_available = Arc::new(AtomicBool::new(true));
+        let config = Config {
+            observe_upstream_finalized_block: {
+                let observation_available = observation_available.clone();
+                Arc::new(move || observation_available.load(Ordering::Relaxed).then_some(100))
+            },
+            ..Config::default()
+        };
+        let svc = FinalizedHistoryService::new_reader_writer(
+            config,
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            5,
+        );
+
+        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![]))
+            .await
+            .expect("first ingest");
+        observation_available.store(false, Ordering::Relaxed);
+
+        let err = svc
+            .ingest_finalized_block(mk_block(2, [1; 32], vec![]))
+            .await
+            .expect_err("cached writer ingest should fail closed without observation");
+
+        assert!(matches!(err, Error::LeaseObservationUnavailable));
+    });
+}
+
+#[test]
 fn acquire_publication_bootstraps_and_takeover_switches_session() {
     block_on(async {
         let meta = InMemoryMetaStore::default();

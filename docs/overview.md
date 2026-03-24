@@ -390,19 +390,19 @@ The crate intentionally does not implement:
 
 ### Pass 6: Ingest orchestration
 
-42. `src/ingest/engine.rs` — ingest orchestration over the concrete `Families { logs, txs, traces }` registry
+42. `src/ingest/engine.rs` — writer preflight and ingest orchestration over the concrete `Families { logs, txs, traces }` registry
 43. `src/ingest/authority.rs` — `WriteAuthority` contract
-44. `src/ingest/authority/lease/` — lease-backed multi-writer authority
+44. `src/ingest/recovery.rs` — ownership-transition recovery preflight
 45. `src/status.rs` — observational service state built on the family boundary
 
 ### Pass 7: End-to-end behavior
 
-46. `tests/publication_authority.rs` — publication state, lease authority, publication-only safety
-47. `tests/status.rs` — status, session reuse, roles
-48. `tests/query_semantics.rs` — query pagination, limit/resume, range clipping
-49. `tests/ingest_compaction.rs` — shard boundaries, compaction, directory fragments
-50. `tests/cache_behavior.rs` — point log payload caching, range read coalescing
-51. `tests/crash_injection_matrix.rs` — crash-retry behavior
-52. `tests/differential_and_gc.rs` — differential correctness, recovery
+46. `tests/authority.rs` — lease authority, publication-only safety, writer-side authority behavior
+47. `tests/status.rs` — observational status behavior
+48. `tests/recovery.rs` — ownership-transition recovery and hot-path no-scan guarantees
+49. `tests/ingest.rs` — ingest validation and block-sequence behavior
+50. `tests/query_logs.rs` — logs query pagination, limit/resume, and edge cases
+51. `tests/query_traces.rs` — trace query semantics
+52. `tests/crash_recovery.rs` — crash and retry behavior across protocol phases
 
 All paths are relative to `crates/finalized-history-query/`.

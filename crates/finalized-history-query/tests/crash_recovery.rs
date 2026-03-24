@@ -39,16 +39,16 @@ use finalized_history_query::store::traits::{
 use futures::executor::block_on;
 
 #[derive(Clone, Copy)]
-enum FaultOp {
-    MetaPut,
-    BlobPut,
-    PublicationCas,
-    PublicationAdvanceCas,
+enum FailurePhase {
+    ArtifactMetaWrite,
+    ArtifactBlobWrite,
+    PublicationStateCas,
+    PublishHeadAdvance,
 }
 
 #[derive(Clone)]
 struct FaultPlan {
-    op: FaultOp,
+    phase: FailurePhase,
     prefix: Vec<u8>,
     fail_on_match: usize,
     seen_matches: usize,
@@ -81,10 +81,10 @@ fn shared_block_record(
 }
 
 impl FaultInjector {
-    fn arm(&self, op: FaultOp, prefix: &[u8], fail_on_match: usize) {
+    fn arm(&self, phase: FailurePhase, prefix: &[u8], fail_on_match: usize) {
         let mut guard = self.plan.lock().expect("injector lock");
         *guard = Some(FaultPlan {
-            op,
+            phase,
             prefix: prefix.to_vec(),
             fail_on_match,
             seen_matches: 0,
@@ -97,12 +97,12 @@ impl FaultInjector {
         *guard = None;
     }
 
-    fn maybe_fail(&self, op: FaultOp, key: &[u8]) -> Result<()> {
+    fn maybe_fail(&self, phase: FailurePhase, key: &[u8]) -> Result<()> {
         let mut guard = self.plan.lock().expect("injector lock");
         let Some(plan) = guard.as_mut() else {
             return Ok(());
         };
-        if !plan.armed || !matches_op(plan.op, op) || !key.starts_with(&plan.prefix) {
+        if !plan.armed || !matches_phase(plan.phase, phase) || !key.starts_with(&plan.prefix) {
             return Ok(());
         }
 
@@ -115,15 +115,15 @@ impl FaultInjector {
     }
 }
 
-fn matches_op(a: FaultOp, b: FaultOp) -> bool {
+fn matches_phase(a: FailurePhase, b: FailurePhase) -> bool {
     matches!(
         (a, b),
-        (FaultOp::MetaPut, FaultOp::MetaPut)
-            | (FaultOp::BlobPut, FaultOp::BlobPut)
-            | (FaultOp::PublicationCas, FaultOp::PublicationCas)
+        (FailurePhase::ArtifactMetaWrite, FailurePhase::ArtifactMetaWrite)
+            | (FailurePhase::ArtifactBlobWrite, FailurePhase::ArtifactBlobWrite)
+            | (FailurePhase::PublicationStateCas, FailurePhase::PublicationStateCas)
             | (
-                FaultOp::PublicationAdvanceCas,
-                FaultOp::PublicationAdvanceCas
+                FailurePhase::PublishHeadAdvance,
+                FailurePhase::PublishHeadAdvance
             )
     )
 }
@@ -177,7 +177,7 @@ impl MetaStore for FaultyMetaStore {
         let logical_key = Self::logical_key(family, key);
         if family == PUBLICATION_STATE_TABLE {
             self.injector
-                .maybe_fail(FaultOp::PublicationCas, &logical_key)?;
+                .maybe_fail(FailurePhase::PublicationStateCas, &logical_key)?;
             if matches!(cond, PutCond::IfVersion(_))
                 && let Some(current) = self.inner.get(family, key).await?
             {
@@ -185,11 +185,12 @@ impl MetaStore for FaultyMetaStore {
                 let next_state = PublicationState::decode(&value)?;
                 if next_state.indexed_finalized_head > current_state.indexed_finalized_head {
                     self.injector
-                        .maybe_fail(FaultOp::PublicationAdvanceCas, &logical_key)?;
+                        .maybe_fail(FailurePhase::PublishHeadAdvance, &logical_key)?;
                 }
             }
         } else {
-            self.injector.maybe_fail(FaultOp::MetaPut, &logical_key)?;
+            self.injector
+                .maybe_fail(FailurePhase::ArtifactMetaWrite, &logical_key)?;
         }
         self.inner.put(family, key, value, cond).await
     }
@@ -216,7 +217,8 @@ impl MetaStore for FaultyMetaStore {
         cond: PutCond,
     ) -> Result<PutResult> {
         let logical_key = Self::scan_logical_key(family, partition, clustering);
-        self.injector.maybe_fail(FaultOp::MetaPut, &logical_key)?;
+        self.injector
+            .maybe_fail(FailurePhase::ArtifactMetaWrite, &logical_key)?;
         self.inner
             .scan_put(family, partition, clustering, value, cond)
             .await
@@ -268,7 +270,7 @@ impl FaultyBlobStore {
 impl BlobStore for FaultyBlobStore {
     async fn put_blob(&self, table: BlobTableId, key: &[u8], value: Bytes) -> Result<()> {
         self.injector
-            .maybe_fail(FaultOp::BlobPut, &Self::logical_key(table, key))?;
+            .maybe_fail(FailurePhase::ArtifactBlobWrite, &Self::logical_key(table, key))?;
         self.inner.put_blob(table, key, value).await
     }
 
@@ -476,37 +478,37 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
         let cases = vec![
             (
                 "block_log_blob_put",
-                FaultOp::BlobPut,
+                FailurePhase::ArtifactBlobWrite,
                 b"block_log_blob/".to_vec(),
             ),
             (
                 "block_log_header_put",
-                FaultOp::MetaPut,
+                FailurePhase::ArtifactMetaWrite,
                 b"block_log_header/".to_vec(),
             ),
             (
                 "block_record_put",
-                FaultOp::MetaPut,
+                FailurePhase::ArtifactMetaWrite,
                 b"block_record/".to_vec(),
             ),
             (
                 "block_hash_index_put",
-                FaultOp::MetaPut,
+                FailurePhase::ArtifactMetaWrite,
                 b"block_hash_index/".to_vec(),
             ),
             (
                 "log_dir_by_block_put",
-                FaultOp::MetaPut,
+                FailurePhase::ArtifactMetaWrite,
                 b"log_dir_by_block/".to_vec(),
             ),
             (
                 "bitmap_by_block_put",
-                FaultOp::MetaPut,
+                FailurePhase::ArtifactMetaWrite,
                 b"bitmap_by_block/".to_vec(),
             ),
             (
                 "publication_head_advance_cas",
-                FaultOp::PublicationAdvanceCas,
+                FailurePhase::PublishHeadAdvance,
                 FaultyMetaStore::publication_state_logical_key(),
             ),
         ];
@@ -554,7 +556,7 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
+        injector.arm(FailurePhase::PublishHeadAdvance, &publication_state_key, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
@@ -612,7 +614,7 @@ fn trace_publication_failure_keeps_partial_trace_artifacts_invisible_until_retry
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
+        injector.arm(FailurePhase::PublishHeadAdvance, &publication_state_key, 1);
         let err = svc
             .ingest_finalized_block(block.clone())
             .await
@@ -707,7 +709,7 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         );
 
         let publication_state_key = FaultyMetaStore::publication_state_logical_key();
-        injector.arm(FaultOp::PublicationAdvanceCas, &publication_state_key, 1);
+        injector.arm(FailurePhase::PublishHeadAdvance, &publication_state_key, 1);
         let err = crashing_writer
             .ingest_finalized_block(first_attempt)
             .await

@@ -12,10 +12,42 @@ use finalized_history_query::logs::table_specs::{
 use finalized_history_query::logs::types::BlockLogHeader;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
+use finalized_history_query::store::publication::PublicationStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
 use futures::executor::block_on;
 
 use helpers::*;
+
+#[test]
+fn service_can_publish_a_contiguous_batch() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        let blocks = vec![
+            mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]),
+            mk_block(2, [1; 32], vec![mk_log(1, 10, 21, 2, 0, 0)]),
+        ];
+        let (outcome, head_state) = (
+            svc.ingest_finalized_blocks(blocks)
+                .await
+                .expect("batched ingest"),
+            finalized_history_query::store::publication::MetaPublicationStore::new(
+                svc.meta_store().clone(),
+            )
+            .load_finalized_head_state()
+            .await
+            .expect("head state"),
+        );
+
+        assert_eq!(outcome.indexed_finalized_head, 2);
+        assert_eq!(head_state.indexed_finalized_head, 2);
+    });
+}
 
 // --- Block sequence validation ---
 
