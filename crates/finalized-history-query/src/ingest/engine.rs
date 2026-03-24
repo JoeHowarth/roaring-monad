@@ -4,7 +4,7 @@ use crate::core::state::load_block_identity;
 use crate::error::{Error, Result};
 use crate::family::{Families, FamilyBlockWrites, FamilyStates, FinalizedBlock};
 use crate::ingest::authority::{WriteAuthority, WriteSession};
-use crate::ingest::open_pages::repair_sealed_open_bitmap_pages;
+use crate::ingest::recovery::repair_after_ownership_transition;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 
@@ -14,14 +14,19 @@ pub struct IngestEngine<A: WriteAuthority> {
     pub families: Families,
 }
 
+struct PreparedWrite<S> {
+    session: S,
+    family_states: FamilyStates,
+}
+
 impl<A> IngestEngine<A>
 where
     A: WriteAuthority,
 {
-    async fn begin_recovered_write<'a, M, B>(
+    async fn prepare_write<'a, M, B>(
         &'a self,
         runtime: &Runtime<M, B>,
-    ) -> Result<(A::Session<'a>, FamilyStates)>
+    ) -> Result<PreparedWrite<A::Session<'a>>>
     where
         M: MetaStore,
         B: BlobStore,
@@ -36,16 +41,14 @@ where
             .load_startup_state(runtime, state.indexed_finalized_head)
             .await?;
 
-        if state.needs_recovery {
-            repair_sealed_open_bitmap_pages(
-                &runtime.tables,
-                family_states.logs.next_log_id.get(),
-                family_states.traces.next_trace_id.get(),
-            )
-            .await?;
+        if state.continuity.requires_recovery() {
+            repair_after_ownership_transition(&runtime.tables, &family_states).await?;
         }
 
-        Ok((session, family_states))
+        Ok(PreparedWrite {
+            session,
+            family_states,
+        })
     }
 
     pub fn new(config: Config, authority: A, families: Families) -> Self {
@@ -82,7 +85,10 @@ where
             return Err(Error::InvalidParams("ingest requires at least one block"));
         }
 
-        let (session, mut family_states) = self.begin_recovered_write(runtime).await?;
+        let PreparedWrite {
+            session,
+            mut family_states,
+        } = self.prepare_write(runtime).await?;
         let indexed_finalized_head = session.state().indexed_finalized_head;
         validate_block_sequence(runtime, blocks, indexed_finalized_head).await?;
         let mut writes = FamilyBlockWrites::default();

@@ -25,7 +25,8 @@ pub use core::refs::BlockRef;
 pub use error::{Error, Result};
 pub use family::{FinalizedBlock, Hash32};
 pub use ingest::authority::{
-    AuthorityState, LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteSession,
+    AuthorityState, LeaseAuthority, ReadOnlyAuthority, WriteAuthority, WriteContinuity,
+    WriteSession,
 };
 pub use logs::filter::LogFilter;
 pub use logs::types::Log;

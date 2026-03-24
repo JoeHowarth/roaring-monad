@@ -1531,3 +1531,42 @@ PY
 - Timing the compiled test binaries directly is a good way to separate cargo setup overhead from actual test runtime.
 - Grouping the unit-test binary by module prefix quickly exposed `store::fs` as the outlier before drilling down to individual tests.
 - For pagination correctness tests, use the smallest fixture that crosses a page boundary; mirroring a large production-like page size can hide expensive setup costs without adding coverage.
+
+## 2026-03-24T16:37:42Z
+
+### Change Summary
+
+- Refined write-session continuity from a coarse `needs_recovery` boolean to `WriteContinuity::{Fresh, Continuous, Reacquired}`.
+- Taught authority reacquisition to preserve `Continuous` when the local lease cache is dropped but publication state still shows the same live session.
+- Moved ingest-side repair behind an explicit ownership-transition recovery helper.
+
+### Hypothesis
+
+- The prior retry/cache-invalidation path over-classified same-session continuity as recovery-required work, which could trigger unnecessary open-page repair scans on the hot path after benign local cache loss.
+- Making continuity explicit at the authority boundary should prevent those speculative scans while preserving recovery after real ownership transitions.
+
+### Commands
+
+```bash
+cargo test -p finalized-history-query begin_write_does_not_require_recovery_after_cache_invalidation_without_transition
+cargo test -p finalized-history-query continuous_writer_ingest_skips_open_page_repair_scans
+```
+
+### Before / After Metrics
+
+- `begin_write_does_not_require_recovery_after_cache_invalidation_without_transition`
+  - before: failed because the retried write session reported recovery-required continuity after local cache invalidation with the same publication session still active
+  - after: passed with `WriteContinuity::Continuous`
+- `continuous_writer_ingest_skips_open_page_repair_scans`
+  - before: already passed for uninterrupted cached leases
+  - after: still passed, confirming the continuity refactor did not reintroduce recovery scans on steady-state ingests
+
+### Interpretation
+
+- Recovery is now keyed to actual ownership continuity rather than to local cache state.
+- This removes a class of avoidable repair work without weakening the takeover/reacquire safety boundary.
+
+### Methodology Learnings
+
+- Authority-level regression tests are a good fit for lease-cache edge cases that are difficult to reproduce cleanly through the service API.
+- For performance-sensitive correctness changes, pair the new narrow regression with an existing hot-path behavior test so both the edge case and the steady-state contract stay covered.
