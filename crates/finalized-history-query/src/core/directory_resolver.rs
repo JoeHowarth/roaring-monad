@@ -24,14 +24,14 @@ where
     I: FamilyIdValue,
 {
     let bucket_start = bucket_start(id);
-    if let Some(bucket) = dir.get_bucket(bucket_start).await?
+    if let Some(bucket) = dir.buckets.get(bucket_start).await?
         && let Some(location) = resolved_location_from_bucket(&bucket, id)?
     {
         return Ok(Some(location));
     }
 
     let sub_bucket_start = sub_bucket_start(id);
-    if let Some(bucket) = dir.get_sub_bucket(sub_bucket_start).await?
+    if let Some(bucket) = dir.sub_buckets.get(sub_bucket_start).await?
         && let Some(location) = resolved_location_from_bucket(&bucket, id)?
     {
         return Ok(Some(location));
@@ -58,7 +58,11 @@ pub async fn load_directory_fragments<'a, M: MetaStore>(
 ) -> Result<&'a [PrimaryDirFragment]> {
     if let std::collections::hash_map::Entry::Vacant(entry) = fragment_cache.entry(sub_bucket_start)
     {
-        entry.insert(dir.load_sub_bucket_fragments(sub_bucket_start).await?);
+        entry.insert(
+            dir.fragments
+                .load_sub_bucket_fragments(sub_bucket_start)
+                .await?,
+        );
     }
     Ok(fragment_cache
         .get(&sub_bucket_start)

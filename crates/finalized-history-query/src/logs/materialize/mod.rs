@@ -439,6 +439,7 @@ mod tests {
             let tables = Tables::without_cache(meta, blob);
             let fragments = tables
                 .log_dir
+                .fragments
                 .load_sub_bucket_fragments(sub_bucket_start)
                 .await
                 .expect("load directory fragments");

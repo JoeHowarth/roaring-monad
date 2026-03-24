@@ -13,6 +13,7 @@ use crate::kernel::cache::{cache_for, no_cache};
 use crate::kernel::codec::{StorageCodec, encode_u64};
 use crate::kernel::point_table::CachedPointTable;
 use crate::kernel::scannable_table::ScannableFragmentTable;
+use crate::kernel::table_specs::u64_key;
 use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::logs::log_ref::{BlockLogHeaderRef, LogRef};
 use crate::logs::table_specs::{
@@ -28,9 +29,9 @@ use crate::traces::table_specs::{
 use crate::traces::types::{BlockTraceHeader, StreamBitmapMeta as TraceStreamBitmapMeta};
 
 pub struct PrimaryDirTables<M: MetaStore> {
-    buckets: PrimaryDirBucketTable<M>,
-    sub_buckets: PrimaryDirBucketTable<M>,
-    fragments: PrimaryDirFragmentTable<M>,
+    pub(crate) buckets: PrimaryDirBucketTable<M>,
+    pub(crate) sub_buckets: PrimaryDirBucketTable<M>,
+    pub(crate) fragments: PrimaryDirFragmentTable<M>,
 }
 
 pub struct StreamTables<M: MetaStore, B: BlobStore, T> {
@@ -39,61 +40,12 @@ pub struct StreamTables<M: MetaStore, B: BlobStore, T> {
     page_blobs: StreamPageBlobTable<B>,
 }
 
-#[derive(Clone, Copy)]
-pub struct PrimaryDirFragmentLayout {
-    pub sub_bucket_start: fn(u64) -> u64,
-    pub sub_bucket_span: u64,
-    pub partition: fn(u64) -> Vec<u8>,
-    pub clustering: fn(u64) -> Vec<u8>,
-}
-
 impl<M: MetaStore> PrimaryDirTables<M> {
-    pub async fn get_bucket(&self, bucket_start: u64) -> Result<Option<PrimaryDirBucket>> {
-        self.buckets.get(bucket_start).await
-    }
-
-    pub async fn put_bucket(&self, bucket_start: u64, bucket: &PrimaryDirBucket) -> Result<()> {
-        self.buckets.put(bucket_start, bucket).await
-    }
-
-    pub async fn get_sub_bucket(&self, sub_bucket_start: u64) -> Result<Option<PrimaryDirBucket>> {
-        self.sub_buckets.get(sub_bucket_start).await
-    }
-
-    pub async fn put_sub_bucket(
-        &self,
-        sub_bucket_start: u64,
-        bucket: &PrimaryDirBucket,
-    ) -> Result<()> {
-        self.sub_buckets.put(sub_bucket_start, bucket).await
-    }
-
-    pub async fn load_sub_bucket_fragments(
-        &self,
-        sub_bucket_start: u64,
-    ) -> Result<Vec<PrimaryDirFragment>> {
-        self.fragments
-            .load_sub_bucket_fragments(sub_bucket_start)
-            .await
-    }
-
-    pub async fn put_fragment(
-        &self,
-        partition: Vec<u8>,
-        clustering: Vec<u8>,
-        fragment: &PrimaryDirFragment,
-    ) -> Result<()> {
-        self.fragments
-            .put_raw(partition, clustering, fragment)
-            .await
-    }
-
     pub async fn persist_block_fragment(
         &self,
         block_num: u64,
         first_primary_id: u64,
         count: u32,
-        layout: PrimaryDirFragmentLayout,
     ) -> Result<()> {
         let fragment = PrimaryDirFragment {
             block_num,
@@ -101,26 +53,29 @@ impl<M: MetaStore> PrimaryDirTables<M> {
             end_primary_id_exclusive: first_primary_id.saturating_add(u64::from(count)),
         };
 
-        let mut current_sub_bucket_start = (layout.sub_bucket_start)(first_primary_id);
+        let mut current_sub_bucket_start = crate::kernel::table_specs::aligned_u64_start(
+            first_primary_id,
+            crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE,
+        );
         let last_sub_bucket_start = if count == 0 {
             current_sub_bucket_start
         } else {
-            (layout.sub_bucket_start)(fragment.end_primary_id_exclusive.saturating_sub(1))
+            crate::kernel::table_specs::aligned_u64_start(
+                fragment.end_primary_id_exclusive.saturating_sub(1),
+                crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE,
+            )
         };
-        let clustering = (layout.clustering)(block_num);
+        let clustering = u64_key(block_num);
 
         loop {
-            self.put_fragment(
-                (layout.partition)(current_sub_bucket_start),
-                clustering.clone(),
-                &fragment,
-            )
-            .await?;
+            self.fragments
+                .put(current_sub_bucket_start, clustering.clone(), &fragment)
+                .await?;
             if current_sub_bucket_start == last_sub_bucket_start {
                 break;
             }
-            current_sub_bucket_start =
-                current_sub_bucket_start.saturating_add(layout.sub_bucket_span);
+            current_sub_bucket_start = current_sub_bucket_start
+                .saturating_add(crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE);
         }
 
         Ok(())
@@ -171,34 +126,26 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 buckets: PrimaryDirBucketTable::new(
                     meta_store.table(LogDirBucketSpec::TABLE),
                     cache_for(config.log_dir_buckets.max_bytes),
-                    LogDirBucketSpec::key,
                 ),
                 sub_buckets: PrimaryDirBucketTable::new(
                     meta_store.table(LogDirSubBucketSpec::TABLE),
                     cache_for(config.log_dir_sub_buckets.max_bytes),
-                    LogDirSubBucketSpec::key,
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(LogDirByBlockSpec::TABLE),
-                    LogDirByBlockSpec::partition,
-                    LogDirByBlockSpec::clustering,
                 ),
             },
             trace_dir: PrimaryDirTables {
                 buckets: PrimaryDirBucketTable::new(
                     meta_store.table(TraceDirBucketSpec::TABLE),
                     no_cache(),
-                    TraceDirBucketSpec::key,
                 ),
                 sub_buckets: PrimaryDirBucketTable::new(
                     meta_store.table(TraceDirSubBucketSpec::TABLE),
                     no_cache(),
-                    TraceDirSubBucketSpec::key,
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(TraceDirByBlockSpec::TABLE),
-                    TraceDirByBlockSpec::partition,
-                    TraceDirByBlockSpec::clustering,
                 ),
             },
             log_streams: StreamTables {
@@ -388,25 +335,21 @@ impl<M: MetaStore> Clone for BlockTraceHeaderTable<M> {
 
 pub struct PrimaryDirBucketTable<M: MetaStore> {
     inner: CachedPointTable<M, PrimaryDirBucket>,
-    key: fn(u64) -> Vec<u8>,
 }
 
 impl<M: MetaStore> PrimaryDirBucketTable<M> {
-    fn new(table: KvTable<M>, cache: HashMapTableBytesCache, key: fn(u64) -> Vec<u8>) -> Self {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
         Self {
             inner: CachedPointTable::new(table, cache),
-            key,
         }
     }
 
     pub async fn get(&self, bucket_start: u64) -> Result<Option<PrimaryDirBucket>> {
-        self.inner.get_decoded(&(self.key)(bucket_start)).await
+        self.inner.get_decoded(&u64_key(bucket_start)).await
     }
 
     pub async fn put(&self, bucket_start: u64, bucket: &PrimaryDirBucket) -> Result<()> {
-        self.inner
-            .put_encoded(&(self.key)(bucket_start), bucket)
-            .await
+        self.inner.put_encoded(&u64_key(bucket_start), bucket).await
     }
 
     fn metrics(&self) -> TableCacheMetrics {
@@ -416,18 +359,12 @@ impl<M: MetaStore> PrimaryDirBucketTable<M> {
 
 pub struct PrimaryDirFragmentTable<M: MetaStore> {
     inner: ScannableFragmentTable<M>,
-    partition: fn(u64) -> Vec<u8>,
 }
 
 impl<M: MetaStore> PrimaryDirFragmentTable<M> {
-    fn new(
-        table: ScannableKvTable<M>,
-        partition: fn(u64) -> Vec<u8>,
-        _clustering: fn(u64) -> Vec<u8>,
-    ) -> Self {
+    fn new(table: ScannableKvTable<M>) -> Self {
         Self {
             inner: ScannableFragmentTable::new(table),
-            partition,
         }
     }
 
@@ -435,10 +372,9 @@ impl<M: MetaStore> PrimaryDirFragmentTable<M> {
         &self,
         sub_bucket_start: u64,
     ) -> Result<Vec<PrimaryDirFragment>> {
-        let partition = (self.partition)(sub_bucket_start);
         let mut fragments = self
             .inner
-            .load_partition_values(&partition)
+            .load_partition_values(&u64_key(sub_bucket_start))
             .await?
             .into_iter()
             .map(|bytes| PrimaryDirFragment::decode(&bytes))
@@ -447,14 +383,14 @@ impl<M: MetaStore> PrimaryDirFragmentTable<M> {
         Ok(fragments)
     }
 
-    pub async fn put_raw(
+    pub async fn put(
         &self,
-        partition: Vec<u8>,
+        sub_bucket_start: u64,
         clustering: Vec<u8>,
         fragment: &PrimaryDirFragment,
     ) -> Result<()> {
         self.inner
-            .put_value(&partition, &clustering, fragment.encode())
+            .put_value(&u64_key(sub_bucket_start), &clustering, fragment.encode())
             .await
     }
 }

@@ -1,4 +1,8 @@
 use crate::core::layout::LOCAL_ID_BITS;
+pub use crate::core::layout::{
+    DIRECTORY_BUCKET_SIZE as TRACE_DIRECTORY_BUCKET_SIZE,
+    DIRECTORY_SUB_BUCKET_SIZE as TRACE_DIRECTORY_SUB_BUCKET_SIZE,
+};
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
 
 pub const TRACE_LOCAL_ID_MASK: u64 = (1u64 << LOCAL_ID_BITS) - 1;
@@ -17,8 +21,6 @@ pub const TRACE_OPEN_BITMAP_PAGE_TABLE: ScannableTableId =
 pub const BLOCK_TRACE_BLOB_TABLE: BlobTableId = BlobTableId::new("block_trace_blob");
 pub const TRACE_BITMAP_PAGE_BLOB_TABLE: BlobTableId = BlobTableId::new("trace_bitmap_page_blob");
 
-pub const TRACE_DIRECTORY_BUCKET_SIZE: u64 = 1_000_000;
-pub const TRACE_DIRECTORY_SUB_BUCKET_SIZE: u64 = 10_000;
 pub const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 
 pub fn trace_local_range_for_shard(

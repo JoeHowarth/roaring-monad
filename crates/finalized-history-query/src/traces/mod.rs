@@ -26,7 +26,6 @@ use crate::traces::ingest::{
     persist_trace_artifacts, persist_trace_dir_by_block, persist_trace_stream_fragments,
 };
 use crate::traces::keys::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::traces::table_specs::TRACE_PRIMARY_DIR_LAYOUT;
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
@@ -101,7 +100,6 @@ impl TracesFamily {
             &runtime.tables.trace_dir,
             from_next_trace_id,
             next_trace_id,
-            TRACE_PRIMARY_DIR_LAYOUT,
         )
         .await?;
 
