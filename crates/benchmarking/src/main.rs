@@ -12,8 +12,9 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::config::Config as IndexConfig;
 use finalized_history_query::store::minio::MinioBlobStore;
+use finalized_history_query::store::publication::MetaPublicationStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
-use finalized_history_query::{Clause, LeaseAuthority, LogFilter};
+use finalized_history_query::{Clause, FinalizedBlock, LeaseAuthority, Log, LogFilter};
 use log_workload_gen::config::GeneratorConfig;
 use log_workload_gen::pipeline::run_collect_and_generate;
 use log_workload_gen::types::{
@@ -194,15 +195,6 @@ enum TraceProfileArg {
 enum IngestModeArg {
     StrictCas,
     SingleWriterFast,
-}
-
-impl From<IngestModeArg> for IndexIngestMode {
-    fn from(value: IngestModeArg) -> Self {
-        match value {
-            IngestModeArg::StrictCas => IndexIngestMode::StrictCas,
-            IngestModeArg::SingleWriterFast => IndexIngestMode::SingleWriterFast,
-        }
-    }
 }
 
 #[derive(Args, Debug, Clone)]
@@ -982,8 +974,13 @@ fn open_fs_archive(root: &Path) -> Result<BlockDataArchive> {
 async fn connect_service(
     args: &DistributedArgs,
     config: IndexConfig,
-) -> Result<FinalizedHistoryService<LeaseAuthority<ScyllaMetaStore>, ScyllaMetaStore, MinioBlobStore>>
-{
+) -> Result<
+    FinalizedHistoryService<
+        LeaseAuthority<MetaPublicationStore<ScyllaMetaStore>>,
+        ScyllaMetaStore,
+        MinioBlobStore,
+    >,
+> {
     let meta = ScyllaMetaStore::new(
         std::slice::from_ref(&args.scylla_node),
         &args.scylla_keyspace,
@@ -1107,13 +1104,13 @@ fn to_index_block(
     block: &ArchiveBlock,
     receipts: &BlockReceipts,
     mapper: &BlockMapper,
-) -> Result<IndexBlock> {
+) -> Result<FinalizedBlock> {
     let mapped_block_num = mapper.map_block_number(raw_block_num)?;
     let block_hash = fixed32(block.header.hash_slow().as_slice())?;
     let parent_hash =
         mapper.map_parent_hash(raw_block_num, fixed32(block.header.parent_hash.as_slice())?);
 
-    let mut logs = Vec::<IndexLog>::new();
+    let mut logs = Vec::<Log>::new();
     for (tx_idx, receipt) in receipts.iter().enumerate() {
         for (inner_log_idx, log) in receipt.receipt.logs().iter().enumerate() {
             let log_idx_u64 = receipt
@@ -1124,7 +1121,7 @@ fn to_index_block(
             let tx_idx_u32 =
                 u32::try_from(tx_idx).with_context(|| format!("tx index overflow: {tx_idx}"))?;
 
-            logs.push(IndexLog {
+            logs.push(Log {
                 address: fixed20(log.address.as_slice())?,
                 topics: log
                     .topics()
@@ -1140,11 +1137,13 @@ fn to_index_block(
         }
     }
 
-    Ok(IndexBlock {
+    Ok(FinalizedBlock {
         block_num: mapped_block_num,
         block_hash,
         parent_hash,
         logs,
+        txs: Vec::new(),
+        trace_rlp: Vec::new(),
     })
 }
 
@@ -1206,8 +1205,10 @@ fn load_traces(dataset_dir: &Path, profiles: &[TraceProfileArg]) -> Result<Vec<T
 
 fn trace_to_request(trace: &TraceEntry, max_results: usize) -> Result<QueryLogsRequest> {
     Ok(QueryLogsRequest {
-        from_block: trace.from_block,
-        to_block: trace.to_block,
+        from_block: Some(trace.from_block),
+        to_block: Some(trace.to_block),
+        from_block_hash: None,
+        to_block_hash: None,
         order: QueryOrder::Ascending,
         resume_id: None,
         limit: max_results,
