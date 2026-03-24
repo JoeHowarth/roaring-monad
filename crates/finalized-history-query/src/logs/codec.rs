@@ -96,44 +96,23 @@ impl StorageCodec for Log {
 
 impl StorageCodec for BlockLogHeader {
     fn encode(&self) -> Bytes {
-        assert!(u32::try_from(self.offsets.len()).is_ok());
-        let mut out = Vec::with_capacity(1 + 4 + self.offsets.len() * 4);
+        let offsets = self.offsets.encode();
+        let mut out = Vec::with_capacity(1 + offsets.len());
         out.push(1);
-        out.extend_from_slice(&(self.offsets.len() as u32).to_be_bytes());
-        for offset in &self.offsets {
-            out.extend_from_slice(&offset.to_be_bytes());
-        }
+        out.extend_from_slice(&offsets);
         Bytes::from(out)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 1 + 4 + 4 {
+        if bytes.len() < 1 + 1 + 4 {
             return Err(Error::Decode("block log header too short"));
         }
         if bytes[0] != 1 {
             return Err(Error::Decode("unsupported block log header version"));
         }
-        let count = u32::from_be_bytes(
-            bytes[1..5]
-                .try_into()
-                .map_err(|_| Error::Decode("block log header count"))?,
-        ) as usize;
-        if count < 1 {
+        let offsets = crate::core::offsets::BucketedOffsets::decode(&bytes[1..])?;
+        if offsets.is_empty() {
             return Err(Error::Decode("block log header missing sentinel"));
-        }
-        let expected_len = 1 + 4 + count * 4;
-        if bytes.len() != expected_len {
-            return Err(Error::Decode("invalid block log header length"));
-        }
-        let mut offsets = Vec::with_capacity(count);
-        let mut pos = 5usize;
-        for _ in 0..count {
-            offsets.push(u32::from_be_bytes(
-                bytes[pos..pos + 4]
-                    .try_into()
-                    .map_err(|_| Error::Decode("block log header offset"))?,
-            ));
-            pos += 4;
         }
         Ok(Self { offsets })
     }
@@ -164,9 +143,9 @@ mod tests {
     #[test]
     fn roundtrip_large_block_log_header() {
         let count = (u16::MAX as usize) + 2;
-        let mut offsets = Vec::with_capacity(count);
+        let mut offsets = crate::core::offsets::BucketedOffsets::new();
         for i in 0..count {
-            offsets.push(i as u32);
+            offsets.push(i as u64).expect("push offset");
         }
         let header = BlockLogHeader { offsets };
 

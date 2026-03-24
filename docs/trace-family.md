@@ -77,9 +77,8 @@ array — no overhead beyond the single-entry prefix. When a block's blob exceed
 4 GB, additional buckets are added transparently. The per-entity metadata cost
 is 4 bytes regardless of blob size.
 
-`BucketedOffsets` lives in the shared substrate (not in any family module). The
-logs family's `BlockLogHeader` currently uses a plain u32 offset array, which
-is a single-bucket `BucketedOffsets` — the migration is mechanical.
+`BucketedOffsets` lives in the shared substrate (not in any family module).
+Logs, txs, and traces all use it for block-header byte offsets.
 
 ## Storage Artifacts
 

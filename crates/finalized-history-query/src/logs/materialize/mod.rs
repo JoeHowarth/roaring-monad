@@ -35,6 +35,7 @@ mod tests {
     use crate::core::directory_resolver::ResolvedPrimaryLocation;
     use crate::core::ids::LogId;
     use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
+    use crate::core::offsets::BucketedOffsets;
     use crate::kernel::codec::StorageCodec;
     use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
     use crate::logs::table_specs::{
@@ -258,7 +259,12 @@ mod tests {
                 BlockLogHeaderSpec::TABLE,
                 &BlockLogHeaderSpec::key(block_num),
                 BlockLogHeader {
-                    offsets: vec![0, encoded.len() as u32],
+                    offsets: {
+                        let mut offsets = BucketedOffsets::new();
+                        offsets.push(0).expect("offset");
+                        offsets.push(encoded.len() as u64).expect("offset");
+                        offsets
+                    },
                 }
                 .encode(),
                 PutCond::Any,
@@ -347,11 +353,11 @@ mod tests {
             ];
             let encoded_logs = logs.iter().map(Log::encode).collect::<Vec<_>>();
             let mut blob_bytes = Vec::new();
-            let mut offsets = Vec::with_capacity(encoded_logs.len() + 1);
-            offsets.push(0);
+            let mut offsets = BucketedOffsets::new();
+            offsets.push(0).expect("offset");
             for encoded in &encoded_logs {
                 blob_bytes.extend_from_slice(encoded);
-                offsets.push(blob_bytes.len() as u32);
+                offsets.push(blob_bytes.len() as u64).expect("offset");
             }
 
             meta.put(

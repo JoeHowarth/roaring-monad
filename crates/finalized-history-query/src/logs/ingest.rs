@@ -5,6 +5,7 @@ use bytes::Bytes;
 use crate::Log;
 use crate::config::Config;
 use crate::core::ids::LogId;
+use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
@@ -70,14 +71,15 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _first_log_id: u64,
 ) -> Result<()> {
     let mut out = Vec::<u8>::new();
-    let mut offsets = Vec::with_capacity(logs.len() + 1);
+    let mut offsets = BucketedOffsets::new();
     for log in logs {
         offsets.push(
-            u32::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
-        );
+            u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
+        )?;
         out.extend_from_slice(&log.encode());
     }
-    offsets.push(u32::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?);
+    offsets
+        .push(u64::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?)?;
     let block_blob = Bytes::from(out);
     let header = BlockLogHeader { offsets };
     tables
@@ -161,13 +163,13 @@ mod tests {
                 .expect("block header present");
             let header = BlockLogHeader::decode(&header.value).expect("decode header");
 
+            assert_eq!(header.offsets.get(0), Some(0));
+            assert_eq!(header.offsets.get(1), Some(logs[0].encode().len() as u64));
+            assert_eq!(header.offsets.get(2), Some(block_blob.len() as u64));
+            let first_start = header.offsets.get(0).expect("first start") as usize;
+            let first_end = header.offsets.get(1).expect("first end") as usize;
             assert_eq!(
-                header.offsets,
-                vec![0, logs[0].encode().len() as u32, block_blob.len() as u32]
-            );
-            assert_eq!(
-                Log::decode(&block_blob[header.offsets[0] as usize..header.offsets[1] as usize])
-                    .expect("decode first"),
+                Log::decode(&block_blob[first_start..first_end]).expect("decode first"),
                 logs[0]
             );
             assert!(validate_log(&logs[0]));

@@ -175,7 +175,8 @@ fn ingest_block_with_zero_logs_writes_empty_artifacts() {
             .expect("read header")
             .expect("block_log_header must be present for empty block");
         let header = BlockLogHeader::decode(&header_bytes.value).expect("decode");
-        assert_eq!(header.offsets, vec![0]);
+        assert_eq!(header.offsets.get(0), Some(0));
+        assert_eq!(header.offsets.get(1), None);
 
         // block_log_blob must exist (empty).
         let blob_bytes = blob

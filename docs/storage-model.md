@@ -134,7 +134,20 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
 - ownership-transition recovery: to clean up stale markers left by interrupted ingest
 
-## Logs Block Headers
+## Block Headers
+
+Every block-keyed payload family uses the shared `BucketedOffsets` structure in
+its header. The common pattern is:
+
+- one authoritative block-keyed blob
+- one compact block-keyed header
+- `BucketedOffsets` for random access into the blob
+
+For payloads smaller than 4 GB this collapses to a single bucket and behaves
+like a simple dense offset array. Larger payloads spill into additional buckets
+without changing the family-owned lookup shape.
+
+### Logs Block Headers
 
 Each block gets a small header record in the `block_log_header` table keyed by `<block_num>`.
 
@@ -206,6 +219,25 @@ Resolve `log_id = 120000006`:
 6. fetch bytes `[110, 160)` from `block_log_blob`, key `5003`
 
 The duplicate `120000003` entries matter here. The lookup must choose the last index where `first_log_ids[i] <= 120000006`, not an arbitrary duplicate position.
+
+## Txs Storage Layout
+
+Transactions follow the same block-keyed artifact model as logs and traces.
+
+Each block with transactions is expected to persist:
+
+- `block_tx_blob`, keyed by `<block_num>`, containing authoritative transaction bytes in block order
+- `block_tx_header`, keyed by `<block_num>`, containing `BucketedOffsets` for `tx_idx -> byte range`
+
+Transaction point lookup by hash should be handled by a metadata index:
+
+- `tx_hash_index`, keyed by `<tx_hash>`, pointing to a compact `TxLocation { block_num, tx_idx }`
+
+That keeps responsibilities separated:
+
+- header = blob navigation
+- blob = authoritative bytes
+- metadata index = point lookup acceleration
 
 ## Traces Storage Layout
 

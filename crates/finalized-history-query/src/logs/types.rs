@@ -1,5 +1,7 @@
 use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
 use crate::core::ids::LogId;
+use crate::core::offsets::BucketedOffsets;
+use crate::error::{Error, Result};
 use crate::family::Hash32;
 pub use crate::streams::StreamBitmapMeta;
 
@@ -22,7 +24,19 @@ pub type DirByBlock = PrimaryDirFragment;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct BlockLogHeader {
-    pub offsets: Vec<u32>,
+    pub offsets: BucketedOffsets,
+}
+
+impl BlockLogHeader {
+    pub fn log_count(&self) -> usize {
+        self.offsets.len().saturating_sub(1)
+    }
+
+    pub fn offset(&self, local_ordinal: usize) -> Result<u64> {
+        self.offsets
+            .get(local_ordinal)
+            .ok_or(Error::Decode("log ordinal out of bounds"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

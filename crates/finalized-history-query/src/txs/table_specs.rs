@@ -14,6 +14,16 @@ impl BlockTxHeaderSpec {
     }
 }
 
+pub struct TxHashIndexSpec;
+impl PointTableSpec for TxHashIndexSpec {
+    const TABLE: TableId = TableId::new("tx_hash_index");
+}
+impl TxHashIndexSpec {
+    pub fn key(tx_hash: &[u8; 32]) -> Vec<u8> {
+        tx_hash.to_vec()
+    }
+}
+
 pub struct TxDirBucketSpec;
 impl PointTableSpec for TxDirBucketSpec {
     const TABLE: TableId = TableId::new("tx_dir_bucket");

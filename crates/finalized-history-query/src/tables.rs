@@ -15,7 +15,7 @@ use crate::kernel::point_table::CachedPointTable;
 use crate::kernel::scannable_table::ScannableFragmentTable;
 use crate::kernel::table_specs::u64_key;
 use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
-use crate::logs::log_ref::{BlockLogHeaderRef, LogRef};
+use crate::logs::log_ref::LogRef;
 use crate::logs::table_specs::{
     BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
     BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
@@ -271,19 +271,19 @@ impl<M: MetaStore> BlockHashIndexTable<M> {
     }
 }
 
-pub struct BlockLogHeaderTable<M: MetaStore>(CachedPointTable<M, Bytes>);
+pub struct BlockLogHeaderTable<M: MetaStore>(
+    CachedPointTable<M, crate::logs::types::BlockLogHeader>,
+);
 
 impl<M: MetaStore> BlockLogHeaderTable<M> {
     fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
         Self(CachedPointTable::new(table, cache))
     }
 
-    pub async fn get(&self, block_num: u64) -> Result<Option<BlockLogHeaderRef>> {
+    pub async fn get(&self, block_num: u64) -> Result<Option<crate::logs::types::BlockLogHeader>> {
         self.0
-            .get_bytes(&BlockLogHeaderSpec::key(block_num))
-            .await?
-            .map(BlockLogHeaderRef::new)
-            .transpose()
+            .get_decoded(&BlockLogHeaderSpec::key(block_num))
+            .await
     }
 
     pub async fn put(
@@ -292,7 +292,7 @@ impl<M: MetaStore> BlockLogHeaderTable<M> {
         header: &crate::logs::types::BlockLogHeader,
     ) -> Result<()> {
         self.0
-            .put_bytes(&BlockLogHeaderSpec::key(block_num), header.encode())
+            .put_encoded(&BlockLogHeaderSpec::key(block_num), header)
             .await
     }
 
@@ -760,19 +760,15 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
         let Some(header) = self.block_log_headers.get(block_num).await? else {
             return Ok(Vec::new());
         };
-        if end_local_ordinal_inclusive + 1 >= header.count() {
+        if end_local_ordinal_inclusive >= header.log_count() {
             return Ok(Vec::new());
         }
 
-        let start = header.offset(start_local_ordinal);
-        let end = header.offset(end_local_ordinal_inclusive + 1);
+        let start = header.offset(start_local_ordinal)?;
+        let end = header.offset(end_local_ordinal_inclusive + 1)?;
         let Some(run_bytes) = self
             .blob_table
-            .read_range(
-                &BlockLogBlobSpec::key(block_num),
-                u64::from(start),
-                u64::from(end),
-            )
+            .read_range(&BlockLogBlobSpec::key(block_num), start, end)
             .await?
         else {
             return Ok(Vec::new());
@@ -787,14 +783,20 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
 
             let local_ordinal = start_local_ordinal + index;
             let relative_start = header
-                .offset(local_ordinal)
+                .offset(local_ordinal)?
                 .checked_sub(start)
                 .ok_or(Error::Decode("invalid block log range"))?;
             let relative_end = header
-                .offset(local_ordinal + 1)
+                .offset(local_ordinal + 1)?
                 .checked_sub(start)
                 .ok_or(Error::Decode("invalid block log range"))?;
-            let payload = slice_relative(&run_bytes, relative_start, relative_end)?;
+            let payload = slice_relative(
+                &run_bytes,
+                u32::try_from(relative_start)
+                    .map_err(|_| Error::Decode("invalid block log range"))?,
+                u32::try_from(relative_end)
+                    .map_err(|_| Error::Decode("invalid block log range"))?,
+            )?;
             self.cache.put(&payload_key, payload.clone(), payload.len());
             out.push(LogRef::new(payload)?);
         }
@@ -814,11 +816,11 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
         self.block_log_headers.put(block_num, header).await?;
 
         for local_ordinal in 0..header.offsets.len().saturating_sub(1) {
-            let payload = slice_relative(
-                &block_blob,
-                header.offsets[local_ordinal],
-                header.offsets[local_ordinal + 1],
-            )?;
+            let start = u32::try_from(header.offset(local_ordinal)?)
+                .map_err(|_| Error::Decode("invalid block log cached range"))?;
+            let end = u32::try_from(header.offset(local_ordinal + 1)?)
+                .map_err(|_| Error::Decode("invalid block log cached range"))?;
+            let payload = slice_relative(&block_blob, start, end)?;
             let payload_key = point_log_payload_cache_key(block_num, local_ordinal as u64);
             self.cache.put(&payload_key, payload.clone(), payload.len());
         }

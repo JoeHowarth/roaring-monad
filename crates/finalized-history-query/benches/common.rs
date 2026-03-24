@@ -633,15 +633,17 @@ pub fn seed_materialized_blocks(
         for block in &sorted_blocks {
             let block_hash = bench_hash(block.block_num);
             let parent_hash = bench_hash(block.block_num.saturating_sub(1));
-            let mut offsets = Vec::with_capacity(block.logs.len().saturating_add(1));
+            let mut offsets = finalized_history_query::core::offsets::BucketedOffsets::new();
             let mut payload = Vec::new();
-            offsets.push(0);
+            offsets.push(0).expect("offset");
 
             for log in &block.logs {
                 assert!(validate_log(log), "synthetic log must be valid");
                 let encoded = log.encode();
                 payload.extend_from_slice(encoded.as_ref());
-                offsets.push(u32::try_from(payload.len()).expect("payload length fits in u32"));
+                offsets
+                    .push(u64::try_from(payload.len()).expect("payload length fits in u64"))
+                    .expect("offset");
             }
 
             put_meta_record(
