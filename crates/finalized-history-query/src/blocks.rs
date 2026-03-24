@@ -48,10 +48,10 @@ impl BlocksQueryEngine {
             request.order,
         )
         .await?;
-        let effective_limit = effective_limit(request.limit, budget)?;
         if block_range.is_empty() {
             return Ok(empty_page(&block_range));
         }
+        let effective_limit = effective_limit(request.limit, budget)?;
 
         let mut items = Vec::with_capacity(effective_limit.saturating_add(1));
         let take = effective_limit.saturating_add(1);

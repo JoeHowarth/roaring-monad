@@ -123,6 +123,49 @@ fn query_blocks_paginates_with_exact_cursor_block() {
 }
 
 #[test]
+fn query_blocks_budget_clamps_effective_limit() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        svc.ingest_finalized_block(mk_block(1, [0; 32], Vec::new()))
+            .await
+            .expect("ingest block 1");
+        svc.ingest_finalized_block(mk_block(2, [1; 32], Vec::new()))
+            .await
+            .expect("ingest block 2");
+        svc.ingest_finalized_block(mk_block(3, [2; 32], Vec::new()))
+            .await
+            .expect("ingest block 3");
+
+        let page = svc
+            .query_blocks(
+                QueryBlocksRequest {
+                    from_block: Some(1),
+                    to_block: Some(3),
+                    from_block_hash: None,
+                    to_block_hash: None,
+                    order: QueryOrder::Ascending,
+                    limit: 3,
+                },
+                ExecutionBudget {
+                    max_results: Some(2),
+                },
+            )
+            .await
+            .expect("query blocks with budget");
+
+        assert_eq!(page.items.len(), 2);
+        assert!(page.meta.has_more);
+        assert_eq!(page.items[0].number, 1);
+        assert_eq!(page.items[1].number, 2);
+    });
+}
+
+#[test]
 fn query_blocks_resolves_block_hash_bounds() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
