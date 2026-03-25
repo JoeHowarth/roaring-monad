@@ -14,7 +14,9 @@ use finalized_history_query::config::Config as IndexConfig;
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
-use finalized_history_query::{Clause, FinalizedBlock, LeaseAuthority, Log, LogFilter};
+use finalized_history_query::{
+    Clause, EvmBlockHeader, FinalizedBlock, LeaseAuthority, Log, LogFilter,
+};
 use log_workload_gen::config::GeneratorConfig;
 use log_workload_gen::pipeline::run_collect_and_generate;
 use log_workload_gen::types::{
@@ -1141,6 +1143,7 @@ fn to_index_block(
         block_num: mapped_block_num,
         block_hash,
         parent_hash,
+        header: EvmBlockHeader::minimal(mapped_block_num, block_hash, parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),

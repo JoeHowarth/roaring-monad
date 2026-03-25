@@ -128,10 +128,17 @@ mod tests {
     }
 
     fn sample_block(block_num: u64, seed: u8, logs: Vec<Log>) -> FinalizedBlock {
+        let block_hash = [seed; 32];
+        let parent_hash = [seed.wrapping_add(1); 32];
         FinalizedBlock {
             block_num,
-            block_hash: [seed; 32],
-            parent_hash: [seed.wrapping_add(1); 32],
+            block_hash,
+            parent_hash,
+            header: crate::core::header::EvmBlockHeader::minimal(
+                block_num,
+                block_hash,
+                parent_hash,
+            ),
             logs,
             txs: Vec::new(),
             trace_rlp: Vec::new(),

@@ -108,6 +108,9 @@ fn shifted_complex_trace_blocks(start_block: u64) -> Vec<finalized_history_query
             } else {
                 [(block_num - 1) as u8; 32]
             };
+            block.header.number = block.block_num;
+            block.header.hash = block.block_hash;
+            block.header.parent_hash = block.parent_hash;
             block
         })
         .collect()

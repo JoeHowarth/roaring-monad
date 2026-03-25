@@ -11,7 +11,9 @@ use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
-use finalized_history_query::{Clause, FinalizedBlock, LeaseAuthority, LogFilter, TraceFilter};
+use finalized_history_query::{
+    Clause, EvmBlockHeader, FinalizedBlock, LeaseAuthority, LogFilter, TraceFilter,
+};
 use futures::executor::block_on;
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
@@ -31,6 +33,7 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedB
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),
@@ -115,6 +118,7 @@ fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>) -> 
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs: Vec::new(),
         txs: Vec::new(),
         trace_rlp,

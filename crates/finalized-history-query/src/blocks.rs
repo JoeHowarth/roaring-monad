@@ -1,8 +1,8 @@
 use crate::api::{ExecutionBudget, QueryBlocksRequest};
+use crate::core::header::{EvmBlockHeader, load_block_header};
 use crate::core::page::{QueryPage, QueryPageMeta};
 use crate::core::range::{ResolvedBlockRange, resolve_block_range};
 use crate::core::refs::BlockRef;
-use crate::core::state::{BlockIdentity, load_block_identity};
 use crate::error::{Error, Result};
 use crate::query::bounds::resolve_request_block_bounds;
 use crate::query::normalized::effective_limit;
@@ -11,22 +11,7 @@ use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct Block {
-    pub number: u64,
-    pub hash: [u8; 32],
-    pub parent_hash: [u8; 32],
-}
-
-impl From<BlockIdentity> for Block {
-    fn from(identity: BlockIdentity) -> Self {
-        Self {
-            number: identity.number,
-            hash: identity.hash,
-            parent_hash: identity.parent_hash,
-        }
-    }
-}
+pub type Block = EvmBlockHeader;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlocksQueryEngine;
@@ -68,10 +53,17 @@ impl BlocksQueryEngine {
                 break;
             }
 
-            let Some(identity) = load_block_identity(tables, block_num).await? else {
+            let Some(header) = load_block_header(tables, block_num).await? else {
                 return Err(Error::NotFound);
             };
-            items.push((identity.into_block_ref(), Block::from(identity)));
+            items.push((
+                BlockRef {
+                    number: header.number,
+                    hash: header.hash,
+                    parent_hash: header.parent_hash,
+                },
+                header,
+            ));
 
             if block_num == block_range.to_block {
                 break;

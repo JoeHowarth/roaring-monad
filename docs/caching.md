@@ -45,7 +45,7 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 
 | Table                    | What it caches                                                        |
 | ------------------------ | --------------------------------------------------------------------- |
-| `BlockRecords`           | `block_record` table, key `<block_num>` — immutable block identity plus optional logs/traces primary-ID windows |
+| `BlockRecords`           | `block_record` table, key `<block_num>` — immutable indexed-family primary windows plus shared block identity |
 | `BlockLogHeaders`        | `block_log_header` table, key `<block_num>` — byte offset tables |
 | `DirBuckets`             | `log_dir_bucket` table, key `<bucket_start>` — 1M compacted directory buckets |
 | `LogDirSubBuckets`       | `log_dir_sub_bucket` table, key `<sub_bucket_start>` — 10K compacted sub-buckets |

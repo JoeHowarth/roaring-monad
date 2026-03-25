@@ -41,7 +41,7 @@ hashes.
 The current crate already has much of the core substrate shape that the
 reference document wants:
 
-- a concrete block query API over shared finalized block metadata
+- a concrete block query API over shared finalized block headers
 - a concrete logs query API
 - a shared `FinalizedBlock` ingest envelope
 - one service-owned runtime and typed table bundle
@@ -67,12 +67,13 @@ The current public surface is still narrower than the reference:
 - no field selection
 - no relation joins
 
-The current `query_blocks` substrate is intentionally narrow: it materializes
-shared block identity (`number`, `hash`, `parent_hash`) from `block_record`
-rather than a richer block-header object.
+The current `query_blocks` substrate now materializes the full stored EVM block
+header from shared metastore state. `block_record` still owns the shared
+indexed-family primary windows, while `block_header` owns the authoritative
+header object returned by block reads.
 
-That is acceptable. The important thing is that the crate now has a shared
-multi-family substrate instead of a logs-only architecture.
+That is the intended direction. The important thing is that the crate now has a
+shared multi-family substrate instead of a logs-only architecture.
 
 ## Target Shape
 

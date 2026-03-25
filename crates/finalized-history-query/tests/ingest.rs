@@ -132,6 +132,7 @@ fn ingest_rejects_parent_hash_mismatch_within_batch() {
         let block1 = mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]);
         let mut block2 = mk_block(2, [1; 32], vec![mk_log(1, 10, 21, 2, 0, 0)]);
         block2.parent_hash = [99; 32]; // wrong parent
+        block2.header.parent_hash = [99; 32];
 
         let err = svc
             .ingest_finalized_blocks(vec![block1, block2])

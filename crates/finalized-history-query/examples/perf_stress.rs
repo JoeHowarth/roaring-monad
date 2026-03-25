@@ -13,7 +13,7 @@ use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::fs::{FsBlobStore, FsMetaStore};
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::traits::{BlobStore, MetaStore};
-use finalized_history_query::{Clause, FinalizedBlock, LogFilter, WriteAuthority};
+use finalized_history_query::{Clause, EvmBlockHeader, FinalizedBlock, LogFilter, WriteAuthority};
 use futures::executor::block_on;
 
 fn static_observed_finalized_block() -> Option<u64> {
@@ -37,6 +37,7 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedB
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),

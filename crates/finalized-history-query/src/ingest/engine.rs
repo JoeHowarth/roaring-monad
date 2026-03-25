@@ -152,6 +152,24 @@ where
     M: MetaStore,
     B: BlobStore,
 {
+    for block in blocks {
+        if block.header.number != block.block_num {
+            return Err(Error::InvalidParams(
+                "block header number must match block_num",
+            ));
+        }
+        if block.header.hash != block.block_hash {
+            return Err(Error::InvalidParams(
+                "block header hash must match block_hash",
+            ));
+        }
+        if block.header.parent_hash != block.parent_hash {
+            return Err(Error::InvalidParams(
+                "block header parent_hash must match parent_hash",
+            ));
+        }
+    }
+
     let expected_first = indexed_finalized_head.saturating_add(1);
     if blocks[0].block_num != expected_first {
         return Err(Error::InvalidSequence {

@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::core::header::EvmBlockHeader;
 use crate::core::state::{BlockRecord, PrimaryWindowRecord};
 use crate::error::{Error, Result};
 use crate::logs::family::LogsFamily;
@@ -15,6 +16,7 @@ pub struct FinalizedBlock {
     pub block_num: u64,
     pub block_hash: Hash32,
     pub parent_hash: Hash32,
+    pub header: EvmBlockHeader,
     pub logs: Vec<Log>,
     pub txs: Vec<IngestTx>,
     pub trace_rlp: Vec<u8>,
@@ -94,6 +96,11 @@ impl Families {
             .tables
             .block_hash_index
             .put(&block.block_hash, block.block_num)
+            .await?;
+        runtime
+            .tables
+            .block_headers
+            .put(block.block_num, &block.header)
             .await?;
 
         let writes = FamilyBlockWrites {

@@ -1,5 +1,6 @@
 use crate::blocks::{Block, BlocksQueryEngine};
 use crate::config::Config;
+use crate::core::header::{EvmBlockHeader, load_block_header};
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use crate::core::refs::BlockRef;
 use crate::error::{Error, Result};
@@ -37,12 +38,7 @@ pub type QueryLogsRequest = IndexedQueryRequest<LogFilter>;
 pub type QueryTransactionsRequest = IndexedQueryRequest<TxFilter>;
 pub type QueryTracesRequest = IndexedQueryRequest<TraceFilter>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockHeader {
-    pub number: u64,
-    pub hash: [u8; 32],
-    pub parent_hash: [u8; 32],
-}
+pub type BlockHeader = EvmBlockHeader;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxReceipt {
@@ -202,14 +198,12 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .await
     }
 
-    pub async fn get_block(&self, _number: u64) -> Result<Option<Block>> {
-        Err(Error::InvalidParams("get_block is not implemented"))
+    pub async fn get_block(&self, number: u64) -> Result<Option<Block>> {
+        load_block_header(&self.runtime.tables, number).await
     }
 
-    pub async fn get_block_header_by(&self, _number: u64) -> Result<Option<BlockHeader>> {
-        Err(Error::InvalidParams(
-            "get_block_header_by is not implemented",
-        ))
+    pub async fn get_block_header_by(&self, number: u64) -> Result<Option<BlockHeader>> {
+        load_block_header(&self.runtime.tables, number).await
     }
 
     pub async fn get_tx_receipt(&self, _tx_hash: [u8; 32]) -> Result<Option<TxReceipt>> {

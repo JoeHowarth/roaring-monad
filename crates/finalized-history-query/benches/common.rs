@@ -36,7 +36,8 @@ use finalized_history_query::store::publication::{
 use finalized_history_query::store::traits::{BlobStore, BlobTableId, MetaStore, PutCond, TableId};
 use finalized_history_query::tables::{BytesCacheConfig, TableCacheConfig, Tables};
 use finalized_history_query::{
-    Clause, FinalizedBlock, LeaseAuthority, LogFilter, QueryPage, Result, WriteAuthority,
+    Clause, EvmBlockHeader, FinalizedBlock, LeaseAuthority, LogFilter, QueryPage, Result,
+    WriteAuthority,
 };
 use futures::executor::block_on;
 use roaring::RoaringBitmap;
@@ -325,6 +326,7 @@ pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> Finali
         block_num,
         block_hash: bench_hash(block_num),
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, bench_hash(block_num), parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),

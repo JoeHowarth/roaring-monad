@@ -1,3 +1,4 @@
+use crate::core::header::BlockHeaderSpec;
 use crate::core::state::BlockRecordSpec;
 use crate::kernel::table_specs::BlobTableSpec;
 use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
@@ -19,8 +20,9 @@ use crate::txs::table_specs::{
     TxOpenBitmapPageSpec,
 };
 
-pub const RUNTIME_POINT_TABLES: [TableId; 15] = [
+pub const RUNTIME_POINT_TABLES: [TableId; 16] = [
     BlockRecordSpec::TABLE,
+    BlockHeaderSpec::TABLE,
     BlockLogHeaderSpec::TABLE,
     BlockHashIndexSpec::TABLE,
     LogDirBucketSpec::TABLE,
@@ -37,7 +39,7 @@ pub const RUNTIME_POINT_TABLES: [TableId; 15] = [
     TraceBitmapPageMetaSpec::TABLE,
 ];
 
-pub const REQUIRED_POINT_TABLES: [TableId; 16] = [
+pub const REQUIRED_POINT_TABLES: [TableId; 17] = [
     PUBLICATION_STATE_TABLE,
     RUNTIME_POINT_TABLES[0],
     RUNTIME_POINT_TABLES[1],
@@ -54,6 +56,7 @@ pub const REQUIRED_POINT_TABLES: [TableId; 16] = [
     RUNTIME_POINT_TABLES[12],
     RUNTIME_POINT_TABLES[13],
     RUNTIME_POINT_TABLES[14],
+    RUNTIME_POINT_TABLES[15],
 ];
 
 pub const RUNTIME_SCANNABLE_TABLES: [ScannableTableId; 9] = [

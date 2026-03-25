@@ -1,5 +1,6 @@
 pub mod directory;
 pub mod directory_resolver;
+pub mod header;
 pub mod ids;
 pub mod layout;
 pub mod offsets;

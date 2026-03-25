@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use crate::core::directory::{PrimaryDirBucket, PrimaryDirFragment};
+use crate::core::header::{BlockHeaderSpec, EvmBlockHeader};
 use crate::core::layout::read_u64_be;
 use crate::core::state::{BlockRecord, BlockRecordSpec};
 use crate::error::{Error, Result};
@@ -93,6 +94,7 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub block_hash_index: BlockHashIndexTable<M>,
     pub tx_hash_index: TxHashIndexTable<M>,
     pub block_records: BlockRecordTable<M>,
+    pub block_headers: BlockHeaderTable<M>,
     pub block_log_headers: BlockLogHeaderTable<M>,
     pub block_tx_headers: BlockTxHeaderTable<M>,
     pub block_trace_headers: BlockTraceHeaderTable<M>,
@@ -120,6 +122,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             meta_store.table(BlockRecordSpec::TABLE),
             cache_for(config.block_records.max_bytes),
         );
+        let block_headers =
+            BlockHeaderTable::new(meta_store.table(BlockHeaderSpec::TABLE), no_cache());
         let block_log_headers = BlockLogHeaderTable::new(
             meta_store.table(BlockLogHeaderSpec::TABLE),
             cache_for(config.block_log_header.max_bytes),
@@ -137,6 +141,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 table: meta_store.table(TxHashIndexSpec::TABLE),
             },
             block_records: block_records.clone(),
+            block_headers,
             block_log_headers: block_log_headers.clone(),
             block_tx_headers: block_tx_headers.clone(),
             block_trace_headers: block_trace_headers.clone(),
@@ -301,6 +306,30 @@ impl<M: MetaStore> BlockRecordTable<M> {
 }
 
 impl<M: MetaStore> Clone for BlockRecordTable<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+pub struct BlockHeaderTable<M: MetaStore>(CachedPointTable<M, EvmBlockHeader>);
+
+impl<M: MetaStore> BlockHeaderTable<M> {
+    fn new(table: KvTable<M>, cache: HashMapTableBytesCache) -> Self {
+        Self(CachedPointTable::new(table, cache))
+    }
+
+    pub async fn get(&self, block_num: u64) -> Result<Option<EvmBlockHeader>> {
+        self.0.get_decoded(&BlockHeaderSpec::key(block_num)).await
+    }
+
+    pub async fn put(&self, block_num: u64, header: &EvmBlockHeader) -> Result<()> {
+        self.0
+            .put_encoded(&BlockHeaderSpec::key(block_num), header)
+            .await
+    }
+}
+
+impl<M: MetaStore> Clone for BlockHeaderTable<M> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }

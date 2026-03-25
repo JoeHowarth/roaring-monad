@@ -19,8 +19,8 @@ plans live under `docs/historical/`. Active and completed plans live under
 
 The crate implements the finalized-history query substrate that powers the
 `queryX` family of RPC methods. Today it exposes finalized-history queries for
-shared block identities plus the logs, txs, and traces families, alongside a
-shared ingest substrate for those same families.
+shared full EVM block headers plus the logs, txs, and traces families,
+alongside a shared ingest substrate for those same families.
 
 The main path:
 
@@ -31,7 +31,7 @@ The main path:
 5. immutable family-owned directory fragments and immutable stream-page fragments are written
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
 7. `query_blocks`, `query_logs`, `query_transactions`, and `query_traces` resolve finalized block windows
-8. block queries scan shared block metadata directly; indexed families map that block window to a primary-ID window
+8. block queries scan shared block headers directly; indexed families map that block window to a primary-ID window
 9. query, status, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 11. ingest writes seed those same typed caches immediately
@@ -109,13 +109,13 @@ The shared layer owns:
 - the long-lived runtime that shares store handles and typed tables across query/status/ingest
 - the multi-family ingest coordinator that validates sequence once and publishes once per batch
 - range resolution against finalized head
-- direct finalized block scans over shared block metadata
+- direct finalized block scans over shared block headers
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - typed immutable-artifact table reads with per-table bytes cache policy (see [caching.md](caching.md))
 - write-authority policy (see [write-authority.md](write-authority.md))
 - publication-state reads
-- shared finalized-state and block-identity reads
+- shared finalized-state, block-header, and block-identity reads
 - shared primary-directory fragment persistence plus sealed sub-bucket/bucket compaction
 - shared bitmap-page fragment persistence plus sealed-page compaction mechanics
 
@@ -243,10 +243,15 @@ class QueryPage[T]:
     meta: QueryPageMeta
 
 
-class Block:
+class EvmBlockHeader:
     number: int
     hash: bytes32
     parent_hash: bytes32
+    # plus the rest of the stored EVM header fields
+
+
+class Block(EvmBlockHeader):
+    pass
 
 
 class IngestTx:
@@ -298,6 +303,7 @@ class FinalizedBlock:
     block_num: int
     block_hash: bytes32
     parent_hash: bytes32
+    header: EvmBlockHeader
     logs: list[Log]
     txs: list[IngestTx]
     trace_rlp: bytes
@@ -353,10 +359,23 @@ This is the canonical key reference. See [storage-model.md](storage-model.md) fo
 Shared metadata:
 
 - `publication_state` table, key `state` -> `PublicationState { owner_id, session_id, indexed_finalized_head, lease_valid_through_block }`
+- `block_header` table, key `<block_num>` -> `EvmBlockHeader { full stored header }`
 - `block_record` table, key `<block_num>` -> `BlockRecord { block_hash, parent_hash, logs: Option<PrimaryWindowRecord>, txs: Option<PrimaryWindowRecord>, traces: Option<PrimaryWindowRecord> }`
 - `block_hash_index` table, key `<block_hash>` -> `block_num`
+- `block_tx_header` table, key `<block_num>` -> `BlockTxHeader { offsets }`
 - `block_log_header` table, key `<block_num>` -> `BlockLogHeader { offsets }`
 - `block_trace_header` table, key `<block_num>` -> `BlockTraceHeader { encoding_version, offsets, tx_starts }`
+
+Tx metadata and blobs:
+
+- `tx_hash_index` table, key `<tx_hash>` -> `TxLocation { block_num, tx_idx }`
+- `tx_dir_bucket` table, key `<tx_bucket_start>` -> compact canonical directory summary
+- `tx_dir_sub_bucket` table, key `<tx_sub_bucket_start>` -> compact canonical sub-bucket summary
+- `tx_dir_by_block` scannable table, partition `<tx_sub_bucket_start>`, clustering `<block_num>` -> immutable frontier fragment
+- `tx_bitmap_by_block` scannable table, partition `<stream_id>/<page_start>`, clustering `<block_num>` -> immutable bitmap fragment
+- `tx_bitmap_page_meta` table, key `<stream_id>/<page_start>` -> compacted page metadata
+- `tx_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` -> compacted page bitmap
+- `tx_open_bitmap_page` scannable table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
 
 Trace metadata and blobs:
 
@@ -369,7 +388,7 @@ Trace metadata and blobs:
 - `trace_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` -> compacted page bitmap
 - `trace_open_bitmap_page` scannable table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
 
-Directory metadata:
+Logs metadata and blobs:
 
 - `log_dir_by_block` table, partition `<sub_bucket_start>`, clustering `<block_num>` -> `DirByBlock { block_num, first_log_id, end_log_id_exclusive }`
 - `log_dir_sub_bucket` table, key `<sub_bucket_start>` -> `DirBucket { start_block, first_log_ids }`
@@ -385,10 +404,10 @@ Stream index metadata/blob pairs:
 Payload blobs:
 
 - `block_log_blob` blob table, key `<block_num>` -> concatenated encoded logs
+- `block_tx_blob` blob table, key `<block_num>` -> concatenated encoded tx envelopes
+- `block_trace_blob` blob table, key `<block_num>` -> flat concatenation of per-frame RLP bytes
 
 Numeric key components use big-endian encoded u64. `block_hash_index` uses the raw 32-byte hash as its suffix key. Blob-table suffix keys follow the same conventions.
-
-Today the logs and traces families persist finalized-history artifacts. The shared ingest coordinator also carries the txs family slot, but tx payload ingest still rejects non-empty tx batches until that family grows real storage and query support.
 
 ## Top-Level Service Boundary
 
@@ -414,7 +433,6 @@ This boundary is transport-free:
 The crate intentionally does not implement:
 
 - descending traversal
-- tx artifact storage and query support
 - relation hydration helpers
 - canonical block / transaction / trace artifact stores
 

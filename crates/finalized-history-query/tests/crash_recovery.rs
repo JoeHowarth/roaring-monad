@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use alloy_rlp::Encodable;
 use bytes::Bytes;
 use finalized_history_query::Clause;
-use finalized_history_query::FinalizedBlock;
 use finalized_history_query::LeaseAuthority;
 use finalized_history_query::LogFilter;
 use finalized_history_query::api::{
@@ -34,6 +33,7 @@ use finalized_history_query::store::traits::{
     BlobStore, BlobTableId, DelCond, MetaStore, Page, PutCond, PutResult, Record, ScannableTableId,
     TableId,
 };
+use finalized_history_query::{EvmBlockHeader, FinalizedBlock};
 use futures::executor::block_on;
 
 const STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
@@ -322,6 +322,7 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedB
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),
@@ -399,6 +400,7 @@ fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>) -> 
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs: Vec::new(),
         txs: Vec::new(),
         trace_rlp,

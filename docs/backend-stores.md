@@ -140,6 +140,9 @@ Scannable tables are only used for metadata tables that actually enumerate:
 - `log_dir_by_block`
 - `bitmap_by_block`
 - `open_bitmap_page`
+- `tx_dir_by_block`
+- `tx_bitmap_by_block`
+- `tx_open_bitmap_page`
 - `trace_dir_by_block`
 - `trace_bitmap_by_block`
 - `trace_open_bitmap_page`
@@ -186,8 +189,8 @@ Scannable tables use:
 
 The backend currently creates physical tables for:
 
-- point tables: `publication_state`, `block_record`, `block_log_header`, `block_hash_index`, `log_dir_bucket`, `log_dir_sub_bucket`, `bitmap_page_meta`, `block_trace_header`, `trace_dir_bucket`, `trace_dir_sub_bucket`, `trace_bitmap_page_meta`
-- scannable tables: `log_dir_by_block`, `bitmap_by_block`, `open_bitmap_page`, `trace_dir_by_block`, `trace_bitmap_by_block`, `trace_open_bitmap_page`
+- point tables: `publication_state`, `block_header`, `block_record`, `block_log_header`, `block_tx_header`, `block_hash_index`, `tx_hash_index`, `log_dir_bucket`, `log_dir_sub_bucket`, `tx_dir_bucket`, `tx_dir_sub_bucket`, `bitmap_page_meta`, `tx_bitmap_page_meta`, `block_trace_header`, `trace_dir_bucket`, `trace_dir_sub_bucket`, `trace_bitmap_page_meta`
+- scannable tables: `log_dir_by_block`, `bitmap_by_block`, `open_bitmap_page`, `tx_dir_by_block`, `tx_bitmap_by_block`, `tx_open_bitmap_page`, `trace_dir_by_block`, `trace_bitmap_by_block`, `trace_open_bitmap_page`
 - auxiliary state: `meta_fence (id text PRIMARY KEY, min_epoch bigint)`
 
 ### Key partitioning
@@ -205,6 +208,9 @@ Scannable tables are keyed by the natural scan scope of each logical table:
 - `log_dir_by_block`: partition = `sub_bucket_start`, clustering = `block_num`
 - `bitmap_by_block`: partition = `(stream_id, page_start_local)`, clustering = `block_num`
 - `open_bitmap_page`: partition = `shard`, clustering = `(page_start_local, stream_id)`
+- `tx_dir_by_block`: partition = `tx_sub_bucket_start`, clustering = `block_num`
+- `tx_bitmap_by_block`: partition = `(stream_id, page_start_local)`, clustering = `block_num`
+- `tx_open_bitmap_page`: partition = `shard`, clustering = `(page_start_local, stream_id)`
 - `trace_dir_by_block`: partition = `trace_sub_bucket_start`, clustering = `block_num`
 - `trace_bitmap_by_block`: partition = `(stream_id, page_start_local)`, clustering = `block_num`
 - `trace_open_bitmap_page`: partition = `shard`, clustering = `(page_start_local, stream_id)`

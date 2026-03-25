@@ -23,6 +23,7 @@ pub use api::{
 pub use blocks::Block;
 pub use config::Config;
 pub use core::clause::Clause;
+pub use core::header::EvmBlockHeader;
 pub use core::page::{QueryOrder, QueryPage, QueryPageMeta};
 pub use core::refs::BlockRef;
 pub use error::{Error, Result};

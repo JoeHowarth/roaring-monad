@@ -22,8 +22,8 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Block, Clause, Error, FinalizedBlock, IngestTx, LogFilter, LogRef, TraceFilter, TraceRef,
-    TxFilter, TxRef, WriteAuthority, WriteSession,
+    Block, Clause, Error, EvmBlockHeader, FinalizedBlock, IngestTx, LogFilter, LogRef, TraceFilter,
+    TraceRef, TxFilter, TxRef, WriteAuthority, WriteSession,
 };
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -47,11 +47,16 @@ pub fn mk_log(
     }
 }
 
+pub fn mk_header(block_num: u64, parent_hash: [u8; 32]) -> EvmBlockHeader {
+    EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash)
+}
+
 pub fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedBlock {
     FinalizedBlock {
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: mk_header(block_num, parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),
@@ -63,6 +68,7 @@ pub fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>)
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: mk_header(block_num, parent_hash),
         logs: Vec::new(),
         txs: Vec::new(),
         trace_rlp,
@@ -74,6 +80,7 @@ pub fn mk_tx_block(block_num: u64, parent_hash: [u8; 32], txs: Vec<IngestTx>) ->
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: mk_header(block_num, parent_hash),
         logs: Vec::new(),
         txs,
         trace_rlp: Vec::new(),

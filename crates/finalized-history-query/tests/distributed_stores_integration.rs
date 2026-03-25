@@ -9,7 +9,7 @@ use finalized_history_query::config::Config;
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::minio::MinioBlobStore;
 use finalized_history_query::store::scylla::ScyllaMetaStore;
-use finalized_history_query::{Clause, FinalizedBlock, LogFilter};
+use finalized_history_query::{Clause, EvmBlockHeader, FinalizedBlock, LogFilter};
 
 fn mk_log(address: u8, topic0: u8, topic1: u8, block_num: u64, tx_idx: u32, log_idx: u32) -> Log {
     Log {
@@ -28,6 +28,7 @@ fn mk_block(block_num: u64, parent_hash: [u8; 32], logs: Vec<Log>) -> FinalizedB
         block_num,
         block_hash: [block_num as u8; 32],
         parent_hash,
+        header: EvmBlockHeader::minimal(block_num, [block_num as u8; 32], parent_hash),
         logs,
         txs: Vec::new(),
         trace_rlp: Vec::new(),

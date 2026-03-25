@@ -3,12 +3,12 @@
 Read this after [overview.md](overview.md).
 
 This doc describes the published artifact model and the logs/traces storage
-layouts. It focuses on what gets stored and how reads resolve IDs back to
-payload bytes.
+layouts, plus the shared block-header state. It focuses on what gets stored and
+how reads resolve IDs back to payload bytes.
 
 ## Design Principles
 
-- family primary IDs (`log_id`, `trace_id`) are the query and pagination identities
+- family primary IDs (`log_id`, `tx_id`, `trace_id`) are the query and pagination identities
 - family payload bytes are stored in block-keyed objects
 - no per-item locator records — directory buckets handle primary-ID to block resolution
 - published data-path artifacts are immutable by convention
@@ -20,7 +20,7 @@ All read-path data artifacts are treated as immutable once published. The
 only shared mutable state is:
 
 - `publication_state` table entry `state` — ownership session, lease validity, indexed finalized head
-- `open_bitmap_page` and `trace_open_bitmap_page` table rows — write/recovery inventory markers
+- `open_bitmap_page`, `tx_open_bitmap_page`, and `trace_open_bitmap_page` table rows — write/recovery inventory markers
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.
 
@@ -31,12 +31,13 @@ All artifacts for a block must be durable before `publication_state.indexed_fina
 The artifact write order for a block preserves shared visibility boundaries:
 
 1. shared block hash lookup (`block_hash_index`)
-2. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_trace_blob` / `block_trace_header`)
-3. family directory fragments (`log_dir_by_block`, `trace_dir_by_block`)
-4. family stream fragments (`bitmap_by_block`, `trace_bitmap_by_block`)
-5. family compaction (directory summaries, stream pages)
-6. shared block metadata (`block_record`)
-7. head advance via CAS on `publication_state`
+2. shared full block header (`block_header`)
+3. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_tx_blob` / `block_tx_header`, `block_trace_blob` / `block_trace_header`)
+4. family directory fragments (`log_dir_by_block`, `tx_dir_by_block`, `trace_dir_by_block`)
+5. family stream fragments (`bitmap_by_block`, `tx_bitmap_by_block`, `trace_bitmap_by_block`)
+6. family compaction (directory summaries, stream pages)
+7. shared block metadata (`block_record`)
+8. head advance via CAS on `publication_state`
 
 Writers use unconditional writes for normal artifacts. Correctness
 depends on the publication boundary and on rewrites remaining
@@ -135,6 +136,13 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 - ownership-transition recovery: to clean up stale markers left by interrupted ingest
 
 ## Block Headers
+
+The shared block query surface persists one full EVM header per block in the
+`block_header` table keyed by `<block_num>`. This is the authoritative block
+object for `query_blocks`, `get_block`, and `get_block_header_by`.
+
+`block_record` remains separate and compact. It stores only shared block
+identity plus family primary windows used by indexed-family queries.
 
 Every block-keyed payload family uses the shared `BucketedOffsets` structure in
 its header. The common pattern is:
@@ -306,6 +314,12 @@ Mitigations:
 
 ## Block Metadata
 
+The authoritative shared block header lives alongside the sequencing record:
+
+```text
+block_header table, key <block_num> -> EvmBlockHeader { full stored header }
+```
+
 `BlockRecord` is the authoritative per-block sequencing record:
 
 ```text
@@ -313,8 +327,9 @@ block_record table, key <block_num> -> BlockRecord {
   block_hash,
   parent_hash,
   logs: Option<PrimaryWindowRecord { first_primary_id, count }>,
+  txs: Option<PrimaryWindowRecord { first_primary_id, count }>,
   traces: Option<PrimaryWindowRecord { first_primary_id, count }>
 }
 ```
 
-This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate: `BlockRecord` is the authoritative per-block record for finalized-state reads, while directory buckets are lookup accelerators for `log_id -> block_num` and `trace_id -> block_num`.
+This intentionally duplicates sequencing information also derivable from directory buckets. The duplication is deliberate: `BlockRecord` is the authoritative per-block record for finalized-state reads, while directory buckets are lookup accelerators for `log_id -> block_num`, `tx_id -> block_num`, and `trace_id -> block_num`.
