@@ -184,7 +184,7 @@ fn query_blocks_materializes_full_stored_header() {
         block.header.state_root = [3; 32];
         block.header.transactions_root = [4; 32];
         block.header.receipts_root = [5; 32];
-        block.header.logs_bloom = vec![6; 256];
+        block.header.logs_bloom = [[6; 64]; 4];
         block.header.difficulty = [7; 32];
         block.header.gas_limit = 30_000_000;
         block.header.gas_used = 21_000;
@@ -214,7 +214,7 @@ fn query_blocks_materializes_full_stored_header() {
         assert_eq!(item.state_root, [3; 32]);
         assert_eq!(item.transactions_root, [4; 32]);
         assert_eq!(item.receipts_root, [5; 32]);
-        assert_eq!(item.logs_bloom, vec![6; 256]);
+        assert_eq!(item.logs_bloom, [[6; 64]; 4]);
         assert_eq!(item.difficulty, [7; 32]);
         assert_eq!(item.gas_limit, 30_000_000);
         assert_eq!(item.gas_used, 21_000);

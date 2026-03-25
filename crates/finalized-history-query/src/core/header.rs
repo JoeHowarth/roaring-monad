@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use serde::{Deserialize, Deserializer, Serializer};
 
 use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
@@ -28,7 +29,11 @@ pub struct EvmBlockHeader {
     pub state_root: [u8; 32],
     pub transactions_root: [u8; 32],
     pub receipts_root: [u8; 32],
-    pub logs_bloom: Vec<u8>,
+    #[serde(
+        serialize_with = "serialize_logs_bloom",
+        deserialize_with = "deserialize_logs_bloom"
+    )]
+    pub logs_bloom: [[u8; 64]; 4],
     pub difficulty: [u8; 32],
     pub gas_limit: u64,
     pub gas_used: u64,
@@ -55,7 +60,7 @@ impl EvmBlockHeader {
             state_root: [0; 32],
             transactions_root: [0; 32],
             receipts_root: [0; 32],
-            logs_bloom: vec![0; 256],
+            logs_bloom: [[0; 64]; 4],
             difficulty: [0; 32],
             gas_limit: 0,
             gas_used: 0,
@@ -71,6 +76,40 @@ impl EvmBlockHeader {
             requests_hash: None,
         }
     }
+}
+
+fn serialize_logs_bloom<S>(
+    logs_bloom: &[[u8; 64]; 4],
+    serializer: S,
+) -> core::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut bytes = [0u8; 256];
+    for (index, chunk) in logs_bloom.iter().enumerate() {
+        let start = index * 64;
+        let end = start + 64;
+        bytes[start..end].copy_from_slice(chunk);
+    }
+    serializer.serialize_bytes(&bytes)
+}
+
+fn deserialize_logs_bloom<'de, D>(deserializer: D) -> core::result::Result<[[u8; 64]; 4], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let bytes = <Vec<u8>>::deserialize(deserializer)?;
+    if bytes.len() != 256 {
+        return Err(serde::de::Error::invalid_length(bytes.len(), &"256 bytes"));
+    }
+
+    let mut logs_bloom = [[0u8; 64]; 4];
+    for (index, chunk) in logs_bloom.iter_mut().enumerate() {
+        let start = index * 64;
+        let end = start + 64;
+        chunk.copy_from_slice(&bytes[start..end]);
+    }
+    Ok(logs_bloom)
 }
 
 impl StorageCodec for EvmBlockHeader {
@@ -98,18 +137,7 @@ impl StorageCodec for EvmBlockHeader {
         let extra_data_len =
             u32::try_from(self.extra_data.len()).expect("extra_data must fit into u32");
         let mut out = Vec::with_capacity(
-            1 + 1
-                + 8
-                + (32 * 8)
-                + 20
-                + 8
-                + 8
-                + 8
-                + 4
-                + self.logs_bloom.len()
-                + 4
-                + self.extra_data.len()
-                + 8,
+            1 + 1 + 8 + (32 * 8) + 20 + 8 + 8 + 8 + 4 + (64 * 4) + 4 + self.extra_data.len() + 8,
         );
         out.push(1);
         out.push(flags);
@@ -121,10 +149,10 @@ impl StorageCodec for EvmBlockHeader {
         out.extend_from_slice(&self.state_root);
         out.extend_from_slice(&self.transactions_root);
         out.extend_from_slice(&self.receipts_root);
-        let logs_bloom_len =
-            u32::try_from(self.logs_bloom.len()).expect("logs_bloom must fit into u32");
-        out.extend_from_slice(&logs_bloom_len.to_be_bytes());
-        out.extend_from_slice(&self.logs_bloom);
+        out.extend_from_slice(&256u32.to_be_bytes());
+        for chunk in self.logs_bloom {
+            out.extend_from_slice(&chunk);
+        }
         out.extend_from_slice(&self.difficulty);
         out.extend_from_slice(&self.gas_limit.to_be_bytes());
         out.extend_from_slice(&self.gas_used.to_be_bytes());
@@ -222,7 +250,17 @@ impl StorageCodec for EvmBlockHeader {
         let logs_bloom_len =
             usize::try_from(read_u32(bytes, &mut pos, "block header logs_bloom length")?)
                 .map_err(|_| Error::Decode("block header logs_bloom length"))?;
-        let logs_bloom = read_fixed(bytes, &mut pos, logs_bloom_len, "block header logs_bloom")?;
+        if logs_bloom_len != 256 {
+            return Err(Error::Decode("block header logs_bloom length"));
+        }
+        let logs_bloom_bytes =
+            read_fixed(bytes, &mut pos, logs_bloom_len, "block header logs_bloom")?;
+        let mut logs_bloom = [[0u8; 64]; 4];
+        for (index, chunk) in logs_bloom.iter_mut().enumerate() {
+            let start = index * 64;
+            let end = start + 64;
+            chunk.copy_from_slice(&logs_bloom_bytes[start..end]);
+        }
         let difficulty = <[u8; 32]>::try_from(
             read_fixed(bytes, &mut pos, 32, "block header difficulty")?.as_slice(),
         )
@@ -345,7 +383,7 @@ mod tests {
         header.state_root = [3; 32];
         header.transactions_root = [4; 32];
         header.receipts_root = [5; 32];
-        header.logs_bloom = vec![6; 256];
+        header.logs_bloom = [[6; 64]; 4];
         header.difficulty = [7; 32];
         header.gas_limit = 10;
         header.gas_used = 9;
