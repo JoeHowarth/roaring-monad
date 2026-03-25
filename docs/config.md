@@ -43,9 +43,9 @@ See [caching.md](caching.md) for cache design details.
 - `block_log_header`
 - `log_dir_buckets`
 - `log_dir_sub_buckets`
-- `point_log_payloads`
-- `point_tx_payloads`
-- `point_trace_payloads`
+- `block_log_blobs`
+- `block_tx_blobs`
+- `block_trace_blobs`
 - `bitmap_page_meta`
 - `bitmap_page_blobs`
 

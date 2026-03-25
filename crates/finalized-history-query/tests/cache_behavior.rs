@@ -15,7 +15,7 @@ use futures::executor::block_on;
 use helpers::*;
 
 #[test]
-fn service_reuses_cached_point_log_payloads_across_queries() {
+fn service_reuses_cached_block_log_blobs_across_queries() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let target_key = BlockLogBlobSpec::key(1);
@@ -31,7 +31,7 @@ fn service_reuses_cached_point_log_payloads_across_queries() {
         let svc = FinalizedHistoryService::new_reader_writer(
             Config {
                 bytes_cache: BytesCacheConfig {
-                    point_log_payloads: TableCacheConfig {
+                    block_log_blobs: TableCacheConfig {
                         max_bytes: 1024 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -59,11 +59,11 @@ fn service_reuses_cached_point_log_payloads_across_queries() {
         assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.point_log_payloads.misses, 0);
-        assert_eq!(metrics.point_log_payloads.hits, 2);
-        assert_eq!(metrics.point_log_payloads.inserts, 1);
-        assert_eq!(metrics.point_log_payloads.evictions, 0);
-        assert!(metrics.point_log_payloads.bytes_used > 0);
+        assert_eq!(metrics.block_log_blobs.misses, 0);
+        assert_eq!(metrics.block_log_blobs.hits, 2);
+        assert_eq!(metrics.block_log_blobs.inserts, 1);
+        assert_eq!(metrics.block_log_blobs.evictions, 0);
+        assert!(metrics.block_log_blobs.bytes_used > 0);
     });
 }
 
@@ -84,7 +84,7 @@ fn service_coalesces_contiguous_same_block_log_blob_into_one_range_read() {
         let svc = FinalizedHistoryService::new_reader_writer(
             Config {
                 bytes_cache: BytesCacheConfig {
-                    point_log_payloads: TableCacheConfig {
+                    block_log_blobs: TableCacheConfig {
                         max_bytes: 1024 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -117,9 +117,9 @@ fn service_coalesces_contiguous_same_block_log_blob_into_one_range_read() {
         assert_eq!(read_range_calls.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.point_log_payloads.inserts, 3);
-        assert_eq!(metrics.point_log_payloads.misses, 0);
-        assert_eq!(metrics.point_log_payloads.hits, 3);
+        assert_eq!(metrics.block_log_blobs.inserts, 3);
+        assert_eq!(metrics.block_log_blobs.misses, 0);
+        assert_eq!(metrics.block_log_blobs.hits, 3);
     });
 }
 
@@ -141,7 +141,7 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
         let svc = FinalizedHistoryService::new_reader_writer(
             Config {
                 bytes_cache: BytesCacheConfig {
-                    point_log_payloads: TableCacheConfig {
+                    block_log_blobs: TableCacheConfig {
                         max_bytes: 1024 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -172,9 +172,9 @@ fn query_limit_one_does_not_need_full_contiguous_run_bytes() {
         assert_eq!(read_range_bytes.load(Ordering::Relaxed), 0);
 
         let metrics = svc.cache_metrics();
-        assert_eq!(metrics.point_log_payloads.inserts, 3);
-        assert_eq!(metrics.point_log_payloads.misses, 0);
-        assert!(metrics.point_log_payloads.hits >= 2);
+        assert_eq!(metrics.block_log_blobs.inserts, 3);
+        assert_eq!(metrics.block_log_blobs.misses, 0);
+        assert!(metrics.block_log_blobs.hits >= 2);
     });
 }
 

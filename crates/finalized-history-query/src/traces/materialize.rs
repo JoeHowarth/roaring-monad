@@ -212,7 +212,7 @@ mod tests {
                 meta.clone(),
                 blob,
                 BytesCacheConfig {
-                    point_trace_payloads: TableCacheConfig {
+                    block_trace_blobs: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -289,7 +289,7 @@ mod tests {
             assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
 
-            let metrics = tables.metrics_snapshot().point_trace_payloads;
+            let metrics = tables.metrics_snapshot().block_trace_blobs;
             assert_eq!(metrics.inserts, 2);
             assert!(metrics.hits >= 2);
         });
@@ -310,7 +310,7 @@ mod tests {
                 meta,
                 blob,
                 BytesCacheConfig {
-                    point_trace_payloads: TableCacheConfig {
+                    block_trace_blobs: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()

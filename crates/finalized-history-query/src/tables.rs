@@ -232,18 +232,18 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             block_log_blobs: BlockLogBlobTable {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
-                cache: cache_for(config.point_log_payloads.max_bytes),
+                cache: cache_for(config.block_log_blobs.max_bytes),
                 block_log_headers,
             },
             block_tx_blobs: BlockTxBlobTable {
                 blob_table: blob_store.table(BlockTxBlobSpec::TABLE),
-                cache: cache_for(config.point_tx_payloads.max_bytes),
+                cache: cache_for(config.block_tx_blobs.max_bytes),
                 block_tx_headers,
                 block_records,
             },
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
-                cache: cache_for(config.point_trace_payloads.max_bytes),
+                cache: cache_for(config.block_trace_blobs.max_bytes),
                 block_trace_headers,
                 block_records: BlockRecordTable::new(
                     meta_store.table(BlockRecordSpec::TABLE),
@@ -269,9 +269,9 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_log_header: self.block_log_headers.metrics(),
             log_dir_buckets: self.log_dir.buckets.metrics(),
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
-            point_log_payloads: self.block_log_blobs.cache.metrics_snapshot(),
-            point_tx_payloads: self.block_tx_blobs.cache.metrics_snapshot(),
-            point_trace_payloads: self.block_trace_blobs.cache.metrics_snapshot(),
+            block_log_blobs: self.block_log_blobs.cache.metrics_snapshot(),
+            block_tx_blobs: self.block_tx_blobs.cache.metrics_snapshot(),
+            block_trace_blobs: self.block_trace_blobs.cache.metrics_snapshot(),
             bitmap_page_meta: self.log_streams.page_meta.metrics(),
             bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
         }

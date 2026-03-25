@@ -49,9 +49,9 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 | `BlockLogHeaders`        | `block_log_header` table, key `<block_num>` — byte offset tables |
 | `DirBuckets`             | `log_dir_bucket` table, key `<bucket_start>` — 1M compacted directory buckets |
 | `LogDirSubBuckets`       | `log_dir_sub_bucket` table, key `<sub_bucket_start>` — 10K compacted sub-buckets |
-| `PointLogPayloads`       | Per-log byte slices derived from `block_log_blob` blob-table range reads keyed by `<block_num>` |
-| `PointTxPayloads`        | Per-tx envelope byte slices derived from `block_tx_blob` blob-table range reads keyed by `<block_num>` |
-| `PointTracePayloads`     | Per-trace frame byte slices derived from `block_trace_blob` blob-table range reads keyed by `<block_num>` |
+| `BlockLogBlobs`          | Per-log byte slices derived from `block_log_blob` blob-table range reads keyed by `<block_num>` |
+| `BlockTxBlobs`           | Per-tx envelope byte slices derived from `block_tx_blob` blob-table range reads keyed by `<block_num>` |
+| `BlockTraceBlobs`        | Per-trace frame byte slices derived from `block_trace_blob` blob-table range reads keyed by `<block_num>` |
 | `BitmapPageMeta`         | `bitmap_page_meta` table, key `<stream_id>/<page_start>` |
 | `BitmapPageBlobs`        | `bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
 
