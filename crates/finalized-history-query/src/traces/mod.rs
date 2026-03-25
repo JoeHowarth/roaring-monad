@@ -18,7 +18,9 @@ use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
 use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
-use crate::traces::ingest::{persist_trace_artifacts, persist_trace_stream_fragments};
+use crate::traces::ingest::{
+    persist_trace_artifacts, persist_trace_stream_fragments, plan_trace_ingest,
+};
 use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
@@ -59,8 +61,9 @@ impl TracesFamily {
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_trace_id = state.next_trace_id.get();
+        let ingest_plan = plan_trace_ingest(&block.trace_rlp, from_next_trace_id)?;
         let trace_count =
-            persist_trace_artifacts(&runtime.tables, block.block_num, &block.trace_rlp).await?;
+            persist_trace_artifacts(&runtime.tables, block.block_num, &ingest_plan).await?;
         let trace_count_u32 =
             u32::try_from(trace_count).map_err(|_| Error::Decode("trace count overflow"))?;
 
@@ -72,8 +75,12 @@ impl TracesFamily {
 
         let next_trace_id = from_next_trace_id + trace_count as u64;
 
-        let touched_pages =
-            persist_trace_stream_fragments(&runtime.tables, block, from_next_trace_id).await?;
+        let touched_pages = persist_trace_stream_fragments(
+            &runtime.tables,
+            block.block_num,
+            &ingest_plan.grouped_stream_values,
+        )
+        .await?;
 
         let mut opened_during = Vec::<OpenBitmapPage>::new();
         opened_during.extend(

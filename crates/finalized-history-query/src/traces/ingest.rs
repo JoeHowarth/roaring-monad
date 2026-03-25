@@ -5,7 +5,6 @@ use bytes::Bytes;
 use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
-use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
 use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::store::traits::{BlobStore, MetaStore};
@@ -13,31 +12,56 @@ use crate::tables::Tables;
 use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::types::BlockTraceHeader;
 use crate::traces::view::BlockTraceIter;
-use alloy_rlp::{Header, PayloadView};
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
+
+pub struct TraceIngestPlan {
+    pub header: BlockTraceHeader,
+    pub block_blob: Bytes,
+    pub trace_count: usize,
+    pub grouped_stream_values: BTreeMap<String, Vec<u32>>,
+}
 
 pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     block_num: u64,
-    trace_rlp: &[u8],
+    plan: &TraceIngestPlan,
 ) -> Result<usize> {
-    let (header, block_blob, trace_count) = build_block_trace_artifacts(trace_rlp)?;
     tables
         .block_trace_blobs
-        .put_block(block_num, block_blob, &header)
+        .put_block(block_num, plan.block_blob.clone(), &plan.header)
         .await?;
-    Ok(trace_count)
+    Ok(plan.trace_count)
 }
 
-pub fn collect_trace_stream_appends(
-    block: &FinalizedBlock,
-    first_trace_id: u64,
-) -> Result<BTreeMap<String, Vec<u32>>> {
-    let mut values = Vec::new();
+pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceIngestPlan> {
+    if trace_rlp.is_empty() {
+        return Ok(TraceIngestPlan {
+            header: empty_trace_header(),
+            block_blob: Bytes::new(),
+            trace_count: 0,
+            grouped_stream_values: BTreeMap::new(),
+        });
+    }
 
-    for (index, iterated) in BlockTraceIter::new(&block.trace_rlp)?.enumerate() {
+    let mut offsets = BucketedOffsets::new();
+    let mut tx_starts = Vec::new();
+    let mut flat_blob = Vec::<u8>::new();
+    let mut values = Vec::new();
+    let mut trace_count = 0usize;
+
+    for (index, iterated) in BlockTraceIter::new(trace_rlp)?.enumerate() {
         let iterated = iterated?;
+        if iterated.trace_idx == 0 {
+            tx_starts.push(iterated.tx_idx);
+        }
+
+        offsets.push(
+            u64::try_from(flat_blob.len())
+                .map_err(|_| Error::Decode("trace blob offset overflow"))?,
+        )?;
+        flat_blob.extend_from_slice(iterated.view.frame_bytes);
+
         let global_trace_id = TraceId::new(first_trace_id + index as u64);
         let shard = global_trace_id.shard().get();
         let local = global_trace_id.local().get();
@@ -56,91 +80,51 @@ pub fn collect_trace_stream_appends(
         if view.has_value()? {
             values.push((sharded_stream_id("has_value", b"\x01", shard), local));
         }
-    }
 
-    Ok(group_stream_values(values))
-}
-
-pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    first_trace_id: u64,
-) -> Result<Vec<(String, u32)>> {
-    let grouped_values = collect_trace_stream_appends(block, first_trace_id)?
-        .into_iter()
-        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
-    bitmap_pages::persist_stream_fragments(
-        &tables.trace_streams,
-        block.block_num,
-        grouped_values,
-        TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-    )
-    .await
-}
-
-fn build_block_trace_artifacts(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, Bytes, usize)> {
-    if trace_rlp.is_empty() {
-        return Ok((empty_trace_header(), Bytes::new(), 0));
-    }
-
-    let mut offsets = BucketedOffsets::new();
-    let mut tx_starts = Vec::new();
-    let mut flat_blob = Vec::<u8>::new();
-    let mut trace_count = 0usize;
-    let mut buf = trace_rlp;
-    let txs =
-        match Header::decode_raw(&mut buf).map_err(|_| Error::Decode("invalid block trace rlp"))? {
-            PayloadView::List(items) => items,
-            PayloadView::String(_) => {
-                return Err(Error::Decode("block trace blob must be an rlp list"));
-            }
-        };
-    if !buf.is_empty() {
-        return Err(Error::Decode("block trace blob has trailing bytes"));
-    }
-
-    for tx_bytes in txs {
-        tx_starts
-            .push(u32::try_from(trace_count).map_err(|_| Error::Decode("trace count overflow"))?);
-        let mut tx_buf = tx_bytes;
-        let frames = match Header::decode_raw(&mut tx_buf)
-            .map_err(|_| Error::Decode("invalid transaction trace list"))?
-        {
-            PayloadView::List(items) => items,
-            PayloadView::String(_) => {
-                return Err(Error::Decode("transaction traces must be an rlp list"));
-            }
-        };
-        if !tx_buf.is_empty() {
-            return Err(Error::Decode("transaction trace list has trailing bytes"));
-        }
-        for frame in frames {
-            offsets.push(
-                u64::try_from(flat_blob.len())
-                    .map_err(|_| Error::Decode("trace blob offset overflow"))?,
-            )?;
-            flat_blob.extend_from_slice(frame);
-            trace_count = trace_count.saturating_add(1);
-        }
+        trace_count = trace_count.saturating_add(1);
     }
 
     if trace_count == 0 {
-        return Ok((empty_trace_header(), Bytes::new(), 0));
+        return Ok(TraceIngestPlan {
+            header: empty_trace_header(),
+            block_blob: Bytes::new(),
+            trace_count: 0,
+            grouped_stream_values: BTreeMap::new(),
+        });
     }
 
     offsets.push(
         u64::try_from(flat_blob.len()).map_err(|_| Error::Decode("trace blob size overflow"))?,
     )?;
 
-    Ok((
-        BlockTraceHeader {
+    Ok(TraceIngestPlan {
+        header: BlockTraceHeader {
             encoding_version: TRACE_ENCODING_VERSION,
             offsets,
             tx_starts,
         },
-        Bytes::from(flat_blob),
+        block_blob: Bytes::from(flat_blob),
         trace_count,
-    ))
+        grouped_stream_values: group_stream_values(values),
+    })
+}
+
+pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block_num: u64,
+    grouped_values: &BTreeMap<String, Vec<u32>>,
+) -> Result<Vec<(String, u32)>> {
+    let grouped_values = grouped_values
+        .clone()
+        .into_iter()
+        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
+    bitmap_pages::persist_stream_fragments(
+        &tables.trace_streams,
+        block_num,
+        grouped_values,
+        TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await
 }
 
 fn empty_trace_header() -> BlockTraceHeader {
@@ -169,7 +153,7 @@ mod tests {
     use crate::traces::types::{BlockTraceHeader, DirByBlock};
     use crate::{store::traits::MetaStore, tables::Tables};
 
-    use super::persist_trace_artifacts;
+    use super::{persist_trace_artifacts, plan_trace_ingest};
 
     fn encode_bytes(value: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -283,7 +267,8 @@ mod tests {
             let frame1 = encode_frame(&[5, 6, 7, 8], 9);
             let trace_rlp = encode_trace_block(vec![vec![frame0.clone()], vec![frame1.clone()]]);
 
-            let trace_count = persist_trace_artifacts(&tables, 700, &trace_rlp)
+            let plan = plan_trace_ingest(&trace_rlp, 0).expect("plan trace ingest");
+            let trace_count = persist_trace_artifacts(&tables, 700, &plan)
                 .await
                 .expect("persist trace artifacts");
 
@@ -316,6 +301,61 @@ mod tests {
                 u64::try_from(frame0.len() + frame1.len()).expect("blob len"),
             );
             assert_eq!(header.tx_starts, vec![0, 1]);
+        });
+    }
+
+    #[test]
+    fn trace_payload_loading_does_not_bleed_across_tx_boundaries() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta, blob);
+
+            let frame0 = encode_frame(&[1, 2, 3, 4, 5], 7);
+            let frame1 = encode_frame(&[9, 8, 7, 6, 5], 9);
+            let trace_rlp = encode_trace_block(vec![vec![frame0], vec![frame1]]);
+            let plan = plan_trace_ingest(&trace_rlp, 0).expect("plan trace ingest");
+            persist_trace_artifacts(&tables, 700, &plan)
+                .await
+                .expect("persist trace artifacts");
+
+            tables
+                .block_records
+                .put(
+                    700,
+                    &crate::core::state::BlockRecord {
+                        block_hash: [7u8; 32],
+                        parent_hash: [6u8; 32],
+                        logs: None,
+                        txs: None,
+                        traces: Some(crate::core::state::PrimaryWindowRecord {
+                            first_primary_id: 0,
+                            count: 2,
+                        }),
+                    },
+                )
+                .await
+                .expect("block record");
+
+            let first = tables
+                .trace_payloads
+                .load_trace_at(700, 0)
+                .await
+                .expect("load first trace")
+                .expect("first trace present");
+            let second = tables
+                .trace_payloads
+                .load_trace_at(700, 1)
+                .await
+                .expect("load second trace")
+                .expect("second trace present");
+
+            assert_eq!(first.tx_idx(), 0);
+            assert_eq!(first.trace_idx(), 0);
+            assert_eq!(first.input().expect("first input"), &[1, 2, 3, 4, 5]);
+            assert_eq!(second.tx_idx(), 1);
+            assert_eq!(second.trace_idx(), 0);
+            assert_eq!(second.input().expect("second input"), &[9, 8, 7, 6, 5]);
         });
     }
 }
