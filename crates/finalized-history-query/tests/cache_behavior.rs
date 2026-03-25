@@ -15,7 +15,7 @@ use futures::executor::block_on;
 use helpers::*;
 
 #[test]
-fn service_reuses_cached_block_log_blobs_across_queries() {
+fn service_reuses_cached_log_block_blobs_across_queries() {
     block_on(async {
         let meta = InMemoryMetaStore::default();
         let target_key = BlockLogBlobSpec::key(1);

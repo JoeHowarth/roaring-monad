@@ -7,12 +7,12 @@ use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
-use crate::ingest::indexed_family::primary_id_at_offset;
+use crate::ingest::indexed_family::{collect_grouped_stream_appends, iter_grouped_stream_appends};
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::codec::validate_log;
-use crate::logs::types::BlockLogHeader;
+use crate::logs::types::{BlockLogHeader, Log};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
@@ -20,35 +20,18 @@ use crate::tables::Tables;
 pub struct LogIngestPlan {
     pub header: BlockLogHeader,
     pub block_blob: Bytes,
-    pub log_count: usize,
-    pub grouped_stream_values: BTreeMap<String, Vec<u32>>,
+    pub stream_appends_by_stream: BTreeMap<String, Vec<u32>>,
 }
 
 pub fn plan_log_ingest(block: &FinalizedBlock, first_log_id: u64) -> Result<LogIngestPlan> {
     validate_logs(block)?;
-
-    let mut offsets = BucketedOffsets::new();
-    let mut out = Vec::<u8>::new();
-    let mut stream_values = Vec::new();
-
-    for (index, log) in block.logs.iter().enumerate() {
-        offsets.push(
-            u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
-        )?;
-        out.extend_from_slice(&log.encode());
-
-        let global_log_id = LogId::new(primary_id_at_offset(first_log_id, index));
-        stream_values.extend(stream_entries_for_log(log, global_log_id));
-    }
-
-    offsets
-        .push(u64::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?)?;
+    let (header, block_blob) = encode_log_block(&block.logs)?;
+    let stream_appends_by_stream = collect_log_stream_appends(block, first_log_id)?;
 
     Ok(LogIngestPlan {
-        header: BlockLogHeader { offsets },
-        block_blob: Bytes::from(out),
-        log_count: block.logs.len(),
-        grouped_stream_values: group_stream_values(stream_values),
+        header,
+        block_blob,
+        stream_appends_by_stream,
     })
 }
 
@@ -57,14 +40,10 @@ pub async fn persist_log_stream_fragments<M: MetaStore, B: BlobStore>(
     block_num: u64,
     grouped_values: &BTreeMap<String, Vec<u32>>,
 ) -> Result<Vec<(String, u32)>> {
-    let grouped_values = grouped_values
-        .clone()
-        .into_iter()
-        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
         &tables.log_streams,
         block_num,
-        grouped_values,
+        iter_grouped_stream_appends(grouped_values),
         STREAM_PAGE_LOCAL_ID_SPAN,
     )
     .await
@@ -76,10 +55,10 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     plan: &LogIngestPlan,
 ) -> Result<usize> {
     tables
-        .block_log_blobs
+        .log_block_blobs
         .put_block(block_num, plan.block_blob.clone(), &plan.header)
         .await?;
-    Ok(plan.log_count)
+    Ok(plan.header.log_count())
 }
 
 fn validate_logs(block: &FinalizedBlock) -> Result<()> {
@@ -120,10 +99,33 @@ fn validate_logs(block: &FinalizedBlock) -> Result<()> {
     Ok(())
 }
 
-fn stream_entries_for_log(
-    log: &crate::logs::types::Log,
-    global_log_id: LogId,
-) -> Vec<(String, u32)> {
+fn encode_log_block(logs: &[Log]) -> Result<(BlockLogHeader, Bytes)> {
+    let mut offsets = BucketedOffsets::new();
+    let mut out = Vec::<u8>::new();
+
+    for log in logs {
+        offsets.push(
+            u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
+        )?;
+        out.extend_from_slice(&log.encode());
+    }
+
+    offsets
+        .push(u64::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?)?;
+
+    Ok((BlockLogHeader { offsets }, Bytes::from(out)))
+}
+
+fn collect_log_stream_appends(
+    block: &FinalizedBlock,
+    first_log_id: u64,
+) -> Result<BTreeMap<String, Vec<u32>>> {
+    collect_grouped_stream_appends(first_log_id, block.logs.iter(), |log, primary_id| {
+        Ok(stream_entries_for_log(log, LogId::new(primary_id)))
+    })
+}
+
+fn stream_entries_for_log(log: &Log, global_log_id: LogId) -> Vec<(String, u32)> {
     let shard = global_log_id.shard().get();
     let local = global_log_id.local().get();
 
@@ -154,7 +156,7 @@ pub fn collect_stream_appends(
 ) -> BTreeMap<String, Vec<u32>> {
     plan_log_ingest(block, first_log_id)
         .expect("valid log ingest plan")
-        .grouped_stream_values
+        .stream_appends_by_stream
 }
 
 #[cfg(test)]
@@ -490,10 +492,13 @@ mod tests {
             );
             let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 2);
             let plan = plan_log_ingest(&block, first_log_id).expect("plan log ingest");
-            let touched_pages =
-                persist_log_stream_fragments(&tables, block.block_num, &plan.grouped_stream_values)
-                    .await
-                    .expect("persist stream fragments");
+            let touched_pages = persist_log_stream_fragments(
+                &tables,
+                block.block_num,
+                &plan.stream_appends_by_stream,
+            )
+            .await
+            .expect("persist stream fragments");
             for (stream_id, page_start) in &touched_pages {
                 let _ = bitmap_pages::compact_stream_page(
                     &tables.log_streams,

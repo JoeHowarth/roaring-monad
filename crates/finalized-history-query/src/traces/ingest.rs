@@ -2,25 +2,31 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
-use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::ingest::bitmap_pages;
-use crate::ingest::indexed_family::primary_id_at_offset;
-use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
+use crate::ingest::indexed_family::{collect_grouped_stream_appends, iter_grouped_stream_appends};
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::traces::ingest_iter::BlockTraceIter;
-use crate::traces::types::BlockTraceHeader;
+use crate::traces::types::{Address20, BlockTraceHeader, Selector4};
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
 
 pub struct TraceIngestPlan {
     pub header: BlockTraceHeader,
     pub block_blob: Bytes,
-    pub trace_count: usize,
-    pub grouped_stream_values: BTreeMap<String, Vec<u32>>,
+    pub stream_appends_by_stream: BTreeMap<String, Vec<u32>>,
+}
+
+#[derive(Clone, Copy)]
+struct TraceStreamFields {
+    from_addr: Address20,
+    to_addr: Option<Address20>,
+    selector: Option<Selector4>,
+    has_value: bool,
 }
 
 pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
@@ -32,7 +38,7 @@ pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
         .block_trace_blobs
         .put_block(block_num, plan.block_blob.clone(), &plan.header)
         .await?;
-    Ok(plan.trace_count)
+    Ok(plan.header.trace_count())
 }
 
 pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceIngestPlan> {
@@ -40,18 +46,16 @@ pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceI
         return Ok(TraceIngestPlan {
             header: empty_trace_header(),
             block_blob: Bytes::new(),
-            trace_count: 0,
-            grouped_stream_values: BTreeMap::new(),
+            stream_appends_by_stream: BTreeMap::new(),
         });
     }
 
     let mut offsets = BucketedOffsets::new();
     let mut tx_starts = Vec::new();
     let mut flat_blob = Vec::<u8>::new();
-    let mut values = Vec::new();
-    let mut trace_count = 0usize;
+    let mut stream_fields = Vec::new();
 
-    for (index, iterated) in BlockTraceIter::new(trace_rlp)?.enumerate() {
+    for iterated in BlockTraceIter::new(trace_rlp)? {
         let iterated = iterated?;
         if iterated.trace_idx == 0 {
             tx_starts.push(iterated.tx_idx);
@@ -62,35 +66,21 @@ pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceI
                 .map_err(|_| Error::Decode("trace blob offset overflow"))?,
         )?;
         flat_blob.extend_from_slice(iterated.view.frame_bytes);
-
-        let global_trace_id = TraceId::new(primary_id_at_offset(first_trace_id, index));
-        let shard = global_trace_id.shard().get();
-        let local = global_trace_id.local().get();
         let view = iterated.view;
 
-        values.push((sharded_stream_id("from", view.from_addr()?, shard), local));
-
-        if let Some(to_addr) = view.to_addr()? {
-            values.push((sharded_stream_id("to", to_addr, shard), local));
-        }
-
-        if let Some(selector) = view.selector()? {
-            values.push((sharded_stream_id("selector", selector, shard), local));
-        }
-
-        if view.has_value()? {
-            values.push((sharded_stream_id("has_value", b"\x01", shard), local));
-        }
-
-        trace_count = trace_count.saturating_add(1);
+        stream_fields.push(TraceStreamFields {
+            from_addr: *view.from_addr()?,
+            to_addr: view.to_addr()?.copied(),
+            selector: view.selector()?.copied(),
+            has_value: view.has_value()?,
+        });
     }
 
-    if trace_count == 0 {
+    if stream_fields.is_empty() {
         return Ok(TraceIngestPlan {
             header: empty_trace_header(),
             block_blob: Bytes::new(),
-            trace_count: 0,
-            grouped_stream_values: BTreeMap::new(),
+            stream_appends_by_stream: BTreeMap::new(),
         });
     }
 
@@ -105,8 +95,7 @@ pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceI
             tx_starts,
         },
         block_blob: Bytes::from(flat_blob),
-        trace_count,
-        grouped_stream_values: group_stream_values(values),
+        stream_appends_by_stream: collect_trace_stream_appends(first_trace_id, &stream_fields)?,
     })
 }
 
@@ -115,17 +104,42 @@ pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
     block_num: u64,
     grouped_values: &BTreeMap<String, Vec<u32>>,
 ) -> Result<Vec<(String, u32)>> {
-    let grouped_values = grouped_values
-        .clone()
-        .into_iter()
-        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
         &tables.trace_streams,
         block_num,
-        grouped_values,
+        iter_grouped_stream_appends(grouped_values),
         TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
     )
     .await
+}
+
+fn collect_trace_stream_appends(
+    first_trace_id: u64,
+    stream_fields: &[TraceStreamFields],
+) -> Result<BTreeMap<String, Vec<u32>>> {
+    collect_grouped_stream_appends(
+        first_trace_id,
+        stream_fields.iter(),
+        |fields, primary_id| {
+            let global_trace_id = crate::core::ids::TraceId::new(primary_id);
+            let shard = global_trace_id.shard().get();
+            let local = global_trace_id.local().get();
+            let mut values = Vec::with_capacity(4);
+
+            values.push((sharded_stream_id("from", &fields.from_addr, shard), local));
+            if let Some(to_addr) = fields.to_addr {
+                values.push((sharded_stream_id("to", &to_addr, shard), local));
+            }
+            if let Some(selector) = fields.selector {
+                values.push((sharded_stream_id("selector", &selector, shard), local));
+            }
+            if fields.has_value {
+                values.push((sharded_stream_id("has_value", b"\x01", shard), local));
+            }
+
+            Ok(values)
+        },
+    )
 }
 
 fn empty_trace_header() -> BlockTraceHeader {

@@ -3,14 +3,13 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 
 use crate::config::Config;
-use crate::core::ids::TxId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
-use crate::ingest::indexed_family::primary_id_at_offset;
+use crate::ingest::indexed_family::{collect_grouped_stream_appends, iter_grouped_stream_appends};
 use crate::kernel::codec::StorageCodec;
-use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
+use crate::kernel::sharded_streams::sharded_stream_id;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::txs::TX_STREAM_PAGE_LOCAL_ID_SPAN;
@@ -18,56 +17,18 @@ use crate::txs::codec::validate_tx;
 use crate::txs::types::{BlockTxHeader, StoredTxEnvelope, TxLocation};
 use crate::txs::view::TxView;
 
-pub fn collect_stream_appends(
-    block: &FinalizedBlock,
-    first_tx_id: u64,
-) -> Result<BTreeMap<String, Vec<u32>>> {
-    let mut values = Vec::new();
-
-    for (index, tx) in block.txs.iter().enumerate() {
-        let global_tx_id = TxId::new(primary_id_at_offset(first_tx_id, index));
-        let shard = global_tx_id.shard().get();
-        let local = global_tx_id.local().get();
-        let signed_tx =
-            TxView::decode(&tx.signed_tx_bytes).map_err(|_| Error::Decode("invalid signed tx"))?;
-
-        values.push((sharded_stream_id("from", &tx.sender, shard), local));
-        if let Some(to_addr) = signed_tx.to_addr()? {
-            values.push((sharded_stream_id("to", &to_addr, shard), local));
-        }
-        if let Some(selector) = signed_tx.selector()? {
-            values.push((sharded_stream_id("selector", &selector, shard), local));
-        }
-    }
-
-    Ok(group_stream_values(values))
+#[derive(Debug)]
+pub struct TxIngestPlan {
+    pub header: BlockTxHeader,
+    pub block_blob: Bytes,
+    pub hash_locations: Vec<([u8; 32], TxLocation)>,
+    pub stream_appends_by_stream: BTreeMap<String, Vec<u32>>,
 }
 
-pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
-    tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    first_tx_id: u64,
-) -> Result<Vec<(String, u32)>> {
-    let grouped_values = collect_stream_appends(block, first_tx_id)?
-        .into_iter()
-        .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
-    bitmap_pages::persist_stream_fragments(
-        &tables.tx_streams,
-        block.block_num,
-        grouped_values,
-        TX_STREAM_PAGE_LOCAL_ID_SPAN,
-    )
-    .await
-}
-
-pub async fn persist_tx_artifacts<M: MetaStore, B: BlobStore>(
-    _config: &Config,
-    tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    _first_tx_id: u64,
-) -> Result<usize> {
+pub fn plan_tx_ingest(block: &FinalizedBlock, first_tx_id: u64) -> Result<TxIngestPlan> {
     let mut offsets = BucketedOffsets::new();
     let mut out = Vec::<u8>::new();
+    let mut hash_locations = Vec::with_capacity(block.txs.len());
 
     for (expected_tx_idx, tx) in block.txs.iter().enumerate() {
         let expected_tx_idx =
@@ -91,30 +52,79 @@ pub async fn persist_tx_artifacts<M: MetaStore, B: BlobStore>(
             }
             .encode(),
         );
-        tables
-            .tx_hash_index
-            .put(
-                &tx.tx_hash,
-                &TxLocation {
-                    block_num: block.block_num,
-                    tx_idx: tx.tx_idx,
-                },
-            )
-            .await?;
+        hash_locations.push((
+            tx.tx_hash,
+            TxLocation {
+                block_num: block.block_num,
+                tx_idx: tx.tx_idx,
+            },
+        ));
     }
 
     offsets.push(u64::try_from(out.len()).map_err(|_| Error::Decode("block tx size overflow"))?)?;
 
+    Ok(TxIngestPlan {
+        header: BlockTxHeader { offsets },
+        block_blob: Bytes::from(out),
+        hash_locations,
+        stream_appends_by_stream: collect_stream_appends(block, first_tx_id)?,
+    })
+}
+
+pub fn collect_stream_appends(
+    block: &FinalizedBlock,
+    first_tx_id: u64,
+) -> Result<BTreeMap<String, Vec<u32>>> {
+    collect_grouped_stream_appends(first_tx_id, block.txs.iter(), |tx, primary_id| {
+        let global_tx_id = crate::core::ids::TxId::new(primary_id);
+        let shard = global_tx_id.shard().get();
+        let local = global_tx_id.local().get();
+        let signed_tx =
+            TxView::decode(&tx.signed_tx_bytes).map_err(|_| Error::Decode("invalid signed tx"))?;
+        let mut values = Vec::with_capacity(3);
+
+        values.push((sharded_stream_id("from", &tx.sender, shard), local));
+        if let Some(to_addr) = signed_tx.to_addr()? {
+            values.push((sharded_stream_id("to", &to_addr, shard), local));
+        }
+        if let Some(selector) = signed_tx.selector()? {
+            values.push((sharded_stream_id("selector", &selector, shard), local));
+        }
+
+        Ok(values)
+    })
+}
+
+pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block_num: u64,
+    grouped_values: &BTreeMap<String, Vec<u32>>,
+) -> Result<Vec<(String, u32)>> {
+    bitmap_pages::persist_stream_fragments(
+        &tables.tx_streams,
+        block_num,
+        iter_grouped_stream_appends(grouped_values),
+        TX_STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await
+}
+
+pub async fn persist_tx_artifacts<M: MetaStore, B: BlobStore>(
+    _config: &Config,
+    tables: &Tables<M, B>,
+    block_num: u64,
+    plan: &TxIngestPlan,
+) -> Result<usize> {
+    for (tx_hash, location) in &plan.hash_locations {
+        tables.tx_hash_index.put(tx_hash, location).await?;
+    }
+
     tables
         .block_tx_blobs
-        .put_block(
-            block.block_num,
-            Bytes::from(out),
-            &BlockTxHeader { offsets },
-        )
+        .put_block(block_num, plan.block_blob.clone(), &plan.header)
         .await?;
 
-    Ok(block.txs.len())
+    Ok(plan.header.tx_count())
 }
 
 #[cfg(test)]
@@ -136,7 +146,7 @@ mod tests {
     use crate::txs::table_specs::{BlockTxBlobSpec, BlockTxHeaderSpec, TxHashIndexSpec};
     use crate::txs::types::{BlockTxHeader, IngestTx, StoredTxEnvelope, TxLocation};
 
-    use super::{collect_stream_appends, persist_tx_artifacts};
+    use super::{collect_stream_appends, persist_tx_artifacts, plan_tx_ingest};
 
     fn encode_field<T: Encodable>(value: T) -> Vec<u8> {
         let mut out = Vec::new();
@@ -217,7 +227,8 @@ mod tests {
                 ],
             );
 
-            let count = persist_tx_artifacts(&config, &tables, &block, 0)
+            let plan = plan_tx_ingest(&block, 0).expect("plan tx ingest");
+            let count = persist_tx_artifacts(&config, &tables, block.block_num, &plan)
                 .await
                 .expect("persist tx artifacts");
 
@@ -263,15 +274,10 @@ mod tests {
     #[test]
     fn persist_tx_artifacts_rejects_invalid_signed_tx_bytes() {
         block_on(async {
-            let tables =
-                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let mut block = sample_block(7, vec![sample_tx(0, 1, Some([3u8; 20]), &[0xaa])]);
             block.txs[0].signed_tx_bytes = vec![0x01];
 
-            let err = persist_tx_artifacts(&config, &tables, &block, 0)
-                .await
-                .expect_err("invalid signed tx should fail");
+            let err = plan_tx_ingest(&block, 0).expect_err("invalid signed tx should fail");
 
             assert!(matches!(
                 err,
@@ -283,9 +289,6 @@ mod tests {
     #[test]
     fn persist_tx_artifacts_rejects_non_canonical_tx_idx() {
         block_on(async {
-            let tables =
-                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let block = sample_block(
                 7,
                 vec![
@@ -294,9 +297,7 @@ mod tests {
                 ],
             );
 
-            let err = persist_tx_artifacts(&config, &tables, &block, 0)
-                .await
-                .expect_err("invalid tx order should fail");
+            let err = plan_tx_ingest(&block, 0).expect_err("invalid tx order should fail");
 
             assert!(matches!(
                 err,
@@ -313,8 +314,9 @@ mod tests {
             let tables = Tables::without_cache(meta.clone(), blob.clone());
             let config = Config::default();
             let block = sample_block(7, Vec::new());
+            let plan = plan_tx_ingest(&block, 0).expect("plan empty tx block");
 
-            let count = persist_tx_artifacts(&config, &tables, &block, 0)
+            let count = persist_tx_artifacts(&config, &tables, block.block_num, &plan)
                 .await
                 .expect("persist empty tx block");
 

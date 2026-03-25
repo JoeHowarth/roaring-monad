@@ -73,7 +73,7 @@ impl TraceRef {
     }
 
     pub fn call_frame(&self) -> CallFrameView<'_> {
-        CallFrameView::from_parts(self.frame_bytes(), self.layout)
+        CallFrameView::from_parts(self.frame_bytes(), &self.layout)
     }
 
     pub fn typ(&self) -> Result<u8> {
@@ -146,96 +146,116 @@ impl std::fmt::Debug for TraceRef {
 #[derive(Debug, Clone)]
 pub struct CallFrameView<'a> {
     pub frame_bytes: &'a [u8],
-    layout: TraceLayout,
+    layout: CallFrameLayout<'a>,
+}
+
+#[derive(Debug, Clone)]
+enum CallFrameLayout<'a> {
+    Borrowed(&'a TraceLayout),
+    Owned(TraceLayout),
+}
+
+impl CallFrameLayout<'_> {
+    fn as_ref(&self) -> &TraceLayout {
+        match self {
+            Self::Borrowed(layout) => layout,
+            Self::Owned(layout) => layout,
+        }
+    }
 }
 
 impl<'a> CallFrameView<'a> {
     pub fn new(frame_bytes: &'a [u8]) -> Result<Self> {
         let layout = parse_trace_layout(frame_bytes)?;
-        Ok(Self::from_parts(frame_bytes, layout))
+        Ok(Self {
+            frame_bytes,
+            layout: CallFrameLayout::Owned(layout),
+        })
     }
 
-    fn from_parts(frame_bytes: &'a [u8], layout: TraceLayout) -> Self {
+    fn from_parts(frame_bytes: &'a [u8], layout: &'a TraceLayout) -> Self {
         Self {
             frame_bytes,
-            layout,
+            layout: CallFrameLayout::Borrowed(layout),
         }
     }
 
     pub fn typ(&self) -> Result<u8> {
-        decode_u8(field_at(
-            self.frame_bytes,
-            self.layout.typ_field_start as usize,
-        )?)
+        let layout = self.layout.as_ref();
+        decode_u8(field_at(self.frame_bytes, layout.typ_field_start as usize)?)
     }
 
     pub fn flags(&self) -> Result<u64> {
+        let layout = self.layout.as_ref();
         decode_u64(field_at(
             self.frame_bytes,
-            self.layout.flags_field_start as usize,
+            layout.flags_field_start as usize,
         )?)
     }
 
     pub fn from_addr(&self) -> Result<&'a Address20> {
+        let layout = self.layout.as_ref();
         decode_address(field_at(
             self.frame_bytes,
-            self.layout.from_field_start as usize,
+            layout.from_field_start as usize,
         )?)
     }
 
     pub fn to_addr(&self) -> Result<Option<&'a Address20>> {
-        decode_optional_address(field_at(
-            self.frame_bytes,
-            self.layout.to_field_start as usize,
-        )?)
+        let layout = self.layout.as_ref();
+        decode_optional_address(field_at(self.frame_bytes, layout.to_field_start as usize)?)
     }
 
     pub fn value_bytes(&self) -> Result<&'a [u8]> {
+        let layout = self.layout.as_ref();
         decode_payload_bytes(field_at(
             self.frame_bytes,
-            self.layout.value_field_start as usize,
+            layout.value_field_start as usize,
         )?)
     }
 
     pub fn gas(&self) -> Result<u64> {
-        decode_u64(field_at(
-            self.frame_bytes,
-            self.layout.gas_field_start as usize,
-        )?)
+        let layout = self.layout.as_ref();
+        decode_u64(field_at(self.frame_bytes, layout.gas_field_start as usize)?)
     }
 
     pub fn gas_used(&self) -> Result<u64> {
+        let layout = self.layout.as_ref();
         decode_u64(field_at(
             self.frame_bytes,
-            self.layout.gas_used_field_start as usize,
+            layout.gas_used_field_start as usize,
         )?)
     }
 
     pub fn input(&self) -> Result<&'a [u8]> {
+        let layout = self.layout.as_ref();
         decode_payload_bytes(field_at(
             self.frame_bytes,
-            self.layout.input_field_start as usize,
+            layout.input_field_start as usize,
         )?)
     }
 
     pub fn output(&self) -> Result<&'a [u8]> {
+        let layout = self.layout.as_ref();
         decode_payload_bytes(field_at(
             self.frame_bytes,
-            self.layout.output_field_start as usize,
+            layout.output_field_start as usize,
         )?)
     }
 
     pub fn status(&self) -> Result<u8> {
+        let layout = self.layout.as_ref();
         decode_u8(field_at(
             self.frame_bytes,
-            self.layout.status_field_start as usize,
+            layout.status_field_start as usize,
         )?)
     }
 
     pub fn depth(&self) -> Result<u64> {
+        let layout = self.layout.as_ref();
         decode_u64(field_at(
             self.frame_bytes,
-            self.layout.depth_field_start as usize,
+            layout.depth_field_start as usize,
         )?)
     }
 

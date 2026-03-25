@@ -13,7 +13,10 @@ use crate::core::ids::TraceId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
-use crate::ingest::indexed_family::finalize_indexed_family_ingest;
+use crate::ingest::indexed_family::{
+    IndexedFamilyFinalizeResult, IndexedFamilyIngestArtifacts, IndexedFamilyTables,
+    finalize_indexed_family_ingest,
+};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
@@ -68,27 +71,31 @@ impl TracesFamily {
         let touched_pages = persist_trace_stream_fragments(
             &runtime.tables,
             block.block_num,
-            &ingest_plan.grouped_stream_values,
+            &ingest_plan.stream_appends_by_stream,
         )
         .await?;
-        let next_trace_id = finalize_indexed_family_ingest(
-            &runtime.tables.trace_dir,
-            &runtime.tables.trace_streams,
-            &runtime.tables.trace_open_bitmap_pages,
-            block.block_num,
-            from_next_trace_id,
-            trace_count_u32,
-            touched_pages,
-            TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-            |count, min_local, max_local| StreamBitmapMeta {
-                count,
-                min_local,
-                max_local,
+        let IndexedFamilyFinalizeResult { next_primary_id } = finalize_indexed_family_ingest(
+            IndexedFamilyTables {
+                dir: &runtime.tables.trace_dir,
+                streams: &runtime.tables.trace_streams,
+                open_bitmap_pages: &runtime.tables.trace_open_bitmap_pages,
+            },
+            IndexedFamilyIngestArtifacts {
+                block_num: block.block_num,
+                from_next_primary_id: from_next_trace_id,
+                written_count: trace_count_u32,
+                touched_pages,
+                stream_page_local_id_span: TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+                make_meta: |count, min_local, max_local| StreamBitmapMeta {
+                    count,
+                    min_local,
+                    max_local,
+                },
             },
         )
         .await?;
 
-        state.next_trace_id = TraceId::new(next_trace_id);
+        state.next_trace_id = TraceId::new(next_primary_id);
         Ok(trace_count)
     }
 }
