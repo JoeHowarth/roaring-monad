@@ -2,7 +2,7 @@
 
 Read this after [storage-model.md](storage-model.md).
 
-This doc describes the shared query execution model used by logs and traces:
+This doc describes the shared query execution model used by logs, txs, and traces:
 normalized block/ID windows, shard-streaming planning, bitmap intersection,
 materialization, and pagination.
 
@@ -46,7 +46,7 @@ The execution stack is split into shared substrate plus family-owned boundaries:
 5. `core::directory` and `core::directory_resolver` provide the shared directory payloads and `primary_id -> (block_num, local_ordinal)` resolution.
 6. `query::runner` executes the shard loop, intersects bitmaps, batches contiguous same-block candidates, materializes outputs, and assembles the page.
 
-Logs and traces still own request validation, indexed clause vocabularies, exact-match semantics, physical key derivation, and output materialization.
+Logs, txs, and traces still own request validation, indexed clause vocabularies, exact-match semantics, physical key derivation, and output materialization.
 
 ## Query Flow
 

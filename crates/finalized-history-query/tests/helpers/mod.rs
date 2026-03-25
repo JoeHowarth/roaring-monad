@@ -5,7 +5,7 @@ use alloy_rlp::Encodable;
 use bytes::Bytes;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryBlocksRequest, QueryLogsRequest, QueryOrder,
-    QueryTracesRequest,
+    QueryTracesRequest, QueryTransactionsRequest,
 };
 use finalized_history_query::config::Config;
 use finalized_history_query::ingest::authority::LeaseAuthority;
@@ -22,8 +22,8 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Block, Clause, Error, FinalizedBlock, LogFilter, LogRef, TraceFilter, TraceRef, WriteAuthority,
-    WriteSession,
+    Block, Clause, Error, FinalizedBlock, IngestTx, LogFilter, LogRef, TraceFilter, TraceRef,
+    TxFilter, TxRef, WriteAuthority, WriteSession,
 };
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -66,6 +66,31 @@ pub fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>)
         logs: Vec::new(),
         txs: Vec::new(),
         trace_rlp,
+    }
+}
+
+pub fn mk_tx_block(block_num: u64, parent_hash: [u8; 32], txs: Vec<IngestTx>) -> FinalizedBlock {
+    FinalizedBlock {
+        block_num,
+        block_hash: [block_num as u8; 32],
+        parent_hash,
+        logs: Vec::new(),
+        txs,
+        trace_rlp: Vec::new(),
+    }
+}
+
+pub fn mk_ingest_tx(
+    tx_idx: u32,
+    tx_hash: [u8; 32],
+    sender: [u8; 20],
+    signed_tx_bytes: Vec<u8>,
+) -> IngestTx {
+    IngestTx {
+        tx_idx,
+        tx_hash,
+        sender,
+        signed_tx_bytes,
     }
 }
 
@@ -175,6 +200,35 @@ where
     .await
 }
 
+pub async fn query_tx_page<A, M, B>(
+    svc: &FinalizedHistoryService<A, M, B>,
+    from_block: u64,
+    to_block: u64,
+    filter: TxFilter,
+    limit: usize,
+    resume_id: Option<u64>,
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<TxRef>>
+where
+    A: WriteAuthority,
+    M: MetaStore,
+    B: BlobStore,
+{
+    svc.query_transactions(
+        QueryTransactionsRequest {
+            from_block: Some(from_block),
+            to_block: Some(to_block),
+            from_block_hash: None,
+            to_block_hash: None,
+            order: QueryOrder::Ascending,
+            resume_id,
+            limit,
+            filter,
+        },
+        ExecutionBudget { max_results: None },
+    )
+    .await
+}
+
 pub async fn query_block_page<A, M, B>(
     svc: &FinalizedHistoryService<A, M, B>,
     from_block: u64,
@@ -205,6 +259,64 @@ pub fn indexed_trace_from_filter(address: u8) -> TraceFilter {
         from: Some(Clause::One([address; 20])),
         ..Default::default()
     }
+}
+
+pub fn encode_tx_field<T: Encodable>(value: T) -> Vec<u8> {
+    let mut out = Vec::new();
+    value.encode(&mut out);
+    out
+}
+
+pub fn encode_tx_bytes(value: &[u8]) -> Vec<u8> {
+    encode_tx_field(value)
+}
+
+pub fn encode_tx_list(fields: Vec<Vec<u8>>) -> Vec<u8> {
+    let payload_length = fields.iter().map(Vec::len).sum();
+    let mut out = Vec::new();
+    alloy_rlp::Header {
+        list: true,
+        payload_length,
+    }
+    .encode(&mut out);
+    for field in fields {
+        out.extend_from_slice(&field);
+    }
+    out
+}
+
+pub fn encode_legacy_tx(to: Option<[u8; 20]>, input: &[u8]) -> Vec<u8> {
+    encode_tx_list(vec![
+        encode_tx_field(1u64),
+        encode_tx_field(2u64),
+        encode_tx_field(21_000u64),
+        encode_tx_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+        encode_tx_field(3u64),
+        encode_tx_bytes(input),
+        encode_tx_field(27u8),
+        encode_tx_field(1u8),
+        encode_tx_field(2u8),
+    ])
+}
+
+pub fn encode_eip1559_tx(to: Option<[u8; 20]>, input: &[u8]) -> Vec<u8> {
+    let payload = encode_tx_list(vec![
+        encode_tx_field(1u64),
+        encode_tx_field(2u64),
+        encode_tx_field(3u64),
+        encode_tx_field(4u64),
+        encode_tx_field(21_000u64),
+        encode_tx_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+        encode_tx_field(5u64),
+        encode_tx_bytes(input),
+        encode_tx_list(Vec::new()),
+        encode_tx_field(1u8),
+        encode_tx_field(2u8),
+        encode_tx_field(3u8),
+    ]);
+    let mut out = vec![0x02];
+    out.extend_from_slice(&payload);
+    out
 }
 
 pub fn encode_trace_block(txs: Vec<Vec<Vec<u8>>>) -> Vec<u8> {

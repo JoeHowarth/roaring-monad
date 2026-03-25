@@ -19,18 +19,18 @@ plans live under `docs/historical/`. Active and completed plans live under
 
 The crate implements the finalized-history query substrate that powers the
 `queryX` family of RPC methods. Today it exposes finalized-history queries for
-shared block identities plus the logs and traces families, alongside a shared
-ingest substrate for logs, txs, and traces.
+shared block identities plus the logs, txs, and traces families, alongside a
+shared ingest substrate for those same families.
 
 The main path:
 
 1. a shared finalized block envelope is ingested
 2. the ingest coordinator validates finalized block continuity once for the whole batch
 3. family-specific ingest handlers process their slice of the block in logs, txs, then traces order
-4. logs receive monotonic finalized `log_id`; traces receive monotonic finalized `TraceId`
+4. logs receive monotonic finalized `log_id`; txs receive monotonic finalized `TxId`; traces receive monotonic finalized `TraceId`
 5. immutable family-owned directory fragments and immutable stream-page fragments are written
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
-7. `query_blocks`, `query_logs`, and `query_traces` resolve finalized block windows
+7. `query_blocks`, `query_logs`, `query_transactions`, and `query_traces` resolve finalized block windows
 8. block queries scan shared block metadata directly; indexed families map that block window to a primary-ID window
 9. query, status, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
@@ -150,11 +150,20 @@ The traces layer owns:
 
 ### Txs family
 
-The txs layer already participates in the shared family boundary:
+The txs layer owns:
 
-- `src/txs/*`
+- tx-owned schema, codecs, keys, and table specs
+- authoritative per-block tx envelope blob storage plus compact per-block tx headers
+- tx block metadata reads and writes
+- tx block-window to tx-ID-window mapping
+- zero-copy `TxRef` access over stored tx envelopes
+- zero-copy signed-tx field extraction for query-relevant fields
+- tx exact-match materialization from stored bytes
+- tx stream fanout for `from`, `to`, and `selector`
+- tx hash point lookup via `tx_hash_index`
+- txs-specific sequencing state (`next_tx_id`) and per-block ingest behavior
+- public service-level `query_transactions` execution over tx-owned indexes
 
-Txs now persist authoritative block tx blobs, block tx headers, hash lookup rows, and shared directory fragments during ingest. Transaction query execution, stream indexing, and signed-tx variant materialization remain incomplete.
 The public indexed-family query items are zero-copy view types: logs return `LogRef`, txs return `TxRef`, and traces return `TraceRef`.
 
 ## Main Types

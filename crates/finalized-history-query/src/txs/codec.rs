@@ -5,9 +5,10 @@ use crate::error::{Error, Result};
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::codec::fixed_codec;
 use crate::txs::types::{BlockTxHeader, StoredTxEnvelope, TxLocation};
+use crate::txs::view::TxView;
 
-pub fn validate_tx(_tx_bytes: &[u8]) -> bool {
-    todo!("tx payload validation is not implemented")
+pub fn validate_tx(tx_bytes: &[u8]) -> bool {
+    TxView::decode(tx_bytes).is_ok()
 }
 
 impl StorageCodec for BlockTxHeader {

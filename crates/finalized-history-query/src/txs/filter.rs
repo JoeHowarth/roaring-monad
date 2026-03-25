@@ -41,9 +41,6 @@ impl IndexedFilter for TxFilter {
     fn indexed_clauses(&self) -> Vec<IndexedClause> {
         let mut clauses = Vec::new();
 
-        if let Some(clause) = build_indexed_clause("tx_hash", &self.tx_hash) {
-            clauses.push(clause);
-        }
         if let Some(clause) = build_indexed_clause("from", &self.from) {
             clauses.push(clause);
         }

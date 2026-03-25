@@ -43,20 +43,20 @@ reference document wants:
 - one ingest coordinator that validates block continuity once and publishes
   once per batch
 - one concrete `Families { logs, txs, traces }` registry
-- logs and traces as real family implementations
+- logs, txs, and traces as real family implementations
 
 Current family status:
 
 - `logs`: real family, with storage layout, codecs, indexing, query execution,
   materialization, and ingest
-- `txs`: scaffold family slot only
-- `txs`: shared-state participation plus real ingest-side storage artifacts; tx queries still return unsupported
+- `txs`: real family, with tx-owned storage, stream indexing, hash lookup,
+  query execution, materialization, and ingest
 - `traces`: real family, with trace-owned storage, indexing, query execution,
   materialization, and ingest
 
 The current public surface is still narrower than the reference:
 
-- blocks, logs, traces, and stubbed transactions
+- blocks, transactions, logs, and traces
 - finalized history only
 - no descending traversal
 - no field selection
@@ -189,12 +189,12 @@ The block tx blob is expected to store one RLP transaction envelope per tx:
 - `sender`
 - `signed_tx_bytes`
 
-Examples of transaction indexes:
+Current transaction indexes:
 
 - `from`
 - `to`
 - `selector`
-- `tx_hash` if direct lookup is needed
+- `tx_hash` via direct point lookup
 
 If one field turns out to be too expensive to recover repeatedly, it can be
 persisted as a small sidecar. That should be the exception, not the default.
