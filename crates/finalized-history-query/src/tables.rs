@@ -108,7 +108,6 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub log_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub tx_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub trace_open_bitmap_pages: OpenBitmapPageTable<M>,
-    pub trace_payloads: TracePayloadTable<M, B>,
 }
 
 impl<M: MetaStore, B: BlobStore> Tables<M, B> {
@@ -245,7 +244,11 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
                 cache: cache_for(config.point_trace_payloads.max_bytes),
-                block_trace_headers: block_trace_headers.clone(),
+                block_trace_headers,
+                block_records: BlockRecordTable::new(
+                    meta_store.table(BlockRecordSpec::TABLE),
+                    no_cache(),
+                ),
             },
             log_open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
@@ -257,15 +260,6 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 meta_store
                     .scannable_table(crate::traces::table_specs::TraceOpenBitmapPageSpec::TABLE),
             ),
-            trace_payloads: TracePayloadTable {
-                blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
-                cache: cache_for(config.point_trace_payloads.max_bytes),
-                block_trace_headers,
-                block_records: BlockRecordTable::new(
-                    meta_store.table(BlockRecordSpec::TABLE),
-                    no_cache(),
-                ),
-            },
         }
     }
 
@@ -277,7 +271,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
             point_log_payloads: self.point_log_payloads.cache.metrics_snapshot(),
             point_tx_payloads: self.block_tx_blobs.cache.metrics_snapshot(),
-            point_trace_payloads: self.trace_payloads.cache.metrics_snapshot(),
+            point_trace_payloads: self.block_trace_blobs.cache.metrics_snapshot(),
             bitmap_page_meta: self.log_streams.page_meta.metrics(),
             bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
         }
@@ -738,14 +732,20 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
     }
 }
 
-pub struct TracePayloadTable<M: MetaStore, B: BlobStore> {
+pub struct BlockTraceBlobTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
     cache: HashMapTableBytesCache,
     block_trace_headers: BlockTraceHeaderTable<M>,
     block_records: BlockRecordTable<M>,
 }
 
-impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
+impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
+    pub async fn get(&self, block_num: u64) -> Result<Option<Bytes>> {
+        self.blob_table
+            .get(&BlockTraceBlobSpec::key(block_num))
+            .await
+    }
+
     pub async fn load_trace_at(
         &self,
         block_num: u64,
@@ -808,20 +808,6 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
                 crate::traces::view::TraceRef::new(block_num, block_hash, tx_idx, trace_idx, frame)
             })
             .collect()
-    }
-}
-
-pub struct BlockTraceBlobTable<M: MetaStore, B: BlobStore> {
-    blob_table: BlobTable<B>,
-    cache: HashMapTableBytesCache,
-    block_trace_headers: BlockTraceHeaderTable<M>,
-}
-
-impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
-    pub async fn get(&self, block_num: u64) -> Result<Option<Bytes>> {
-        self.blob_table
-            .get(&BlockTraceBlobSpec::key(block_num))
-            .await
     }
 
     pub async fn put_block(

@@ -51,7 +51,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
         let last = run.last().expect("run must be non-empty").1;
         let run_items = self
             .tables
-            .trace_payloads
+            .block_trace_blobs
             .load_contiguous_run(first.block_num, first.local_ordinal, last.local_ordinal)
             .await?;
         if run_items.len() != run.len() {
@@ -272,7 +272,7 @@ mod tests {
                 .expect("trace blob");
 
             let first_run = tables
-                .trace_payloads
+                .block_trace_blobs
                 .load_contiguous_run(7, 0, 1)
                 .await
                 .expect("load first run");
@@ -281,7 +281,7 @@ mod tests {
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
 
             let second_run = tables
-                .trace_payloads
+                .block_trace_blobs
                 .load_contiguous_run(7, 0, 1)
                 .await
                 .expect("load second run");
@@ -292,6 +292,80 @@ mod tests {
             let metrics = tables.metrics_snapshot().point_trace_payloads;
             assert_eq!(metrics.inserts, 2);
             assert!(metrics.hits >= 2);
+        });
+    }
+
+    #[test]
+    fn put_block_warms_the_same_trace_cache_used_by_reads() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = CountingBlobStore {
+                inner: InMemoryBlobStore::default(),
+                get_blob_count: Arc::new(AtomicU64::new(0)),
+                read_range_count: Arc::new(AtomicU64::new(0)),
+            };
+            let get_blob_count = Arc::clone(&blob.get_blob_count);
+            let read_range_count = Arc::clone(&blob.read_range_count);
+            let tables = Tables::new(
+                meta,
+                blob,
+                BytesCacheConfig {
+                    point_trace_payloads: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+            );
+
+            tables
+                .block_records
+                .put(
+                    7,
+                    &BlockRecord {
+                        block_hash: [9u8; 32],
+                        parent_hash: [8u8; 32],
+                        logs: None,
+                        txs: None,
+                        traces: None,
+                    },
+                )
+                .await
+                .expect("block record");
+
+            let frame0 = encode_frame([1u8; 20], Some([2u8; 20]), &[0xaa, 0xbb, 0xcc, 0xdd], 0);
+            let frame1 = encode_frame([3u8; 20], Some([4u8; 20]), &[0x11, 0x22, 0x33, 0x44], 1);
+            let mut blob_bytes = Vec::new();
+            blob_bytes.extend_from_slice(&frame0);
+            blob_bytes.extend_from_slice(&frame1);
+            let mut offsets = BucketedOffsets::new();
+            offsets.push(0).expect("offset");
+            offsets
+                .push(u64::try_from(frame0.len()).expect("frame0 len"))
+                .expect("offset");
+            offsets
+                .push(u64::try_from(blob_bytes.len()).expect("blob len"))
+                .expect("offset");
+            let header = BlockTraceHeader {
+                encoding_version: 1,
+                offsets,
+                tx_starts: vec![0, 1],
+            };
+
+            tables
+                .block_trace_blobs
+                .put_block(7, Bytes::from(blob_bytes), &header)
+                .await
+                .expect("put trace block");
+
+            let run = tables
+                .block_trace_blobs
+                .load_contiguous_run(7, 0, 1)
+                .await
+                .expect("load run");
+
+            assert_eq!(run.len(), 2);
+            assert_eq!(read_range_count.load(Ordering::Relaxed), 0);
+            assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
         });
     }
 }

@@ -338,13 +338,13 @@ mod tests {
                 .expect("block record");
 
             let first = tables
-                .trace_payloads
+                .block_trace_blobs
                 .load_trace_at(700, 0)
                 .await
                 .expect("load first trace")
                 .expect("first trace present");
             let second = tables
-                .trace_payloads
+                .block_trace_blobs
                 .load_trace_at(700, 1)
                 .await
                 .expect("load second trace")
