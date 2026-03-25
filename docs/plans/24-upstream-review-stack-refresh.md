@@ -3,47 +3,16 @@
 ## Goal
 
 Define a concrete upstreaming stack for `finalized-history-query` that matches
-the current codebase more closely than
-[`21-upstream-review-stack.md`](21-upstream-review-stack.md).
+the completed implementation in `roaring-monad`.
+
+This document treats `roaring-monad/crates/finalized-history-query` as the
+source implementation and `../monad-bft` as the landing repo where
+`monad-chain-data` commits should be added directly.
 
 The main adjustment is to treat family-owned passive definitions as early
 infrastructure rather than as the final layer. Today the storage, status, and
 public API layers already depend on family request types, refs, state structs,
 table specs, and some family-owned payload shapes.
-
-## Why Refresh The Stack
-
-The earlier stack assumed a cleaner horizontal split:
-
-1. public/core vocabulary
-2. storage/runtime substrate
-3. shared read path
-4. shared write path
-5. family adapters
-
-That is no longer true in the current tree:
-
-- `api.rs` and `family.rs` already mention concrete family types
-- `tables.rs` already depends on family table specs and family-owned payload
-  shapes
-- `status.rs` already depends on family sequencing state
-- parts of shared ingest already depend on family stream-page constants and
-  bitmap metadata types
-
-The refreshed stack keeps the same review goal, but moves passive family
-definitions earlier so the remaining commits can stay honest and compile with
-minimal stubbing.
-
-The main further refinements from commit-one prototyping are:
-
-- the public API facade needs its own commit
-- the shared read substrate and shared write substrate deserve separate commits
-
-If `api.rs` lands too early in a reduced shape, it creates a review-only
-constructor story and service surface that later commits must replace. If the
-shared read and write substrate land together, review load spikes again right
-where the crate becomes most subtle. The stack below separates both of those
-boundaries.
 
 ## Principles
 
@@ -131,6 +100,7 @@ Include:
 - `src/api.rs`
 - `src/config.rs`
 - `src/family.rs`
+- minimal API-facing substrate shells needed for the real facade to compile
 - minimal family shells needed for the public boundary to compile
 
 What "minimal family" means here:
@@ -140,6 +110,17 @@ What "minimal family" means here:
 - ingest input types
 - sequencing-state structs
 - family marker structs where the public API already references them
+
+What "minimal API-facing substrate" means here:
+
+- public store trait declarations if constructor or service generics already
+  name them
+- cache config or metrics types if public config or facade accessors already
+  return them
+- publication-head or status shell types if the public facade already exposes
+  them
+- authority trait/type declarations only where constructor signatures or the
+  concrete service type already require them
 
 What should be real in this commit:
 
@@ -155,11 +136,16 @@ What may be stubbed:
 - all service method bodies
 - any constructor internals
 - any family behavior behind the public API
+- the behavior of any early substrate shell that is present only because the
+  final facade already names it
 
 Important constraint:
 
 - do not land a reduced or review-only service facade here; if `api.rs` lands
   in this commit, its public shape should already be close to the final crate
+- prefer not to widen crate-root re-exports beyond what the commit-2 facade
+  itself needs; deeper substrate APIs can remain module-scoped until their
+  owning commits if the facade does not require them at the crate root
 
 Review question:
 
@@ -182,20 +168,33 @@ What should be real in this commit:
 - family-owned data types
 - filters
 - sequencing-state structs if not already present
-- opaque or thin shell ref/view types
+- real ref/view type names and constructors where the public API already
+  exposes them
+- opaque or thin shell ref/view storage that does not yet commit to encoded
+  field-access semantics
+- pure family-local helpers that do not depend on query planning, runtime, or
+  storage layout may land here if they clarify the passive surface
 
 What should explicitly not land yet:
 
+- query-engine trait impls or planner coupling for family filters
 - family table specs
+- storage-adjacent family artifact types such as block headers, stored envelope
+  wrappers, directory buckets/fragments, bitmap metadata, or point-lookup
+  locations
 - codecs used only for storage artifacts
+- zero-copy field accessors whose behavior depends on the encoded artifact
+  layout
 - materializers
 - ingest implementations
 
 Important constraint:
 
-- placeholder ref/view types should be opaque shells or declarations, not owned
-  mini-implementations that pre-commit to the wrong design before the real
-  zero-copy forms land
+- commit 3 may replace commit-2 placeholder ref/view declarations with the real
+  public type names, but those types should remain intentionally narrow until
+  the encoding/layout commit lands the authoritative decode contract
+- do not introduce unimplemented getters that imply stable zero-copy field
+  semantics before the encoded layout and codec boundary are reviewed
 
 Review question:
 
@@ -226,6 +225,8 @@ What should explicitly not land yet:
 - `src/tables.rs`
 - `src/streams.rs`
 - family `table_specs`
+- family-specific byte-decoding helpers whose semantics primarily come from
+  concrete artifact layouts rather than generic kernel/store contracts
 
 Review question:
 
@@ -380,7 +381,7 @@ The stack is commit-scoped, not file-exclusive. A file may land as a skeletal
 version in an earlier commit and then gain its real behavior later, but it
 should stay in its final location and keep its final public names.
 
-Applied to the current tree:
+Applied to the completed crate and the `../monad-bft` landing repo:
 
 - keep `blocks.rs` with the shared read substrate rather than inventing a block
   family
@@ -408,6 +409,43 @@ Applied to the current tree:
   non-support rather than toy behavior that the real implementation will later
   replace.
 
+## Documentation Strategy
+
+- Frontload orientation docs that help reviewers understand the destination
+  architecture and the review stack itself.
+- Keep subsystem and behavior docs with the commit that introduces the code
+  boundary they primarily explain.
+- Do not frontload detailed implementation docs whose described behavior is not
+  yet present in the review stack unless they are clearly labeled as target
+  architecture.
+
+Preferred early docs:
+
+- `docs/README.md`
+- `docs/overview.md`
+- `docs/design/bitmap-indexed-history-queries.md`
+- `docs/design/immutable-artifact-model.md`
+- this stack plan
+
+Preferred commit-owned docs:
+
+- `docs/storage-model.md`
+- `docs/caching.md`
+- `docs/backend-stores.md`
+- `docs/query-execution.md`
+- `docs/write-authority.md`
+- family-specific docs such as `docs/trace-family.md`
+
+Guidance:
+
+- early orientation docs should explain the completed architecture we are
+  upstreaming and make clear that this review stack lands incrementally in
+  `../monad-bft`
+- commit-owned docs should land when their main abstractions become real enough
+  that reviewers can verify the prose against the code in that commit
+- avoid making an early commit appear behaviorally complete just because the
+  docs already describe later commits
+
 ## What This Stack Optimizes For
 
 This stack optimizes for four things simultaneously:
@@ -419,7 +457,8 @@ This stack optimizes for four things simultaneously:
   constructor or service story
 
 It is intentionally less pure than the older horizontal split, but more
-accurate to the current codebase. The cost is that some family-owned modules
+accurate to the completed implementation we are upstreaming. The cost is that
+some family-owned modules
 arrive earlier and the stack is longer than the original five-commit goal. The
 benefit is that later commits can focus on real behavior instead of spending
 review budget on scaffolding, relearning a replaced public facade, or reviewing

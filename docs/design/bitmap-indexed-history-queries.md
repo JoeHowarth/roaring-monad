@@ -105,8 +105,8 @@ can use the same structure:
 
 Each object type gets its own ID space, directory, and stream indexes. The
 bitmap intersection, sharding, materialization, and pagination machinery is
-shared. Today the current implementation has concrete logs and traces family
-adapters on top of that substrate, while txs remain a scaffold slot.
+shared. Today the current implementation has concrete logs, txs, and traces
+family adapters on top of that substrate.
 
 ## Summary
 

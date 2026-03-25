@@ -29,14 +29,21 @@ boundary.
 ## What gets written per block
 
 When a finalized block is ingested, the writer produces a fixed set of
-artifacts:
+artifacts.
+
+This doc uses logs as the main example because they are the easiest family to
+explain first. The same publication model also applies to the txs and traces
+families, each with its own payload artifacts, per-block headers, directory
+fragments, and stream fragments.
+
+For the logs example, the writer produces:
 
 - **Log blob** — the concatenated encoded logs for the block, stored as a single object keyed by block number. Individual logs are retrieved via byte-range reads using an offset table.
 - **Block log header** — the offset table mapping local log ordinals to byte ranges within the log blob.
 - **Block hash index** — a reverse lookup from block hash to block number.
 - **Shared block record** — block hash, parent hash, plus the per-family
-  primary-ID windows for logs and traces. This is the authoritative per-block
-  sequencing record.
+  primary-ID windows for whichever indexed families participated in the block.
+  This is the authoritative per-block sequencing record.
 - **Directory fragments** — one small record per sub-bucket of the log ID space that the block's logs touch. Each fragment says "block N contributed log IDs X through Y to this sub-bucket." Together, fragments in a sub-bucket let readers resolve any log ID in that range to a block number.
 - **Stream fragments** — for each address or topic value that appears in the block's logs, a roaring bitmap recording which local IDs within the relevant page matched that value. This is the per-block contribution to the bitmap indexes described in the first doc.
 

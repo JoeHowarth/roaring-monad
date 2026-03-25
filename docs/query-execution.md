@@ -20,7 +20,8 @@ effective_limit = min(request.limit, budget.max_results or request.limit)
 
 ## Family ID Type System
 
-Each family ID (`LogId`, `TraceId`, and future peers like transaction IDs) wraps the same shared 64-bit `FamilyId` layout:
+Each family ID (`LogId`, `TxId`, `TraceId`, and future peers) wraps the same
+shared 64-bit `FamilyId` layout:
 
 | Component | Bits | Type | Range |
 |-----------|------|------|-------|
