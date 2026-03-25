@@ -22,8 +22,8 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Block, Clause, Error, EvmBlockHeader, FinalizedBlock, IngestTx, LogFilter, LogRef, TraceFilter,
-    TraceRef, TxFilter, TxRef, WriteAuthority, WriteSession,
+    Block, BlockHeader, Clause, Error, EvmBlockHeader, FinalizedBlock, IngestTx, LogFilter, LogRef,
+    TraceFilter, TraceRef, TxFilter, TxRef, WriteAuthority, WriteSession,
 };
 
 pub static CONTROLLED_OBSERVED_FINALIZED_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -241,7 +241,7 @@ pub async fn query_block_page<A, M, B>(
     from_block: u64,
     to_block: u64,
     limit: usize,
-) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Block>>
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<BlockHeader>>
 where
     A: WriteAuthority,
     M: MetaStore,

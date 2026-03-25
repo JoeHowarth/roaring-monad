@@ -4,7 +4,6 @@ pub mod filter;
 pub(crate) mod ingest;
 pub mod log_ref;
 pub mod materialize;
-pub mod query;
 pub mod table_specs;
 pub mod types;
 

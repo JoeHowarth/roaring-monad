@@ -11,16 +11,18 @@ use crate::ingest::engine::IngestEngine;
 use crate::kernel::cache::BytesCacheMetrics;
 use crate::logs::filter::LogFilter;
 use crate::logs::log_ref::LogRef;
-use crate::logs::query::LogsQueryEngine;
+use crate::logs::materialize::LogMaterializer;
+use crate::query::engine::{FamilyQueryTables, QueryLimits, execute_family_query};
 use crate::runtime::Runtime;
 pub use crate::status::ServiceStatus;
 use crate::status::service_status;
 use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::filter::TraceFilter;
-use crate::traces::query::TracesQueryEngine;
+use crate::traces::materialize::TraceMaterializer;
 use crate::traces::view::TraceRef;
-use crate::txs::{TxFilter, TxRef, TxsQueryEngine};
+use crate::txs::materialize::TxMaterializer;
+use crate::txs::{TxFilter, TxRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedQueryRequest<F> {
@@ -72,9 +74,7 @@ pub struct FinalizedHistoryService<A: WriteAuthority, M: MetaStore, B: BlobStore
     ingest: IngestEngine<A>,
     publication_store: MetaPublicationStore<M>,
     blocks_query: BlocksQueryEngine,
-    logs_query: LogsQueryEngine,
-    txs_query: TxsQueryEngine,
-    traces_query: TracesQueryEngine,
+    planner_max_or_terms: usize,
     pub(crate) runtime: Runtime<M, B>,
     allows_writes: bool,
 }
@@ -87,10 +87,8 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         authority: A,
         allows_writes: bool,
     ) -> Self {
+        let planner_max_or_terms = config.planner_max_or_terms;
         let blocks_query = BlocksQueryEngine;
-        let logs_query = LogsQueryEngine::from_config(&config);
-        let txs_query = TxsQueryEngine::from_config(&config);
-        let traces_query = TracesQueryEngine::from_config(&config);
         let runtime = Runtime::new(meta_store, blob_store, config.bytes_cache);
         let publication_store = MetaPublicationStore::new(runtime.meta_store.clone());
         let ingest = IngestEngine::new(config, authority, Families::default());
@@ -98,9 +96,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             ingest,
             publication_store,
             blocks_query,
-            logs_query,
-            txs_query,
-            traces_query,
+            planner_max_or_terms,
             runtime,
             allows_writes,
         }
@@ -124,7 +120,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self,
         request: QueryBlocksRequest,
         budget: ExecutionBudget,
-    ) -> Result<crate::core::page::QueryPage<Block>> {
+    ) -> Result<crate::core::page::QueryPage<BlockHeader>> {
         self.blocks_query
             .query_blocks(
                 &self.runtime.tables,
@@ -142,14 +138,22 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         request: QueryLogsRequest,
         budget: ExecutionBudget,
     ) -> Result<crate::core::page::QueryPage<LogRef>> {
-        self.logs_query
-            .query_logs(
-                &self.runtime.tables,
-                &self.publication_store,
-                request,
+        let mut materializer = LogMaterializer::new(&self.runtime.tables);
+        execute_family_query(
+            FamilyQueryTables {
+                tables: &self.runtime.tables,
+                stream_tables: &self.runtime.tables.log_streams,
+            },
+            &self.publication_store,
+            &request,
+            QueryLimits {
                 budget,
-            )
-            .await
+                max_or_terms: self.planner_max_or_terms,
+            },
+            &mut materializer,
+            |record| record.logs,
+        )
+        .await
     }
 
     /// Resolves the finalized block window for a transactions request and
@@ -160,14 +164,22 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         request: QueryTransactionsRequest,
         budget: ExecutionBudget,
     ) -> Result<crate::core::page::QueryPage<TxRef>> {
-        self.txs_query
-            .query_transactions(
-                &self.runtime.tables,
-                &self.publication_store,
-                request,
+        let mut materializer = TxMaterializer::new(&self.runtime.tables);
+        execute_family_query(
+            FamilyQueryTables {
+                tables: &self.runtime.tables,
+                stream_tables: &self.runtime.tables.tx_streams,
+            },
+            &self.publication_store,
+            &request,
+            QueryLimits {
                 budget,
-            )
-            .await
+                max_or_terms: self.planner_max_or_terms,
+            },
+            &mut materializer,
+            |record| record.txs,
+        )
+        .await
     }
 
     /// Resolves the finalized block window for a traces request and executes
@@ -177,14 +189,22 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         request: QueryTracesRequest,
         budget: ExecutionBudget,
     ) -> Result<crate::core::page::QueryPage<TraceRef>> {
-        self.traces_query
-            .query_traces(
-                &self.runtime.tables,
-                &self.publication_store,
-                request,
+        let mut materializer = TraceMaterializer::new(&self.runtime.tables);
+        execute_family_query(
+            FamilyQueryTables {
+                tables: &self.runtime.tables,
+                stream_tables: &self.runtime.tables.trace_streams,
+            },
+            &self.publication_store,
+            &request,
+            QueryLimits {
                 budget,
-            )
-            .await
+                max_or_terms: self.planner_max_or_terms,
+            },
+            &mut materializer,
+            |record| record.traces,
+        )
+        .await
     }
 
     pub async fn get_tx(&self, tx_hash: [u8; 32]) -> Result<Option<TxRef>> {

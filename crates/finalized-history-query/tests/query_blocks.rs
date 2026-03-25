@@ -293,15 +293,8 @@ fn get_block_and_query_blocks_hydrate_block_transactions() {
 
         let page = query_block_page(&svc, 1, 1, 1).await.expect("query blocks");
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].txs.len(), 2);
-        assert_eq!(
-            page.items[0].txs[0].tx_hash().expect("first hash"),
-            &[1; 32]
-        );
-        assert_eq!(
-            page.items[0].txs[1].tx_hash().expect("second hash"),
-            &[4; 32]
-        );
+        assert_eq!(page.items[0].number, 1);
+        assert_eq!(page.items[0].hash, [1; 32]);
     });
 }
 

@@ -67,10 +67,11 @@ The current public surface is still narrower than the reference:
 - no field selection
 - no relation joins
 
-The current `query_blocks` substrate now materializes a `Block` object
-containing the full stored EVM block header plus every tx envelope in that
-block. `block_record` still owns the shared indexed-family primary windows,
-while `block_header` owns the authoritative header object used by block reads.
+The current `query_blocks` substrate now materializes the full stored EVM block
+header from shared metastore state. `get_block` hydrates the larger `Block`
+object by combining that shared header with the block's tx envelopes.
+`block_record` still owns the shared indexed-family primary windows, while
+`block_header` owns the authoritative header object used by block reads.
 
 That is the intended direction. The important thing is that the crate now has a
 shared multi-family substrate instead of a logs-only architecture.

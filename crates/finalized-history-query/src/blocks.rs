@@ -51,7 +51,7 @@ impl BlocksQueryEngine {
         publication_store: &P,
         request: QueryBlocksRequest,
         budget: ExecutionBudget,
-    ) -> Result<QueryPage<Block>> {
+    ) -> Result<QueryPage<EvmBlockHeader>> {
         let (from_block, to_block) = resolve_request_block_bounds(
             tables,
             request.from_block,
@@ -81,16 +81,16 @@ impl BlocksQueryEngine {
                 break;
             }
 
-            let Some(block) = load_block(tables, block_num).await? else {
+            let Some(header) = load_block_header(tables, block_num).await? else {
                 return Err(Error::NotFound);
             };
             items.push((
                 BlockRef {
-                    number: block.header.number,
-                    hash: block.header.hash,
-                    parent_hash: block.header.parent_hash,
+                    number: header.number,
+                    hash: header.hash,
+                    parent_hash: header.parent_hash,
                 },
-                block,
+                header,
             ));
 
             if block_num == block_range.to_block {
@@ -106,8 +106,8 @@ impl BlocksQueryEngine {
 fn build_block_page(
     block_range: ResolvedBlockRange,
     effective_limit: usize,
-    mut items: Vec<(BlockRef, Block)>,
-) -> QueryPage<Block> {
+    mut items: Vec<(BlockRef, EvmBlockHeader)>,
+) -> QueryPage<EvmBlockHeader> {
     let has_more = items.len() > effective_limit;
     if has_more {
         items.truncate(effective_limit);
@@ -119,7 +119,7 @@ fn build_block_page(
         .unwrap_or(block_range.examined_endpoint_ref);
     let items = items
         .into_iter()
-        .map(|(_, block)| block)
+        .map(|(_, header)| header)
         .collect::<Vec<_>>();
 
     QueryPage {

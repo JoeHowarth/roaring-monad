@@ -31,7 +31,7 @@ The main path:
 5. immutable family-owned directory fragments and immutable stream-page fragments are written
 6. `publication_state.indexed_finalized_head` is advanced only after all authoritative artifacts for every participating family exist
 7. `query_blocks`, `query_logs`, `query_transactions`, and `query_traces` resolve finalized block windows
-8. block queries scan shared block headers directly, then hydrate each block's tx payloads; indexed families map that block window to a primary-ID window
+8. block queries scan shared block headers directly; point block reads can hydrate each block's tx payloads; indexed families map that block window to a primary-ID window
 9. query, status, and ingest share one long-lived runtime that owns store handles plus typed artifact tables
 10. the query reads immutable artifacts through typed artifact tables backed by per-table bytes caches when a table budget is enabled
 11. ingest writes seed those same typed caches immediately
@@ -109,7 +109,8 @@ The shared layer owns:
 - the long-lived runtime that shares store handles and typed tables across query/status/ingest
 - the multi-family ingest coordinator that validates sequence once and publishes once per batch
 - range resolution against finalized head
-- direct finalized block scans over shared block headers plus block-keyed tx hydration
+- direct finalized block scans over shared block headers
+- point block hydration from shared headers plus block-keyed tx payloads
 - page and resume metadata types
 - shard-streaming indexed execution on primary IDs
 - typed immutable-artifact table reads with per-table bytes cache policy (see [caching.md](caching.md))
