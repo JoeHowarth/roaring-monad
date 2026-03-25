@@ -108,6 +108,6 @@ async fn scylla_minio_roundtrip_query() {
         .expect("query");
 
     assert_eq!(got.items.len(), 2);
-    assert_eq!(got.items[0].block_num, 1);
-    assert_eq!(got.items[1].block_num, 2);
+    assert_eq!(got.items[0].block_num(), 1);
+    assert_eq!(got.items[1].block_num(), 2);
 }

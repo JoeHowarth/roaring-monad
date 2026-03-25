@@ -7,7 +7,7 @@ use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::txs::filter::{TxFilter, exact_match};
 use crate::txs::types::DirByBlock;
-use crate::txs::view::Tx;
+use crate::txs::view::TxRef;
 
 pub struct TxMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
@@ -25,9 +25,9 @@ impl<'a, M: MetaStore, B: BlobStore> TxMaterializer<'a, M, B> {
 
 impl<M: MetaStore, B: BlobStore> QueryMaterializer for TxMaterializer<'_, M, B> {
     type Id = TxId;
-    type Item = Tx;
+    type Item = TxRef;
     type Filter = TxFilter;
-    type Output = Tx;
+    type Output = TxRef;
 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, TxId>(

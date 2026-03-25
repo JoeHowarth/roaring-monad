@@ -32,7 +32,7 @@ use crate::txs::table_specs::{
     TxHashIndexSpec,
 };
 use crate::txs::types::{BlockTxHeader, TxLocation};
-use crate::txs::view::Tx;
+use crate::txs::view::TxRef;
 
 pub struct PrimaryDirTables<M: MetaStore> {
     pub(crate) buckets: PrimaryDirBucketTable<M>,
@@ -721,7 +721,7 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
         &self,
         block_num: u64,
         local_ordinal: usize,
-    ) -> Result<Option<crate::traces::types::Trace>> {
+    ) -> Result<Option<crate::traces::view::TraceRef>> {
         let Some(header) = self.block_trace_headers.get(block_num).await? else {
             return Ok(None);
         };
@@ -744,7 +744,6 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
             return Err(Error::Decode("trace frame extends past blob end"));
         }
         let frame = blob.slice(start..end);
-        let view = crate::traces::view::CallFrameView::new(frame.as_ref())?;
         let tx_idx = header
             .tx_idx_for_trace(local_ordinal)
             .ok_or(Error::Decode("missing tx_idx for trace"))?;
@@ -757,23 +756,9 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
             .await?
             .map(|record| record.block_hash)
             .unwrap_or([0; 32]);
-        Ok(Some(crate::traces::types::Trace {
-            block_num,
-            block_hash,
-            tx_idx,
-            trace_idx,
-            typ: view.typ()?,
-            flags: view.flags()?,
-            from: *view.from_addr()?,
-            to: view.to_addr()?.copied(),
-            value: view.value_bytes()?.to_vec(),
-            gas: view.gas()?,
-            gas_used: view.gas_used()?,
-            input: view.input()?.to_vec(),
-            output: view.output()?.to_vec(),
-            status: view.status()?,
-            depth: view.depth()?,
-        }))
+        Ok(Some(crate::traces::view::TraceRef::new(
+            block_num, block_hash, tx_idx, trace_idx, frame,
+        )?))
     }
 }
 
@@ -815,7 +800,7 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
         self.blob_table.get(&BlockTxBlobSpec::key(block_num)).await
     }
 
-    pub async fn load_tx_at(&self, block_num: u64, tx_idx: u32) -> Result<Option<Tx>> {
+    pub async fn load_tx_at(&self, block_num: u64, tx_idx: u32) -> Result<Option<TxRef>> {
         let Some(header) = self.block_tx_headers.get(block_num).await? else {
             return Ok(None);
         };
@@ -836,7 +821,7 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
             .await?
             .map(|record| record.block_hash)
             .ok_or(Error::NotFound)?;
-        Tx::new(block_num, block_hash, tx_idx, envelope_bytes).map(Some)
+        TxRef::new(block_num, block_hash, tx_idx, envelope_bytes).map(Some)
     }
 
     pub async fn put_block(

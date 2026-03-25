@@ -2,8 +2,8 @@ use crate::api::{ExecutionBudget, QueryLogsRequest};
 use crate::config::Config;
 use crate::core::page::QueryPage;
 use crate::error::Result;
+use crate::logs::log_ref::LogRef;
 use crate::logs::materialize::LogMaterializer;
-use crate::logs::types::Log;
 use crate::query::engine::{FamilyQueryTables, QueryLimits, execute_family_query};
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -27,7 +27,7 @@ impl LogsQueryEngine {
         publication_store: &P,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
-    ) -> Result<QueryPage<Log>> {
+    ) -> Result<QueryPage<LogRef>> {
         let mut materializer = LogMaterializer::new(tables);
         execute_family_query(
             FamilyQueryTables {

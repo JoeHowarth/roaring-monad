@@ -226,11 +226,11 @@ async fn query_trace_range(
         .into_iter()
         .map(|trace| {
             (
-                trace.block_num,
-                trace.tx_idx,
-                trace.trace_idx,
-                trace.from,
-                trace.to,
+                trace.block_num(),
+                trace.tx_idx(),
+                trace.trace_idx(),
+                *trace.from_addr().expect("from"),
+                trace.to_addr().expect("to").copied(),
             )
         })
         .collect()
@@ -300,6 +300,9 @@ async fn query_range(
         .await
         .expect("query");
     page.items
+        .into_iter()
+        .map(|log| log.to_owned_log())
+        .collect()
 }
 
 fn matches_address(log: &Log, clause: &Option<Clause<[u8; 20]>>) -> bool {

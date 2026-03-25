@@ -32,7 +32,9 @@ pub use ingest::authority::{
     WriteSession,
 };
 pub use logs::filter::LogFilter;
+pub use logs::log_ref::LogRef;
 pub use logs::types::Log;
 pub use traces::filter::TraceFilter;
 pub use traces::types::Trace;
-pub use txs::{IngestTx, Tx, TxFilter};
+pub use traces::view::TraceRef;
+pub use txs::{IngestTx, TxFilter, TxRef};

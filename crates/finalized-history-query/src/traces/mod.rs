@@ -23,6 +23,7 @@ use crate::traces::types::StreamBitmapMeta;
 
 pub use filter::TraceFilter;
 pub use types::{Trace, TraceSequencingState};
+pub use view::TraceRef;
 
 pub(crate) const TRACE_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;
 

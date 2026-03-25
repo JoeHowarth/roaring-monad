@@ -3,7 +3,7 @@ use crate::family::Hash32;
 use crate::query::engine::IndexedFilter;
 use crate::query::planner::{IndexedClause, build_indexed_clause};
 use crate::txs::types::{Address20, Selector4};
-use crate::txs::view::Tx;
+use crate::txs::view::TxRef;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TxFilter {
@@ -58,7 +58,7 @@ impl IndexedFilter for TxFilter {
     }
 }
 
-pub fn exact_match(tx: &Tx, filter: &TxFilter) -> bool {
+pub fn exact_match(tx: &TxRef, filter: &TxFilter) -> bool {
     let tx_hash = match tx.tx_hash() {
         Ok(tx_hash) => tx_hash,
         Err(_) => return false,

@@ -12,4 +12,4 @@ pub use family::TxsFamily;
 pub use filter::TxFilter;
 pub(crate) use query::TxsQueryEngine;
 pub use types::{IngestTx, TxFamilyState};
-pub use view::Tx;
+pub use view::TxRef;

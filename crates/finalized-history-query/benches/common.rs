@@ -19,6 +19,7 @@ use finalized_history_query::core::state::{
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::table_specs::PointTableSpec;
 use finalized_history_query::logs::codec::validate_log;
+use finalized_history_query::logs::log_ref::LogRef;
 use finalized_history_query::logs::materialize::LogMaterializer;
 use finalized_history_query::logs::table_specs::{
     BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec,
@@ -341,7 +342,7 @@ pub fn query_page<A, M, B>(
     filter: LogFilter,
     limit: usize,
     resume_id: Option<u64>,
-) -> QueryPage<Log>
+) -> QueryPage<LogRef>
 where
     A: WriteAuthority,
     M: MetaStore,

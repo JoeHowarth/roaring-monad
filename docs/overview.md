@@ -92,9 +92,9 @@ The public query surface is transport-free:
 - `QueryTracesRequest`
 - `ExecutionBudget`
 - `QueryPage<Block>`
-- `QueryPage<Log>`
-- `QueryPage<Tx>`
-- `QueryPage<Trace>`
+- `QueryPage<LogRef>`
+- `QueryPage<TxRef>`
+- `QueryPage<TraceRef>`
 - `QueryPageMeta`
 - `FinalizedHistoryService`
 
@@ -155,7 +155,7 @@ The txs layer already participates in the shared family boundary:
 - `src/txs/*`
 
 Txs now persist authoritative block tx blobs, block tx headers, hash lookup rows, and shared directory fragments during ingest. Transaction query execution, stream indexing, and signed-tx variant materialization remain incomplete.
-The public tx query item is a zero-copy bytes-backed view over one stored tx envelope rather than an eagerly owned decoded struct.
+The public indexed-family query items are zero-copy view types: logs return `LogRef`, txs return `TxRef`, and traces return `TraceRef`.
 
 ## Main Types
 
@@ -242,7 +242,18 @@ class IngestTx:
     signed_tx_bytes: bytes
 
 
-class Tx:
+class LogRef:
+    def address(self) -> bytes20: ...
+    def topic_count(self) -> int: ...
+    def topic(self, i: int) -> bytes32: ...
+    def data(self) -> bytes: ...
+    def block_num(self) -> int: ...
+    def tx_idx(self) -> int: ...
+    def log_idx(self) -> int: ...
+    def block_hash(self) -> bytes32: ...
+
+
+class TxRef:
     def block_num(self) -> int: ...
     def block_hash(self) -> bytes32: ...
     def tx_idx(self) -> int: ...
@@ -251,22 +262,22 @@ class Tx:
     def signed_tx_bytes(self) -> bytes: ...
 
 
-class Trace:
-    block_num: int
-    block_hash: bytes32
-    tx_idx: int
-    trace_idx: int
-    typ: int
-    flags: int
-    from: bytes20
-    to: bytes20 | None
-    value: bytes
-    gas: int
-    gas_used: int
-    input: bytes
-    output: bytes
-    status: int
-    depth: int
+class TraceRef:
+    def block_num(self) -> int: ...
+    def block_hash(self) -> bytes32: ...
+    def tx_idx(self) -> int: ...
+    def trace_idx(self) -> int: ...
+    def typ(self) -> int: ...
+    def flags(self) -> int: ...
+    def from_addr(self) -> bytes20: ...
+    def to_addr(self) -> bytes20 | None: ...
+    def value_bytes(self) -> bytes: ...
+    def gas(self) -> int: ...
+    def gas_used(self) -> int: ...
+    def input(self) -> bytes: ...
+    def output(self) -> bytes: ...
+    def status(self) -> int: ...
+    def depth(self) -> int: ...
 
 
 class FinalizedBlock:
@@ -370,9 +381,9 @@ Today the logs and traces families persist finalized-history artifacts. The shar
 ```python
 class FinalizedHistoryService:
     async def status(self) -> ServiceStatus
-    async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[Log]
-    async def query_transactions(self, request: QueryTransactionsRequest, budget: ExecutionBudget) -> QueryPage[Tx]
-    async def query_traces(self, request: QueryTracesRequest, budget: ExecutionBudget) -> QueryPage[Trace]
+    async def query_logs(self, request: QueryLogsRequest, budget: ExecutionBudget) -> QueryPage[LogRef]
+    async def query_transactions(self, request: QueryTransactionsRequest, budget: ExecutionBudget) -> QueryPage[TxRef]
+    async def query_traces(self, request: QueryTracesRequest, budget: ExecutionBudget) -> QueryPage[TraceRef]
     async def ingest_finalized_block(self, block: FinalizedBlock) -> IngestOutcome
     async def ingest_finalized_blocks(self, blocks: list[FinalizedBlock]) -> IngestOutcome
 ```

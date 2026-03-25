@@ -240,6 +240,6 @@ fn ingest_block_with_zero_logs_followed_by_block_with_logs() {
             .await
             .expect("query");
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].block_num, 2);
+        assert_eq!(page.items[0].block_num(), 2);
     });
 }

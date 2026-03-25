@@ -482,6 +482,9 @@ async fn query_range(
         .await
         .expect("query logs");
     page.items
+        .into_iter()
+        .map(|log| log.to_owned_log())
+        .collect()
 }
 
 #[test]

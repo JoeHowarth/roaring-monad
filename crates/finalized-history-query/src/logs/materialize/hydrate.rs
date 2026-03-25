@@ -13,7 +13,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
     type Id = LogId;
     type Item = LogRef;
     type Filter = LogFilter;
-    type Output = crate::logs::types::Log;
+    type Output = LogRef;
 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, LogId>(
@@ -84,6 +84,6 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
     }
 
     fn into_output(item: Self::Item) -> Self::Output {
-        item.to_owned_log()
+        item
     }
 }

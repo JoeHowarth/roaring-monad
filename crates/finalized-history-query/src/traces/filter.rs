@@ -2,7 +2,7 @@ use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_cl
 use crate::query::engine::IndexedFilter;
 use crate::query::planner::{IndexedClause, build_indexed_clause, single_selector_clause};
 use crate::traces::types::{Address20, Selector4};
-use crate::traces::view::CallFrameView;
+use crate::traces::view::{CallFrameView, TraceRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TraceFilter {
@@ -83,7 +83,7 @@ impl TraceFilter {
     }
 }
 
-pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
+pub fn exact_match_frame(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
     let from = match trace.from_addr() {
         Ok(from) => from,
         Err(_) => return false,
@@ -123,6 +123,13 @@ pub fn exact_match(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
     }
 
     true
+}
+
+pub fn exact_match(trace: &TraceRef, filter: &TraceFilter) -> bool {
+    let Ok(frame) = trace.call_frame() else {
+        return false;
+    };
+    exact_match_frame(&frame, filter)
 }
 
 #[cfg(test)]
@@ -207,7 +214,7 @@ mod tests {
             is_top_level: Some(true),
             has_value: Some(true),
         };
-        assert!(exact_match(&trace, &filter));
+        assert!(exact_match_frame(&trace, &filter));
     }
 
     #[test]

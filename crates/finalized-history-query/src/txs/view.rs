@@ -6,14 +6,14 @@ use crate::family::Hash32;
 use crate::txs::types::{Address20, Selector4};
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Tx {
+pub struct TxRef {
     block_num: u64,
     block_hash: Hash32,
     tx_idx: u32,
     envelope_bytes: Bytes,
 }
 
-impl Tx {
+impl TxRef {
     pub fn new(
         block_num: u64,
         block_hash: Hash32,
@@ -62,9 +62,9 @@ impl Tx {
     }
 }
 
-impl std::fmt::Debug for Tx {
+impl std::fmt::Debug for TxRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tx")
+        f.debug_struct("TxRef")
             .field("block_num", &self.block_num)
             .field("tx_idx", &self.tx_idx)
             .finish()
@@ -185,7 +185,7 @@ mod tests {
             sender: [2u8; 20],
             signed_tx_bytes: vec![3, 4, 5],
         };
-        let tx = Tx::new(7, [9u8; 32], 4, envelope.encode()).expect("tx");
+        let tx = TxRef::new(7, [9u8; 32], 4, envelope.encode()).expect("tx");
 
         assert_eq!(tx.block_num(), 7);
         assert_eq!(tx.block_hash(), &[9u8; 32]);

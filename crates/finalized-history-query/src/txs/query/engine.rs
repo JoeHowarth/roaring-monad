@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::txs::view::Tx;
+use crate::txs::view::TxRef;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TxsQueryEngine;
@@ -21,7 +21,7 @@ impl TxsQueryEngine {
         _publication_store: &P,
         _request: QueryTransactionsRequest,
         _budget: ExecutionBudget,
-    ) -> Result<QueryPage<Tx>> {
+    ) -> Result<QueryPage<TxRef>> {
         todo!("tx indexed query execution is not implemented")
     }
 }

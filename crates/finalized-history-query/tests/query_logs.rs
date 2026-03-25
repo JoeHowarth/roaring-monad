@@ -55,7 +55,7 @@ fn ingest_and_query_with_limits_and_resume() {
         .expect("second page");
         assert_eq!(second.items.len(), 1);
         assert!(!second.meta.has_more);
-        assert_eq!(second.items[0].block_num, 2);
+        assert_eq!(second.items[0].block_num(), 2);
     });
 }
 
@@ -167,7 +167,7 @@ fn query_logs_resolves_block_hash_bounds() {
             .expect("query logs by block hash");
 
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].block_num, 1);
+        assert_eq!(page.items[0].block_num(), 1);
     });
 }
 
@@ -395,6 +395,6 @@ fn indexed_query_filters_out_non_matching_logs_from_same_stream() {
             .await
             .expect("filtered query");
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].topics[0], [10; 32]);
+        assert_eq!(page.items[0].topic(0), &[10; 32]);
     });
 }

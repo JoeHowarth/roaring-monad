@@ -7,8 +7,8 @@ use crate::error::{Error, Result};
 use crate::query::runner::{MaterializerCaches, QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::filter::TraceFilter;
-use crate::traces::types::Trace;
+use crate::traces::filter::{TraceFilter, exact_match};
+use crate::traces::view::TraceRef;
 
 pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
     tables: &'a Tables<M, B>,
@@ -26,9 +26,9 @@ impl<'a, M: MetaStore, B: BlobStore> TraceMaterializer<'a, M, B> {
 
 impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, B> {
     type Id = TraceId;
-    type Item = Trace;
+    type Item = TraceRef;
     type Filter = TraceFilter;
-    type Output = Trace;
+    type Output = TraceRef;
 
     async fn resolve_id(&mut self, id: Self::Id) -> Result<Option<ResolvedPrimaryLocation>> {
         Ok(resolve_primary_id::<M, TraceId>(
@@ -66,14 +66,14 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
         cached_parent_block_ref(
             &mut self.caches.block_ref_cache,
             self.tables,
-            item.block_num,
-            item.block_hash,
+            item.block_num(),
+            *item.block_hash(),
         )
         .await
     }
 
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
-        filter.matches_trace(item)
+        exact_match(item, filter)
     }
 
     fn into_output(item: Self::Item) -> Self::Output {

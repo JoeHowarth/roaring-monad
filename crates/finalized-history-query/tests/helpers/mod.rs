@@ -22,7 +22,7 @@ use finalized_history_query::store::traits::{
     TableId,
 };
 use finalized_history_query::{
-    Block, Clause, Error, FinalizedBlock, LogFilter, Trace, TraceFilter, WriteAuthority,
+    Block, Clause, Error, FinalizedBlock, LogFilter, LogRef, TraceFilter, TraceRef, WriteAuthority,
     WriteSession,
 };
 
@@ -124,7 +124,7 @@ pub async fn query_page<A, M, B>(
     filter: LogFilter,
     limit: usize,
     resume_id: Option<u64>,
-) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Log>>
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<LogRef>>
 where
     A: WriteAuthority,
     M: MetaStore,
@@ -153,7 +153,7 @@ pub async fn query_trace_page<A, M, B>(
     filter: TraceFilter,
     limit: usize,
     resume_id: Option<u64>,
-) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<Trace>>
+) -> finalized_history_query::Result<finalized_history_query::core::page::QueryPage<TraceRef>>
 where
     A: WriteAuthority,
     M: MetaStore,

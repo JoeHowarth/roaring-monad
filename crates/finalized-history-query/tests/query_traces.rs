@@ -148,9 +148,9 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
         assert_eq!(first.items.len(), 1);
         assert!(first.meta.has_more);
         assert_eq!(first.meta.next_resume_id, Some(0));
-        assert_eq!(first.items[0].block_num, 1);
-        assert_eq!(first.items[0].tx_idx, 0);
-        assert_eq!(first.items[0].trace_idx, 0);
+        assert_eq!(first.items[0].block_num(), 1);
+        assert_eq!(first.items[0].tx_idx(), 0);
+        assert_eq!(first.items[0].trace_idx(), 0);
 
         let second = query_trace_page(
             &svc,
@@ -170,8 +170,11 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
         .expect("second trace page");
         assert_eq!(second.items.len(), 1);
         assert!(!second.meta.has_more);
-        assert_eq!(second.items[0].block_num, 2);
-        assert_eq!(second.items[0].to, Some([8; 20]));
+        assert_eq!(second.items[0].block_num(), 2);
+        assert_eq!(
+            second.items[0].to_addr().expect("to").copied(),
+            Some([8; 20])
+        );
     });
 }
 
@@ -205,8 +208,8 @@ fn query_traces_supports_to_only_selector_only_and_has_value_only_filters() {
         .await
         .expect("to-only query");
         assert_eq!(to_only.items.len(), 2);
-        assert_eq!(to_only.items[0].block_num, 1);
-        assert_eq!(to_only.items[1].block_num, 1);
+        assert_eq!(to_only.items[0].block_num(), 1);
+        assert_eq!(to_only.items[1].block_num(), 1);
 
         let selector_only = query_trace_page(
             &svc,
@@ -222,8 +225,8 @@ fn query_traces_supports_to_only_selector_only_and_has_value_only_filters() {
         .await
         .expect("selector-only query");
         assert_eq!(selector_only.items.len(), 2);
-        assert_eq!(selector_only.items[0].block_num, 1);
-        assert_eq!(selector_only.items[1].block_num, 2);
+        assert_eq!(selector_only.items[0].block_num(), 1);
+        assert_eq!(selector_only.items[1].block_num(), 2);
 
         let has_value_only = query_trace_page(
             &svc,
@@ -239,10 +242,10 @@ fn query_traces_supports_to_only_selector_only_and_has_value_only_filters() {
         .await
         .expect("has-value-only query");
         assert_eq!(has_value_only.items.len(), 4);
-        assert_eq!(has_value_only.items[0].block_num, 1);
-        assert_eq!(has_value_only.items[1].block_num, 2);
-        assert_eq!(has_value_only.items[2].block_num, 2);
-        assert_eq!(has_value_only.items[3].block_num, 3);
+        assert_eq!(has_value_only.items[0].block_num(), 1);
+        assert_eq!(has_value_only.items[1].block_num(), 2);
+        assert_eq!(has_value_only.items[2].block_num(), 2);
+        assert_eq!(has_value_only.items[3].block_num(), 3);
     });
 }
 
@@ -282,9 +285,9 @@ fn query_traces_supports_compound_filters_and_blocks_without_traces() {
         .expect("compound trace query");
 
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].block_num, 3);
-        assert_eq!(page.items[0].from, [7; 20]);
-        assert_eq!(page.items[0].to, Some([8; 20]));
+        assert_eq!(page.items[0].block_num(), 3);
+        assert_eq!(*page.items[0].from_addr().expect("from"), [7; 20]);
+        assert_eq!(page.items[0].to_addr().expect("to").copied(), Some([8; 20]));
     });
 }
 
@@ -391,7 +394,7 @@ fn query_traces_resolves_block_hash_bounds() {
             .expect("query traces by block hash");
 
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].block_num, 1);
+        assert_eq!(page.items[0].block_num(), 1);
         assert_eq!(page.meta.resolved_from_block.hash, [1; 32]);
         assert_eq!(page.meta.resolved_to_block.hash, [1; 32]);
     });

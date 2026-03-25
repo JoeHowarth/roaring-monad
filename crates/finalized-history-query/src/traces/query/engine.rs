@@ -7,7 +7,7 @@ use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::materialize::TraceMaterializer;
-use crate::traces::types::Trace;
+use crate::traces::view::TraceRef;
 
 #[derive(Debug, Clone)]
 pub struct TracesQueryEngine {
@@ -27,7 +27,7 @@ impl TracesQueryEngine {
         publication_store: &P,
         request: QueryTracesRequest,
         budget: ExecutionBudget,
-    ) -> Result<QueryPage<Trace>> {
+    ) -> Result<QueryPage<TraceRef>> {
         let mut materializer = TraceMaterializer::new(tables);
         execute_family_query(
             FamilyQueryTables {

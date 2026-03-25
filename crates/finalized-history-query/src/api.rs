@@ -9,8 +9,8 @@ use crate::ingest::authority::{LeaseAuthority, ReadOnlyAuthority, WriteAuthority
 use crate::ingest::engine::IngestEngine;
 use crate::kernel::cache::BytesCacheMetrics;
 use crate::logs::filter::LogFilter;
+use crate::logs::log_ref::LogRef;
 use crate::logs::query::LogsQueryEngine;
-use crate::logs::types::Log;
 use crate::runtime::Runtime;
 pub use crate::status::ServiceStatus;
 use crate::status::service_status;
@@ -18,8 +18,8 @@ use crate::store::publication::{MetaPublicationStore, PublicationStore};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::filter::TraceFilter;
 use crate::traces::query::TracesQueryEngine;
-use crate::traces::types::Trace;
-use crate::txs::{Tx, TxFilter, TxsQueryEngine};
+use crate::traces::view::TraceRef;
+use crate::txs::{TxFilter, TxRef, TxsQueryEngine};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedQueryRequest<F> {
@@ -133,7 +133,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self,
         request: QueryLogsRequest,
         budget: ExecutionBudget,
-    ) -> Result<crate::core::page::QueryPage<Log>> {
+    ) -> Result<crate::core::page::QueryPage<LogRef>> {
         self.logs_query
             .query_logs(
                 &self.runtime.tables,
@@ -151,7 +151,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self,
         request: QueryTransactionsRequest,
         budget: ExecutionBudget,
-    ) -> Result<crate::core::page::QueryPage<Tx>> {
+    ) -> Result<crate::core::page::QueryPage<TxRef>> {
         self.txs_query
             .query_transactions(
                 &self.runtime.tables,
@@ -168,7 +168,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         &self,
         request: QueryTracesRequest,
         budget: ExecutionBudget,
-    ) -> Result<crate::core::page::QueryPage<Trace>> {
+    ) -> Result<crate::core::page::QueryPage<TraceRef>> {
         self.traces_query
             .query_traces(
                 &self.runtime.tables,
