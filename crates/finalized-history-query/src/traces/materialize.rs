@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::query::runner::{MaterializerCaches, QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
-use crate::traces::filter::{TraceFilter, exact_match};
+use crate::traces::filter::{TraceFilter, exact_match_frame};
 use crate::traces::view::TraceRef;
 
 pub struct TraceMaterializer<'a, M: MetaStore, B: BlobStore> {
@@ -113,7 +113,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     }
 
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool {
-        exact_match(item, filter)
+        exact_match_frame(&item.call_frame(), filter)
     }
 
     fn into_output(item: Self::Item) -> Self::Output {

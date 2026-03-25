@@ -119,7 +119,7 @@ where
         for block in blocks {
             writes += self
                 .families
-                .ingest_block(&self.config, runtime, prepared.family_states_mut(), block)
+                .ingest_block(runtime, prepared.family_states_mut(), block)
                 .await?;
         }
 

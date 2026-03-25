@@ -10,8 +10,36 @@ use crate::query::runner::empty_page;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
+use crate::txs::view::TxRef;
 
-pub type Block = EvmBlockHeader;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub header: EvmBlockHeader,
+    pub txs: Vec<TxRef>,
+}
+
+impl core::ops::Deref for Block {
+    type Target = EvmBlockHeader;
+
+    fn deref(&self) -> &Self::Target {
+        &self.header
+    }
+}
+
+pub async fn load_block<M: MetaStore, B: BlobStore>(
+    tables: &Tables<M, B>,
+    block_num: u64,
+) -> Result<Option<Block>> {
+    let Some(header) = load_block_header(tables, block_num).await? else {
+        return Ok(None);
+    };
+    let txs = tables
+        .block_tx_blobs
+        .load_block(block_num)
+        .await?
+        .ok_or(Error::NotFound)?;
+    Ok(Some(Block { header, txs }))
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlocksQueryEngine;
@@ -53,16 +81,16 @@ impl BlocksQueryEngine {
                 break;
             }
 
-            let Some(header) = load_block_header(tables, block_num).await? else {
+            let Some(block) = load_block(tables, block_num).await? else {
                 return Err(Error::NotFound);
             };
             items.push((
                 BlockRef {
-                    number: header.number,
-                    hash: header.hash,
-                    parent_hash: header.parent_hash,
+                    number: block.header.number,
+                    hash: block.header.hash,
+                    parent_hash: block.header.parent_hash,
                 },
-                header,
+                block,
             ));
 
             if block_num == block_range.to_block {

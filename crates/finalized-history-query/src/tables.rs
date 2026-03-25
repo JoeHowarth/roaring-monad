@@ -877,6 +877,19 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
         self.blob_table.get(&BlockTxBlobSpec::key(block_num)).await
     }
 
+    pub async fn load_block(&self, block_num: u64) -> Result<Option<Vec<TxRef>>> {
+        let Some(header) = self.block_tx_headers.get(block_num).await? else {
+            return Ok(None);
+        };
+        let tx_count = header.tx_count();
+        let txs = if tx_count == 0 {
+            Vec::new()
+        } else {
+            self.load_contiguous_run(block_num, 0, tx_count - 1).await?
+        };
+        Ok(Some(txs))
+    }
+
     pub async fn load_tx_at(&self, block_num: u64, tx_idx: u32) -> Result<Option<TxRef>> {
         let Some(item) = self
             .load_contiguous_run(block_num, tx_idx as usize, tx_idx as usize)

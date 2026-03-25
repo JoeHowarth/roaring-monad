@@ -1,4 +1,3 @@
-use crate::config::Config;
 use crate::core::header::EvmBlockHeader;
 use crate::core::state::{BlockRecord, PrimaryWindowRecord};
 use crate::error::{Error, Result};
@@ -79,7 +78,6 @@ impl Families {
     /// updating block indexes first and persisting the block record last.
     pub async fn ingest_block<M, B>(
         &self,
-        config: &Config,
         runtime: &Runtime<M, B>,
         states: &mut FamilyStates,
         block: &FinalizedBlock,
@@ -106,15 +104,15 @@ impl Families {
         let writes = FamilyBlockWrites {
             logs: self
                 .logs
-                .ingest_block(config, runtime, &mut states.logs, block)
+                .ingest_block(runtime, &mut states.logs, block)
                 .await?,
             txs: self
                 .txs
-                .ingest_block(config, runtime, &mut states.txs, block)
+                .ingest_block(runtime, &mut states.txs, block)
                 .await?,
             traces: self
                 .traces
-                .ingest_block(config, runtime, &mut states.traces, block)
+                .ingest_block(runtime, &mut states.traces, block)
                 .await?,
         };
 

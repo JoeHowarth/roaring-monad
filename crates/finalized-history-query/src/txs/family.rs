@@ -1,4 +1,3 @@
-use crate::config::Config;
 use crate::core::ids::TxId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
@@ -37,15 +36,13 @@ impl TxsFamily {
 
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
-        config: &Config,
         runtime: &Runtime<M, B>,
         state: &mut TxFamilyState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_tx_id = state.next_tx_id.get();
         let plan = plan_tx_ingest(block, from_next_tx_id)?;
-        let tx_count =
-            persist_tx_artifacts(config, &runtime.tables, block.block_num, &plan).await?;
+        let tx_count = persist_tx_artifacts(&runtime.tables, block.block_num, &plan).await?;
         let tx_count_u32 =
             u32::try_from(tx_count).map_err(|_| Error::Decode("tx count overflow"))?;
         let touched_pages = persist_stream_fragments(

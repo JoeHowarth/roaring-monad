@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
-use crate::config::Config;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
@@ -110,7 +109,6 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 }
 
 pub async fn persist_tx_artifacts<M: MetaStore, B: BlobStore>(
-    _config: &Config,
     tables: &Tables<M, B>,
     block_num: u64,
     plan: &TxIngestPlan,
@@ -132,7 +130,6 @@ mod tests {
     use alloy_rlp::{Encodable, Header};
     use futures::executor::block_on;
 
-    use crate::config::Config;
     use crate::core::ids::TxId;
     use crate::error::Error;
     use crate::family::FinalizedBlock;
@@ -218,7 +215,6 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             let tables = Tables::without_cache(meta.clone(), blob.clone());
-            let config = Config::default();
             let block = sample_block(
                 7,
                 vec![
@@ -228,7 +224,7 @@ mod tests {
             );
 
             let plan = plan_tx_ingest(&block, 0).expect("plan tx ingest");
-            let count = persist_tx_artifacts(&config, &tables, block.block_num, &plan)
+            let count = persist_tx_artifacts(&tables, block.block_num, &plan)
                 .await
                 .expect("persist tx artifacts");
 
@@ -312,11 +308,10 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             let tables = Tables::without_cache(meta.clone(), blob.clone());
-            let config = Config::default();
             let block = sample_block(7, Vec::new());
             let plan = plan_tx_ingest(&block, 0).expect("plan empty tx block");
 
-            let count = persist_tx_artifacts(&config, &tables, block.block_num, &plan)
+            let count = persist_tx_artifacts(&tables, block.block_num, &plan)
                 .await
                 .expect("persist empty tx block");
 

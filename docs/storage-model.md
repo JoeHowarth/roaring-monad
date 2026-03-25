@@ -138,8 +138,9 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 ## Block Headers
 
 The shared block query surface persists one full EVM header per block in the
-`block_header` table keyed by `<block_num>`. This is the authoritative block
-object for `query_blocks`, `get_block`, and `get_block_header_by`.
+`block_header` table keyed by `<block_num>`. `get_block_header_by` returns that
+header directly. `query_blocks` and `get_block` hydrate the public `Block`
+object from the shared header plus the block-keyed tx payloads.
 
 `block_record` remains separate and compact. It stores only shared block
 identity plus family primary windows used by indexed-family queries.

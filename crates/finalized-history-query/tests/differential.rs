@@ -230,12 +230,13 @@ async fn query_trace_range(
     page.items
         .into_iter()
         .map(|trace| {
+            let view = trace.call_frame();
             (
                 trace.block_num(),
                 trace.tx_idx(),
                 trace.trace_idx(),
-                *trace.from_addr().expect("from"),
-                trace.to_addr().expect("to").copied(),
+                *view.from_addr().expect("from"),
+                view.to_addr().expect("to").copied(),
             )
         })
         .collect()

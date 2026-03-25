@@ -1,4 +1,4 @@
-use crate::blocks::{Block, BlocksQueryEngine};
+use crate::blocks::{Block, BlocksQueryEngine, load_block};
 use crate::config::Config;
 use crate::core::header::{EvmBlockHeader, load_block_header};
 pub use crate::core::page::{QueryOrder, QueryPage, QueryPageMeta};
@@ -154,7 +154,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
 
     /// Resolves the finalized block window for a transactions request and
     /// executes the indexed query pipeline, returning a resumable page of
-    /// matching transactions once the tx family is implemented.
+    /// matching transactions.
     pub async fn query_transactions(
         &self,
         request: QueryTransactionsRequest,
@@ -199,7 +199,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
     }
 
     pub async fn get_block(&self, number: u64) -> Result<Option<Block>> {
-        load_block_header(&self.runtime.tables, number).await
+        load_block(&self.runtime.tables, number).await
     }
 
     pub async fn get_block_header_by(&self, number: u64) -> Result<Option<BlockHeader>> {

@@ -1,4 +1,3 @@
-use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
@@ -39,7 +38,6 @@ impl LogsFamily {
     /// and seals any directories or bitmap pages that became complete in the process.
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
-        _config: &Config,
         runtime: &Runtime<M, B>,
         state: &mut LogSequencingState,
         block: &FinalizedBlock,

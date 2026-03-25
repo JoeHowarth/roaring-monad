@@ -8,7 +8,6 @@ pub mod table_specs;
 pub mod types;
 pub mod view;
 
-use crate::config::Config;
 use crate::core::ids::TraceId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
@@ -56,7 +55,6 @@ impl TracesFamily {
     /// indexing state, and seals any directories or bitmap pages that closed.
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
-        _config: &Config,
         runtime: &Runtime<M, B>,
         state: &mut TraceSequencingState,
         block: &FinalizedBlock,

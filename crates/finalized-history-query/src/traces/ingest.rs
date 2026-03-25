@@ -367,10 +367,16 @@ mod tests {
 
             assert_eq!(first.tx_idx(), 0);
             assert_eq!(first.trace_idx(), 0);
-            assert_eq!(first.input().expect("first input"), &[1, 2, 3, 4, 5]);
+            assert_eq!(
+                first.call_frame().input().expect("first input"),
+                &[1, 2, 3, 4, 5]
+            );
             assert_eq!(second.tx_idx(), 1);
             assert_eq!(second.trace_idx(), 0);
-            assert_eq!(second.input().expect("second input"), &[9, 8, 7, 6, 5]);
+            assert_eq!(
+                second.call_frame().input().expect("second input"),
+                &[9, 8, 7, 6, 5]
+            );
         });
     }
 }

@@ -2,7 +2,7 @@ use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_cl
 use crate::query::engine::IndexedFilter;
 use crate::query::planner::{IndexedClause, build_indexed_clause, single_selector_clause};
 use crate::traces::types::{Address20, Selector4};
-use crate::traces::view::{CallFrameView, TraceRef};
+use crate::traces::view::CallFrameView;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TraceFilter {
@@ -94,48 +94,6 @@ fn is_call_type(typ: u8, flags: u64) -> bool {
 }
 
 pub fn exact_match_frame(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
-    let from = match trace.from_addr() {
-        Ok(from) => from,
-        Err(_) => return false,
-    };
-    if !clause_matches(from, &filter.from) {
-        return false;
-    }
-
-    let to = match trace.to_addr() {
-        Ok(to) => to,
-        Err(_) => return false,
-    };
-    if !optional_clause_matches(to.copied(), &filter.to) {
-        return false;
-    }
-
-    let selector = match trace.selector() {
-        Ok(selector) => selector,
-        Err(_) => return false,
-    };
-    if !optional_clause_matches(selector.copied(), &filter.selector) {
-        return false;
-    }
-
-    if let Some(expected) = filter.is_top_level {
-        match trace.depth() {
-            Ok(depth) if (depth == 0) == expected => {}
-            _ => return false,
-        }
-    }
-
-    if let Some(expected) = filter.has_value {
-        match trace.has_value() {
-            Ok(has_value) if has_value == expected => {}
-            _ => return false,
-        }
-    }
-
-    true
-}
-
-pub fn exact_match(trace: &TraceRef, filter: &TraceFilter) -> bool {
     let from = match trace.from_addr() {
         Ok(from) => from,
         Err(_) => return false,

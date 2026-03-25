@@ -175,7 +175,7 @@ fn ingest_and_query_traces_with_resume_and_post_filters() {
         assert!(!second.meta.has_more);
         assert_eq!(second.items[0].block_num(), 2);
         assert_eq!(
-            second.items[0].to_addr().expect("to").copied(),
+            second.items[0].call_frame().to_addr().expect("to").copied(),
             Some([8; 20])
         );
     });
@@ -289,8 +289,9 @@ fn query_traces_supports_compound_filters_and_blocks_without_traces() {
 
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].block_num(), 3);
-        assert_eq!(*page.items[0].from_addr().expect("from"), [7; 20]);
-        assert_eq!(page.items[0].to_addr().expect("to").copied(), Some([8; 20]));
+        let frame = page.items[0].call_frame();
+        assert_eq!(*frame.from_addr().expect("from"), [7; 20]);
+        assert_eq!(frame.to_addr().expect("to").copied(), Some([8; 20]));
     });
 }
 

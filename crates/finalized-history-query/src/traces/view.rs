@@ -96,62 +96,6 @@ impl TraceRef {
     pub fn call_frame(&self) -> CallFrameView<'_> {
         self.call_frame.view()
     }
-
-    pub fn typ(&self) -> Result<u8> {
-        self.call_frame().typ()
-    }
-
-    pub fn flags(&self) -> Result<u64> {
-        self.call_frame().flags()
-    }
-
-    pub fn from_addr(&self) -> Result<&Address20> {
-        self.call_frame().from_addr()
-    }
-
-    pub fn to_addr(&self) -> Result<Option<&Address20>> {
-        self.call_frame().to_addr()
-    }
-
-    pub fn value_bytes(&self) -> Result<&[u8]> {
-        self.call_frame().value_bytes()
-    }
-
-    pub fn gas(&self) -> Result<u64> {
-        self.call_frame().gas()
-    }
-
-    pub fn gas_used(&self) -> Result<u64> {
-        self.call_frame().gas_used()
-    }
-
-    pub fn input(&self) -> Result<&[u8]> {
-        self.call_frame().input()
-    }
-
-    pub fn output(&self) -> Result<&[u8]> {
-        self.call_frame().output()
-    }
-
-    pub fn status(&self) -> Result<u8> {
-        self.call_frame().status()
-    }
-
-    pub fn depth(&self) -> Result<u64> {
-        self.call_frame().depth()
-    }
-
-    pub fn selector(&self) -> Result<Option<&Selector4>> {
-        self.call_frame().selector()
-    }
-
-    pub fn has_value(&self) -> Result<bool> {
-        self.call_frame().has_value()
-    }
-
-    pub fn is_call_type(&self) -> Result<bool> {
-        self.call_frame().is_call_type()
-    }
 }
 
 impl std::fmt::Debug for TraceRef {

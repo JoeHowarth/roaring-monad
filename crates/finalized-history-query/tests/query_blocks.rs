@@ -259,6 +259,53 @@ fn get_block_header_by_returns_ingested_header() {
 }
 
 #[test]
+fn get_block_and_query_blocks_hydrate_block_transactions() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+        let txs = vec![
+            mk_ingest_tx(
+                0,
+                [1; 32],
+                [2; 20],
+                encode_legacy_tx(Some([3; 20]), &[0xaa, 0xbb, 0xcc, 0xdd, 1]),
+            ),
+            mk_ingest_tx(
+                1,
+                [4; 32],
+                [5; 20],
+                encode_legacy_tx(None, &[0x11, 0x22, 0x33]),
+            ),
+        ];
+        svc.ingest_finalized_block(mk_tx_block(1, [0; 32], txs))
+            .await
+            .expect("ingest tx block");
+
+        let block = svc.get_block(1).await.expect("get block").expect("block");
+        assert_eq!(block.number, 1);
+        assert_eq!(block.txs.len(), 2);
+        assert_eq!(block.txs[0].tx_idx(), 0);
+        assert_eq!(block.txs[1].tx_idx(), 1);
+
+        let page = query_block_page(&svc, 1, 1, 1).await.expect("query blocks");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].txs.len(), 2);
+        assert_eq!(
+            page.items[0].txs[0].tx_hash().expect("first hash"),
+            &[1; 32]
+        );
+        assert_eq!(
+            page.items[0].txs[1].tx_hash().expect("second hash"),
+            &[4; 32]
+        );
+    });
+}
+
+#[test]
 fn query_blocks_rejects_zero_limit_even_when_range_is_empty() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
