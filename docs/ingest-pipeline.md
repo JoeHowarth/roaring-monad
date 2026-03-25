@@ -47,7 +47,7 @@ Within the logs family step, artifact writes remain:
 1. **Log blob** — `block_log_blob` blob table, key `<block_num>`: concatenated encoded log bytes
 2. **Block log header** — `block_log_header` table, key `<block_num>`: byte offset table for local ordinals
 3. **Directory fragments** — one `log_dir_by_block` row per covered sub-bucket, keyed by partition `<sub_bucket_start>` and clustering `<block_num>`
-4. **Stream fragments** — `bitmap_by_block` rows per stream per page touched
+4. **Stream fragments** — `log_bitmap_by_block` rows per stream per page touched
 
 Within the txs family step, artifact writes are:
 
@@ -94,10 +94,10 @@ See [storage-model.md](storage-model.md) for directory layout details.
 
 When `next_log_id`, `next_tx_id`, or `next_trace_id` crosses a stream page boundary (see [storage-model.md](storage-model.md) for page span), the sealed page's fragments are compacted:
 
-1. load all `bitmap_by_block` entries for the page
+1. load all `log_bitmap_by_block` entries for the page
 2. merge the roaring bitmaps
-3. write compacted `bitmap_page_meta` and `bitmap_page_blob`
-4. delete the `open_bitmap_page` marker for the sealed page
+3. write compacted `log_bitmap_page_meta` and `log_bitmap_page_blob`
+4. delete the `log_open_bitmap_page` marker for the sealed page
 
 The txs and traces families follow the same pattern with their own family-owned bitmap tables and open-page markers.
 
@@ -105,7 +105,7 @@ The generic page-grouping, bitmap merge, and compacted-page write flow lives in 
 
 ## Open-Page Markers
 
-`open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` serve two purposes:
+`log_open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` serve two purposes:
 
 ### During ingest
 

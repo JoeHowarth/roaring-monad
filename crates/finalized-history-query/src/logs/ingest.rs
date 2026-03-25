@@ -2,16 +2,17 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
-use crate::Log;
 use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::bitmap_pages;
+use crate::ingest::indexed_family::primary_id_at_offset;
 use crate::kernel::codec::StorageCodec;
 use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::logs::codec::validate_log;
 use crate::logs::types::BlockLogHeader;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -21,7 +22,7 @@ pub fn collect_stream_appends(
     first_log_id: u64,
 ) -> BTreeMap<String, Vec<u32>> {
     group_stream_values(block.logs.iter().enumerate().flat_map(|(index, log)| {
-        let global_log_id = LogId::new(first_log_id + index as u64);
+        let global_log_id = LogId::new(primary_id_at_offset(first_log_id, index));
         let shard = global_log_id.shard().get();
         let local = global_log_id.local().get();
 
@@ -66,13 +67,14 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     _config: &Config,
     tables: &Tables<M, B>,
-    block_num: u64,
-    logs: &[Log],
+    block: &FinalizedBlock,
     _first_log_id: u64,
 ) -> Result<()> {
+    validate_logs(block)?;
+
     let mut out = Vec::<u8>::new();
     let mut offsets = BucketedOffsets::new();
-    for log in logs {
+    for log in &block.logs {
         offsets.push(
             u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
         )?;
@@ -84,8 +86,46 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     let header = BlockLogHeader { offsets };
     tables
         .block_log_blobs
-        .put_block(block_num, block_blob, &header)
+        .put_block(block.block_num, block_blob, &header)
         .await
+}
+
+fn validate_logs(block: &FinalizedBlock) -> Result<()> {
+    let mut previous_tx_idx = None;
+
+    for (index, log) in block.logs.iter().enumerate() {
+        if !validate_log(log) {
+            return Err(Error::InvalidParams("log topics exceed 4"));
+        }
+        if log.block_num != block.block_num {
+            return Err(Error::InvalidParams(
+                "log block_num must match enclosing block",
+            ));
+        }
+        if log.block_hash != block.block_hash {
+            return Err(Error::InvalidParams(
+                "log block_hash must match enclosing block",
+            ));
+        }
+
+        let expected_log_idx =
+            u32::try_from(index).map_err(|_| Error::Decode("log_idx overflow"))?;
+        if log.log_idx != expected_log_idx {
+            return Err(Error::InvalidParams(
+                "log_idx must match log position within block",
+            ));
+        }
+        if let Some(previous_tx_idx) = previous_tx_idx
+            && log.tx_idx < previous_tx_idx
+        {
+            return Err(Error::InvalidParams(
+                "log tx_idx must be non-decreasing within block",
+            ));
+        }
+        previous_tx_idx = Some(log.tx_idx);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -93,13 +133,15 @@ mod tests {
     use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
+    use crate::error::Error;
     use crate::family::FinalizedBlock;
     use crate::kernel::codec::StorageCodec;
     use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
     use crate::logs::codec::validate_log;
     use crate::logs::table_specs::{
-        BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, BlockLogBlobSpec,
-        BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
+        BlobTableSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogBitmapByBlockSpec,
+        LogBitmapPageBlobSpec, LogBitmapPageMetaSpec, LogDirBucketSpec, LogDirByBlockSpec,
+        LogDirSubBucketSpec,
     };
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
@@ -127,9 +169,13 @@ mod tests {
         }
     }
 
-    fn sample_block(block_num: u64, seed: u8, logs: Vec<Log>) -> FinalizedBlock {
+    fn sample_block(block_num: u64, seed: u8, mut logs: Vec<Log>) -> FinalizedBlock {
         let block_hash = [seed; 32];
         let parent_hash = [seed.wrapping_add(1); 32];
+        for log in &mut logs {
+            log.block_num = block_num;
+            log.block_hash = block_hash;
+        }
         FinalizedBlock {
             block_num,
             block_hash,
@@ -153,8 +199,9 @@ mod tests {
             let tables = Tables::without_cache(meta.clone(), blob.clone());
             let config = Config::default();
             let logs = vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 1, 2)];
+            let block = sample_block(7, 9, logs.clone());
 
-            persist_log_artifacts(&config, &tables, 7, &logs, 11)
+            persist_log_artifacts(&config, &tables, &block, 11)
                 .await
                 .expect("persist artifacts");
 
@@ -177,9 +224,157 @@ mod tests {
             let first_end = header.offsets.get(1).expect("first end") as usize;
             assert_eq!(
                 Log::decode(&block_blob[first_start..first_end]).expect("decode first"),
-                logs[0]
+                block.logs[0]
             );
-            assert!(validate_log(&logs[0]));
+            assert!(validate_log(&block.logs[0]));
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_rejects_more_than_four_topics() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
+            let config = Config::default();
+            let mut block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1)]);
+            block.logs[0].topics = vec![[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
+
+            let err = persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect_err("invalid log should fail");
+
+            assert!(matches!(err, Error::InvalidParams("log topics exceed 4")));
+            assert!(
+                blob.get_blob(BlockLogBlobSpec::TABLE, &BlockLogBlobSpec::key(7))
+                    .await
+                    .expect("read block blob")
+                    .is_none()
+            );
+            assert!(
+                meta.get(BlockLogHeaderSpec::TABLE, &BlockLogHeaderSpec::key(7))
+                    .await
+                    .expect("read block header")
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_rejects_block_num_mismatch() {
+        block_on(async {
+            let tables =
+                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
+            let config = Config::default();
+            let mut block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1)]);
+            block.logs[0].block_num = 8;
+
+            let err = persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect_err("invalid log should fail");
+
+            assert!(matches!(
+                err,
+                Error::InvalidParams("log block_num must match enclosing block")
+            ));
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_rejects_non_canonical_log_order() {
+        block_on(async {
+            let tables =
+                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
+            let config = Config::default();
+            let block = sample_block(7, 9, vec![sample_log(7, 1, 0, 1), sample_log(7, 0, 1, 2)]);
+
+            let err = persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect_err("invalid log order should fail");
+
+            assert!(matches!(
+                err,
+                Error::InvalidParams("log tx_idx must be non-decreasing within block")
+            ));
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_rejects_non_canonical_log_idx() {
+        block_on(async {
+            let tables =
+                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
+            let config = Config::default();
+            let block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 2, 2)]);
+
+            let err = persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect_err("invalid log index should fail");
+
+            assert!(matches!(
+                err,
+                Error::InvalidParams("log_idx must match log position within block")
+            ));
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_rejects_block_hash_mismatch() {
+        block_on(async {
+            let tables =
+                Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
+            let config = Config::default();
+            let mut invalid = sample_log(7, 0, 0, 1);
+            invalid.block_hash = [0xaa; 32];
+            let block = FinalizedBlock {
+                block_num: 7,
+                block_hash: [9; 32],
+                parent_hash: [10; 32],
+                header: crate::core::header::EvmBlockHeader::minimal(7, [9; 32], [10; 32]),
+                logs: vec![invalid],
+                txs: Vec::new(),
+                trace_rlp: Vec::new(),
+            };
+
+            let err = persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect_err("invalid block hash should fail");
+
+            assert!(matches!(
+                err,
+                Error::InvalidParams("log block_hash must match enclosing block")
+            ));
+        });
+    }
+
+    #[test]
+    fn persist_log_artifacts_persists_empty_block_blob_and_header() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
+            let config = Config::default();
+            let block = sample_block(7, 9, Vec::new());
+
+            persist_log_artifacts(&config, &tables, &block, 11)
+                .await
+                .expect("persist empty artifacts");
+
+            let header = meta
+                .get(BlockLogHeaderSpec::TABLE, &BlockLogHeaderSpec::key(7))
+                .await
+                .expect("read block header")
+                .expect("block header present");
+            let header = BlockLogHeader::decode(&header.value).expect("decode header");
+            let block_blob = blob
+                .get_blob(BlockLogBlobSpec::TABLE, &BlockLogBlobSpec::key(7))
+                .await
+                .expect("read block blob")
+                .expect("block blob present");
+
+            assert_eq!(header.log_count(), 0);
+            assert_eq!(header.offsets.get(0), Some(0));
+            assert!(block_blob.is_empty());
         });
     }
 
@@ -306,25 +501,25 @@ mod tests {
             );
             let fragment = meta
                 .scan_get(
-                    BitmapByBlockSpec::TABLE,
-                    &BitmapByBlockSpec::partition(&sid, first_page),
-                    &BitmapByBlockSpec::clustering(block.block_num),
+                    LogBitmapByBlockSpec::TABLE,
+                    &LogBitmapByBlockSpec::partition(&sid, first_page),
+                    &LogBitmapByBlockSpec::clustering(block.block_num),
                 )
                 .await
                 .expect("read stream fragment")
                 .expect("stream fragment");
             let page_meta = meta
                 .get(
-                    BitmapPageMetaSpec::TABLE,
-                    &BitmapPageMetaSpec::key(&sid, first_page),
+                    LogBitmapPageMetaSpec::TABLE,
+                    &LogBitmapPageMetaSpec::key(&sid, first_page),
                 )
                 .await
                 .expect("read stream page meta")
                 .expect("stream page meta");
             let page_blob = blob
                 .get_blob(
-                    BitmapPageBlobSpec::TABLE,
-                    &BitmapPageBlobSpec::key(&sid, first_page),
+                    LogBitmapPageBlobSpec::TABLE,
+                    &LogBitmapPageBlobSpec::key(&sid, first_page),
                 )
                 .await
                 .expect("read stream page blob")

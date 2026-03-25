@@ -52,8 +52,8 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 | `BlockLogBlobs`          | Per-log byte slices derived from `block_log_blob` blob-table range reads keyed by `<block_num>` |
 | `BlockTxBlobs`           | Per-tx envelope byte slices derived from `block_tx_blob` blob-table range reads keyed by `<block_num>` |
 | `BlockTraceBlobs`        | Per-trace frame byte slices derived from `block_trace_blob` blob-table range reads keyed by `<block_num>` |
-| `BitmapPageMeta`         | `bitmap_page_meta` table, key `<stream_id>/<page_start>` |
-| `BitmapPageBlobs`        | `bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
+| `BitmapPageMeta`         | `log_bitmap_page_meta` table, key `<stream_id>/<page_start>` |
+| `BitmapPageBlobs`        | `log_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
 
 
 A `max_bytes = 0` budget disables that table's cache entirely. The typed table reader still works, but it reads directly from the backing store with no cache lookup/insert overhead. See [storage-model.md](storage-model.md) for the artifact key layout.
@@ -65,7 +65,6 @@ Internal query execution uses zero-copy views to avoid allocation on the hot pat
 - `LogRef` — reference view over cached log payload bytes
 - `TxRef` — reference view over cached tx envelope bytes
 - `TraceRef` — reference view over cached trace frame bytes
-- `BlockLogHeaderRef` — reference view over cached block header bytes
 - `DirBucketRef` — reference view over cached directory bucket bytes
 
 The public query boundary is also zero-copy for indexed families:
@@ -80,7 +79,7 @@ The public query boundary is also zero-copy for indexed families:
 
 Mutable, correctness-critical, tiny. Not part of the immutable artifact cache. Loaded directly on each query to determine the visible finalized head.
 
-### `open_bitmap_page`
+### `log_open_bitmap_page`
 
 Write/recovery inventory only. The query path does not read these rows.
 

@@ -17,7 +17,7 @@ use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::ScannableTableSpec;
 use finalized_history_query::logs::table_specs::{
-    BitmapByBlockSpec, BlobTableSpec, BlockLogBlobSpec, LogDirByBlockSpec,
+    BlobTableSpec, BlockLogBlobSpec, LogBitmapByBlockSpec, LogDirByBlockSpec,
 };
 use finalized_history_query::runtime::Runtime;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -152,9 +152,9 @@ fn ingest_publishes_publication_state_and_immutable_frontier_artifacts() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    BitmapByBlockSpec::TABLE,
-                    &BitmapByBlockSpec::partition(&sid, page_start),
-                    &BitmapByBlockSpec::clustering(1),
+                    LogBitmapByBlockSpec::TABLE,
+                    &LogBitmapByBlockSpec::partition(&sid, page_start),
+                    &LogBitmapByBlockSpec::clustering(1),
                 )
                 .await
                 .expect("stream fragment get")

@@ -15,8 +15,8 @@ use finalized_history_query::kernel::table_specs::{
     PointTableSpec, ScannableTableSpec, page_stream_key, stream_page_key, u64_key,
 };
 use finalized_history_query::logs::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlobTableSpec, LogDirByBlockSpec,
-    OpenBitmapPageSpec,
+    BlobTableSpec, LogBitmapByBlockSpec, LogBitmapPageBlobSpec, LogBitmapPageMetaSpec,
+    LogDirByBlockSpec, LogOpenBitmapPageSpec,
 };
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
@@ -144,8 +144,8 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.meta_store()
                 .get(
-                    BitmapPageMetaSpec::TABLE,
-                    &BitmapPageMetaSpec::key(&sid, page_start),
+                    LogBitmapPageMetaSpec::TABLE,
+                    &LogBitmapPageMetaSpec::key(&sid, page_start),
                 )
                 .await
                 .expect("stream page meta")
@@ -154,8 +154,8 @@ fn sealed_sub_bucket_and_page_compaction_are_written_when_boundaries_close() {
         assert!(
             svc.blob_store()
                 .get_blob(
-                    BitmapPageBlobSpec::TABLE,
-                    &BitmapPageBlobSpec::key(&sid, page_start)
+                    LogBitmapPageBlobSpec::TABLE,
+                    &LogBitmapPageBlobSpec::key(&sid, page_start)
                 )
                 .await
                 .expect("stream page blob")
@@ -257,7 +257,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         let mut bitmap = RoaringBitmap::new();
         bitmap.insert(STREAM_PAGE_LOCAL_ID_SPAN - 1);
         meta.scan_put(
-            BitmapByBlockSpec::TABLE,
+            LogBitmapByBlockSpec::TABLE,
             &stream_page_key(&sid, page_start),
             &u64_key(1),
             encode_bitmap_blob(&BitmapBlob {
@@ -272,7 +272,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         .await
         .expect("seed bitmap fragment");
         meta.scan_put(
-            OpenBitmapPageSpec::TABLE,
+            LogOpenBitmapPageSpec::TABLE,
             &u64_key(0),
             &page_stream_key(page_start, &sid),
             Bytes::new(),
@@ -289,8 +289,8 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         assert!(
             svc.meta_store()
                 .get(
-                    BitmapPageMetaSpec::TABLE,
-                    &BitmapPageMetaSpec::key(&sid, page_start),
+                    LogBitmapPageMetaSpec::TABLE,
+                    &LogBitmapPageMetaSpec::key(&sid, page_start),
                 )
                 .await
                 .expect("stream page meta after repair")
@@ -299,7 +299,7 @@ fn direct_ingest_repairs_stale_sealed_open_page_markers_before_writing() {
         assert!(
             svc.meta_store()
                 .scan_get(
-                    OpenBitmapPageSpec::TABLE,
+                    LogOpenBitmapPageSpec::TABLE,
                     &u64_key(0),
                     &page_stream_key(page_start, &sid),
                 )

@@ -3,9 +3,9 @@ use crate::core::state::BlockRecordSpec;
 use crate::kernel::table_specs::BlobTableSpec;
 use crate::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
 use crate::logs::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
-    BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
-    OpenBitmapPageSpec,
+    BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogBitmapByBlockSpec,
+    LogBitmapPageBlobSpec, LogBitmapPageMetaSpec, LogDirBucketSpec, LogDirByBlockSpec,
+    LogDirSubBucketSpec, LogOpenBitmapPageSpec,
 };
 use crate::store::publication::PUBLICATION_STATE_TABLE;
 use crate::store::traits::{BlobTableId, ScannableTableId, TableId};
@@ -27,7 +27,7 @@ pub const RUNTIME_POINT_TABLES: [TableId; 16] = [
     BlockHashIndexSpec::TABLE,
     LogDirBucketSpec::TABLE,
     LogDirSubBucketSpec::TABLE,
-    BitmapPageMetaSpec::TABLE,
+    LogBitmapPageMetaSpec::TABLE,
     BlockTxHeaderSpec::TABLE,
     TxHashIndexSpec::TABLE,
     TxDirBucketSpec::TABLE,
@@ -61,8 +61,8 @@ pub const REQUIRED_POINT_TABLES: [TableId; 17] = [
 
 pub const RUNTIME_SCANNABLE_TABLES: [ScannableTableId; 9] = [
     LogDirByBlockSpec::TABLE,
-    BitmapByBlockSpec::TABLE,
-    OpenBitmapPageSpec::TABLE,
+    LogBitmapByBlockSpec::TABLE,
+    LogOpenBitmapPageSpec::TABLE,
     TxDirByBlockSpec::TABLE,
     TxBitmapByBlockSpec::TABLE,
     TxOpenBitmapPageSpec::TABLE,
@@ -85,7 +85,7 @@ pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 9] = [
 
 pub const RUNTIME_BLOB_TABLES: [BlobTableId; 6] = [
     BlockLogBlobSpec::TABLE,
-    BitmapPageBlobSpec::TABLE,
+    LogBitmapPageBlobSpec::TABLE,
     BlockTxBlobSpec::TABLE,
     TxBitmapPageBlobSpec::TABLE,
     BlockTraceBlobSpec::TABLE,

@@ -6,6 +6,7 @@ use crate::core::ids::TraceId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
 use crate::ingest::bitmap_pages;
+use crate::ingest::indexed_family::primary_id_at_offset;
 use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -62,7 +63,7 @@ pub fn plan_trace_ingest(trace_rlp: &[u8], first_trace_id: u64) -> Result<TraceI
         )?;
         flat_blob.extend_from_slice(iterated.view.frame_bytes);
 
-        let global_trace_id = TraceId::new(first_trace_id + index as u64);
+        let global_trace_id = TraceId::new(primary_id_at_offset(first_trace_id, index));
         let shard = global_trace_id.shard().get();
         let local = global_trace_id.local().get();
         let view = iterated.view;

@@ -17,7 +17,7 @@ use finalized_history_query::family::Families;
 use finalized_history_query::kernel::codec::StorageCodec;
 use finalized_history_query::kernel::sharded_streams::page_start_local;
 use finalized_history_query::kernel::table_specs::{PointTableSpec, ScannableTableSpec};
-use finalized_history_query::logs::table_specs::{BitmapByBlockSpec, BitmapPageMetaSpec};
+use finalized_history_query::logs::table_specs::{LogBitmapByBlockSpec, LogBitmapPageMetaSpec};
 use finalized_history_query::logs::types::Log;
 use finalized_history_query::status::service_status;
 use finalized_history_query::store::blob::InMemoryBlobStore;
@@ -521,7 +521,7 @@ fn ingest_retry_survives_faults_at_immutable_publication_boundaries() {
             (
                 "bitmap_by_block_put",
                 FailurePhase::ArtifactMetaWrite,
-                b"bitmap_by_block/".to_vec(),
+                b"log_bitmap_by_block/".to_vec(),
             ),
             (
                 "publication_head_advance_cas",
@@ -594,9 +594,12 @@ fn failed_publication_cas_keeps_partial_artifacts_invisible_until_retry() {
         );
         assert!(
             meta.scan_get(
-                BitmapByBlockSpec::TABLE,
-                &BitmapByBlockSpec::partition(&sid, page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN)),
-                &BitmapByBlockSpec::clustering(1),
+                LogBitmapByBlockSpec::TABLE,
+                &LogBitmapByBlockSpec::partition(
+                    &sid,
+                    page_start_local(0, STREAM_PAGE_LOCAL_ID_SPAN),
+                ),
+                &LogBitmapByBlockSpec::clustering(1),
             )
             .await
             .expect("bitmap fragment after failed publish")
@@ -794,8 +797,8 @@ fn takeover_without_cleanup_overwrites_different_retry_payload_for_same_block() 
         assert_eq!(status.head_state.indexed_finalized_head, 2);
         assert!(
             meta.get(
-                BitmapPageMetaSpec::TABLE,
-                &BitmapPageMetaSpec::key(&sid, page_start)
+                LogBitmapPageMetaSpec::TABLE,
+                &LogBitmapPageMetaSpec::key(&sid, page_start)
             )
             .await
             .expect("stream page meta after retry")

@@ -7,6 +7,10 @@ use crate::kernel::sharded_streams::parse_stream_shard;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{OpenBitmapPageTable, PrimaryDirTables, StreamTables};
 
+pub fn primary_id_at_offset(first_primary_id: u64, offset: usize) -> u64 {
+    first_primary_id + offset as u64
+}
+
 pub async fn finalize_indexed_family_ingest<M, B, T>(
     dir: &PrimaryDirTables<M>,
     streams: &StreamTables<M, B, T>,

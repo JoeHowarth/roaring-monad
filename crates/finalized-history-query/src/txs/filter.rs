@@ -78,3 +78,103 @@ pub fn exact_match(tx: &TxRef, filter: &TxFilter) -> bool {
 
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy_rlp::{Encodable, Header};
+    use bytes::Bytes;
+
+    use crate::core::clause::Clause;
+
+    use super::{TxFilter, exact_match};
+    use crate::txs::view::TxRef;
+
+    fn encode_field<T: Encodable>(value: T) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_bytes(value: &[u8]) -> Vec<u8> {
+        encode_field(value)
+    }
+
+    fn encode_tx_list(fields: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut out = Vec::new();
+        Header {
+            list: true,
+            payload_length: fields.iter().map(Vec::len).sum(),
+        }
+        .encode(&mut out);
+        for field in fields {
+            out.extend_from_slice(&field);
+        }
+        out
+    }
+
+    fn encode_envelope(sender: [u8; 20], signed_tx_bytes: Vec<u8>) -> TxRef {
+        let envelope = encode_tx_list(vec![
+            encode_bytes(&[1u8; 32]),
+            encode_bytes(&sender),
+            encode_bytes(&signed_tx_bytes),
+        ]);
+        TxRef::new(7, [9u8; 32], 0, Bytes::from(envelope)).expect("valid tx ref")
+    }
+
+    fn encode_legacy_tx(to: Option<[u8; 20]>, input: &[u8]) -> Vec<u8> {
+        encode_tx_list(vec![
+            encode_field(1u64),
+            encode_field(2u64),
+            encode_field(21_000u64),
+            encode_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+            encode_field(3u64),
+            encode_bytes(input),
+            encode_field(27u8),
+            encode_field(1u8),
+            encode_field(2u8),
+        ])
+    }
+
+    #[test]
+    fn exact_match_accepts_create_tx_only_when_to_and_selector_filters_are_absent() {
+        let tx = encode_envelope([2u8; 20], encode_legacy_tx(None, &[0xaa, 0xbb, 0xcc, 0xdd]));
+
+        assert!(exact_match(
+            &tx,
+            &TxFilter {
+                from: Some(Clause::One([2u8; 20])),
+                ..TxFilter::default()
+            }
+        ));
+        assert!(!exact_match(
+            &tx,
+            &TxFilter {
+                to: Some(Clause::One([3u8; 20])),
+                ..TxFilter::default()
+            }
+        ));
+        assert!(!exact_match(
+            &tx,
+            &TxFilter {
+                selector: Some(Clause::One([0xaa, 0xbb, 0xcc, 0xdd])),
+                ..TxFilter::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn exact_match_rejects_tx_without_selector_when_selector_is_required() {
+        let tx = encode_envelope(
+            [2u8; 20],
+            encode_legacy_tx(Some([3u8; 20]), &[0xaa, 0xbb, 0xcc]),
+        );
+
+        assert!(!exact_match(
+            &tx,
+            &TxFilter {
+                selector: Some(Clause::One([0xaa, 0xbb, 0xcc, 0xdd])),
+                ..TxFilter::default()
+            }
+        ));
+    }
+}

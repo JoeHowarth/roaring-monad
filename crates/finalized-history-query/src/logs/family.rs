@@ -43,14 +43,7 @@ impl LogsFamily {
     ) -> Result<usize> {
         let from_next_log_id = state.next_log_id.get();
 
-        persist_log_artifacts(
-            config,
-            &runtime.tables,
-            block.block_num,
-            &block.logs,
-            from_next_log_id,
-        )
-        .await?;
+        persist_log_artifacts(config, &runtime.tables, block, from_next_log_id).await?;
 
         let touched_pages =
             persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;

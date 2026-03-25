@@ -18,8 +18,9 @@ use crate::kernel::table_specs::u64_key;
 use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
 use crate::logs::log_ref::LogRef;
 use crate::logs::table_specs::{
-    BitmapByBlockSpec, BitmapPageBlobSpec, BitmapPageMetaSpec, BlockHashIndexSpec,
-    BlockLogBlobSpec, BlockLogHeaderSpec, LogDirBucketSpec, LogDirByBlockSpec, LogDirSubBucketSpec,
+    BlockHashIndexSpec, BlockLogBlobSpec, BlockLogHeaderSpec, LogBitmapByBlockSpec,
+    LogBitmapPageBlobSpec, LogBitmapPageMetaSpec, LogDirBucketSpec, LogDirByBlockSpec,
+    LogDirSubBucketSpec,
 };
 use crate::store::traits::{BlobStore, BlobTable, KvTable, MetaStore, ScannableKvTable};
 use crate::streams::StreamBitmapMeta;
@@ -186,19 +187,19 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             log_streams: StreamTables {
                 fragments: StreamFragmentsTable::new(
-                    meta_store.scannable_table(BitmapByBlockSpec::TABLE),
-                    BitmapByBlockSpec::partition,
-                    BitmapByBlockSpec::clustering,
+                    meta_store.scannable_table(LogBitmapByBlockSpec::TABLE),
+                    LogBitmapByBlockSpec::partition,
+                    LogBitmapByBlockSpec::clustering,
                 ),
                 page_meta: StreamPageMetaTable::new(
-                    meta_store.table(BitmapPageMetaSpec::TABLE),
+                    meta_store.table(LogBitmapPageMetaSpec::TABLE),
                     cache_for(config.bitmap_page_meta.max_bytes),
-                    BitmapPageMetaSpec::key,
+                    LogBitmapPageMetaSpec::key,
                 ),
                 page_blobs: StreamPageBlobTable::new(
-                    blob_store.table(BitmapPageBlobSpec::TABLE),
+                    blob_store.table(LogBitmapPageBlobSpec::TABLE),
                     cache_for(config.bitmap_page_blobs.max_bytes),
-                    BitmapPageBlobSpec::key,
+                    LogBitmapPageBlobSpec::key,
                 ),
             },
             tx_streams: StreamTables {
@@ -256,7 +257,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
             },
             log_open_bitmap_pages: OpenBitmapPageTable::new(
-                meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
+                meta_store.scannable_table(crate::logs::table_specs::LogOpenBitmapPageSpec::TABLE),
             ),
             tx_open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store.scannable_table(TxOpenBitmapPageSpec::TABLE),
@@ -936,11 +937,9 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
         block_blob: Bytes,
         header: &BlockTxHeader,
     ) -> Result<()> {
-        if !block_blob.is_empty() {
-            self.blob_table
-                .put(&BlockTxBlobSpec::key(block_num), block_blob.clone())
-                .await?;
-        }
+        self.blob_table
+            .put(&BlockTxBlobSpec::key(block_num), block_blob.clone())
+            .await?;
         seed_point_payload_cache(
             &self.cache,
             b"point_tx_payload/",

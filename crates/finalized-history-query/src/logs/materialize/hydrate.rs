@@ -28,23 +28,6 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
         }))
     }
 
-    async fn load_by_id(&mut self, id: Self::Id) -> Result<Option<Self::Item>> {
-        let Some(location) = self.resolve_id(id).await? else {
-            return Ok(None);
-        };
-        Ok(self
-            .tables
-            .block_log_blobs
-            .load_contiguous_run(
-                location.block_num,
-                location.local_ordinal,
-                location.local_ordinal,
-            )
-            .await?
-            .into_iter()
-            .next())
-    }
-
     async fn load_run(
         &mut self,
         run: &[(Self::Id, ResolvedPrimaryLocation)],

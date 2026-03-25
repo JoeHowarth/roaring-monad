@@ -141,60 +141,6 @@ impl PartialEq for LogRef {
 
 impl Eq for LogRef {}
 
-/// Zero-copy view over an encoded block log header.
-///
-/// Wire layout:
-///   version: u8 (must be 1)
-///   count:   u32 BE
-///   offsets: count * u32 BE
-#[derive(Clone)]
-pub struct BlockLogHeaderRef {
-    buf: Bytes,
-    count: u32,
-}
-
-impl BlockLogHeaderRef {
-    pub fn new(buf: Bytes) -> Result<Self> {
-        if buf.len() < 1 + 4 + 4 {
-            return Err(Error::Decode("block log header too short"));
-        }
-        if buf[0] != 1 {
-            return Err(Error::Decode("unsupported block log header version"));
-        }
-        let count = u32::from_be_bytes(
-            buf[1..5]
-                .try_into()
-                .map_err(|_| Error::Decode("block log header count"))?,
-        );
-        if count < 1 {
-            return Err(Error::Decode("block log header missing sentinel"));
-        }
-        let expected_len = 1 + 4 + (count as usize) * 4;
-        if buf.len() != expected_len {
-            return Err(Error::Decode("invalid block log header length"));
-        }
-        Ok(Self { buf, count })
-    }
-
-    pub fn count(&self) -> usize {
-        self.count as usize
-    }
-
-    pub fn offset(&self, i: usize) -> u32 {
-        assert!(i < self.count as usize, "offset index out of bounds");
-        let pos = 5 + i * 4;
-        u32::from_be_bytes(self.buf[pos..pos + 4].try_into().unwrap())
-    }
-}
-
-impl std::fmt::Debug for BlockLogHeaderRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlockLogHeaderRef")
-            .field("count", &self.count)
-            .finish()
-    }
-}
-
 /// Zero-copy view over an encoded log directory bucket.
 ///
 /// Wire layout:

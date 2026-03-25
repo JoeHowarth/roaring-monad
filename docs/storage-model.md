@@ -20,7 +20,7 @@ All read-path data artifacts are treated as immutable once published. The
 only shared mutable state is:
 
 - `publication_state` table entry `state` — ownership session, lease validity, indexed finalized head
-- `open_bitmap_page`, `tx_open_bitmap_page`, and `trace_open_bitmap_page` table rows — write/recovery inventory markers
+- `log_open_bitmap_page`, `tx_open_bitmap_page`, and `trace_open_bitmap_page` table rows — write/recovery inventory markers
 
 This means cached artifacts are safe to reuse indefinitely until eviction, with no invalidation required. See [caching.md](caching.md) for cache design details.
 
@@ -34,7 +34,7 @@ The artifact write order for a block preserves shared visibility boundaries:
 2. shared full block header (`block_header`)
 3. family payload blobs and headers (`block_log_blob` / `block_log_header`, `block_tx_blob` / `block_tx_header`, `block_trace_blob` / `block_trace_header`)
 4. family directory fragments (`log_dir_by_block`, `tx_dir_by_block`, `trace_dir_by_block`)
-5. family stream fragments (`bitmap_by_block`, `tx_bitmap_by_block`, `trace_bitmap_by_block`)
+5. family stream fragments (`log_bitmap_by_block`, `tx_bitmap_by_block`, `trace_bitmap_by_block`)
 6. family compaction (directory summaries, stream pages)
 7. shared block metadata (`block_record`)
 8. head advance via CAS on `publication_state`
@@ -122,15 +122,15 @@ A stream ID encodes the index kind, the indexed value, and the shard:
 
 | Tier | Storage layout | Scope | Written by |
 |------|----------------|-------|------------|
-| By-block | `bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
-| Page meta | `bitmap_page_meta` table, key `<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
-| Page blob | `bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
+| By-block | `log_bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` | One block's bitmap contribution to one shard-local page | Ingest |
+| Page meta | `log_bitmap_page_meta` table, key `<stream_id>/<page_start_local>` | Compacted page bitmap meta for one shard-local page | Compaction |
+| Page blob | `log_bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` | Compacted roaring bitmap for one shard-local page | Compaction |
 
 Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 
 ### Open-Page Markers
 
-`open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
+`log_open_bitmap_page` rows with partition `<shard>` and clustering `<page_start_local>/<stream_id>` track which stream pages have active (unsealed) fragments. `page_start_local` is the aligned start of the 4,096-local-ID page within that shard. They are used during:
 
 - compaction: to discover which pages need sealing when `next_log_id` crosses a page boundary
 - ownership-transition recovery: to clean up stale markers left by interrupted ingest

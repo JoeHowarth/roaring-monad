@@ -66,21 +66,21 @@ impl LogDirByBlockSpec {
     }
 }
 
-pub struct BitmapPageMetaSpec;
-impl PointTableSpec for BitmapPageMetaSpec {
-    const TABLE: TableId = TableId::new("bitmap_page_meta");
+pub struct LogBitmapPageMetaSpec;
+impl PointTableSpec for LogBitmapPageMetaSpec {
+    const TABLE: TableId = TableId::new("log_bitmap_page_meta");
 }
-impl BitmapPageMetaSpec {
+impl LogBitmapPageMetaSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         stream_page_key(stream_id, page_start_local)
     }
 }
 
-pub struct BitmapByBlockSpec;
-impl ScannableTableSpec for BitmapByBlockSpec {
-    const TABLE: ScannableTableId = ScannableTableId::new("bitmap_by_block");
+pub struct LogBitmapByBlockSpec;
+impl ScannableTableSpec for LogBitmapByBlockSpec {
+    const TABLE: ScannableTableId = ScannableTableId::new("log_bitmap_by_block");
 }
-impl BitmapByBlockSpec {
+impl LogBitmapByBlockSpec {
     pub fn partition(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         stream_page_key(stream_id, page_start_local)
     }
@@ -90,9 +90,9 @@ impl BitmapByBlockSpec {
     }
 }
 
-pub struct OpenBitmapPageSpec;
-impl ScannableTableSpec for OpenBitmapPageSpec {
-    const TABLE: ScannableTableId = ScannableTableId::new("open_bitmap_page");
+pub struct LogOpenBitmapPageSpec;
+impl ScannableTableSpec for LogOpenBitmapPageSpec {
+    const TABLE: ScannableTableId = ScannableTableId::new("log_open_bitmap_page");
 }
 
 pub struct BlockLogBlobSpec;
@@ -105,11 +105,11 @@ impl BlockLogBlobSpec {
     }
 }
 
-pub struct BitmapPageBlobSpec;
-impl BlobTableSpec for BitmapPageBlobSpec {
-    const TABLE: BlobTableId = BlobTableId::new("bitmap_page_blob");
+pub struct LogBitmapPageBlobSpec;
+impl BlobTableSpec for LogBitmapPageBlobSpec {
+    const TABLE: BlobTableId = BlobTableId::new("log_bitmap_page_blob");
 }
-impl BitmapPageBlobSpec {
+impl LogBitmapPageBlobSpec {
     pub fn key(stream_id: &str, page_start_local: u32) -> Vec<u8> {
         stream_page_key(stream_id, page_start_local)
     }

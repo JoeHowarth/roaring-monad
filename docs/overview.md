@@ -396,10 +396,10 @@ Logs metadata and blobs:
 
 Stream index metadata/blob pairs:
 
-- `open_bitmap_page` table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
-- `bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` -> roaring bitmap blob
-- `bitmap_page_meta` table, key `<stream_id>/<page_start_local>` -> `StreamBitmapMeta { count, min_local, max_local }`
-- `bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` -> roaring bitmap blob
+- `log_open_bitmap_page` table, partition `<shard>`, clustering `<page_start_local>/<stream_id>` -> marker
+- `log_bitmap_by_block` table, partition `<stream_id>/<page_start_local>`, clustering `<block_num>` -> roaring bitmap blob
+- `log_bitmap_page_meta` table, key `<stream_id>/<page_start_local>` -> `StreamBitmapMeta { count, min_local, max_local }`
+- `log_bitmap_page_blob` blob table, key `<stream_id>/<page_start_local>` -> roaring bitmap blob
 
 Payload blobs:
 
