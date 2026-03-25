@@ -194,7 +194,10 @@ Current transaction indexes:
 - `from`
 - `to`
 - `selector`
-- `tx_hash` via direct point lookup
+
+The tx family also persists `tx_hash_index` as a non-filter lookup artifact for
+other service surfaces, but `tx_hash` is not part of the `eth_queryTransactions`
+filter vocabulary.
 
 If one field turns out to be too expensive to recover repeatedly, it can be
 persisted as a small sidecar. That should be the exception, not the default.

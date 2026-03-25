@@ -82,7 +82,7 @@ fn ingest_and_query_transactions_with_resume() {
 }
 
 #[test]
-fn query_transactions_support_to_only_selector_only_and_tx_hash_lookup() {
+fn query_transactions_support_to_only_and_selector_only_filters() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -148,22 +148,6 @@ fn query_transactions_support_to_only_selector_only_and_tx_hash_lookup() {
         .expect("selector-only");
         assert_eq!(selector_only.items.len(), 1);
         assert_eq!(selector_only.items[0].tx_hash().expect("hash"), &[1; 32]);
-
-        let hash_lookup = query_tx_page(
-            &svc,
-            1,
-            1,
-            TxFilter {
-                tx_hash: Some(Clause::One([2; 32])),
-                ..Default::default()
-            },
-            10,
-            None,
-        )
-        .await
-        .expect("hash lookup");
-        assert_eq!(hash_lookup.items.len(), 1);
-        assert_eq!(hash_lookup.items[0].tx_idx(), 1);
     });
 }
 

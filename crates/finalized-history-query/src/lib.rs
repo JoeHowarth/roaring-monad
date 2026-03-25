@@ -17,8 +17,8 @@ pub mod traces;
 pub mod txs;
 
 pub use api::{
-    ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryBlocksRequest, QueryLogsRequest,
-    QueryTracesRequest, QueryTransactionsRequest,
+    BlockHeader, ExecutionBudget, FinalizedHistoryService, IngestOutcome, QueryBlocksRequest,
+    QueryLogsRequest, QueryTracesRequest, QueryTransactionsRequest, TxReceipt,
 };
 pub use blocks::Block;
 pub use config::Config;

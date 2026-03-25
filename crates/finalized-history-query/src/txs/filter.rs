@@ -1,5 +1,4 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
-use crate::family::Hash32;
 use crate::query::engine::IndexedFilter;
 use crate::query::planner::{IndexedClause, build_indexed_clause};
 use crate::txs::types::{Address20, Selector4};
@@ -10,7 +9,6 @@ pub struct TxFilter {
     pub from: Option<Clause<Address20>>,
     pub to: Option<Clause<Address20>>,
     pub selector: Option<Clause<Selector4>>,
-    pub tx_hash: Option<Clause<Hash32>>,
 }
 
 impl IndexedFilter for TxFilter {
@@ -25,9 +23,6 @@ impl IndexedFilter for TxFilter {
         if let Some(clause) = &self.selector {
             max_terms = max_terms.max(clause.or_terms());
         }
-        if let Some(clause) = &self.tx_hash {
-            max_terms = max_terms.max(clause.or_terms());
-        }
         max_terms
     }
 
@@ -35,7 +30,6 @@ impl IndexedFilter for TxFilter {
         has_indexed_value(&self.from)
             || has_indexed_value(&self.to)
             || has_indexed_value(&self.selector)
-            || has_indexed_value(&self.tx_hash)
     }
 
     fn indexed_clauses(&self) -> Vec<IndexedClause> {
@@ -56,14 +50,6 @@ impl IndexedFilter for TxFilter {
 }
 
 pub fn exact_match(tx: &TxRef, filter: &TxFilter) -> bool {
-    let tx_hash = match tx.tx_hash() {
-        Ok(tx_hash) => tx_hash,
-        Err(_) => return false,
-    };
-    if !clause_matches(tx_hash, &filter.tx_hash) {
-        return false;
-    }
-
     let sender = match tx.sender() {
         Ok(sender) => sender,
         Err(_) => return false,

@@ -38,6 +38,18 @@ pub type QueryTransactionsRequest = IndexedQueryRequest<TxFilter>;
 pub type QueryTracesRequest = IndexedQueryRequest<TraceFilter>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHeader {
+    pub number: u64,
+    pub hash: [u8; 32],
+    pub parent_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxReceipt {
+    pub tx_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryBlocksRequest {
     pub from_block: Option<u64>,
     pub to_block: Option<u64>,
@@ -177,6 +189,30 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
                 budget,
             )
             .await
+    }
+
+    pub async fn get_tx(&self, _tx_hash: [u8; 32]) -> Result<Option<TxRef>> {
+        Err(Error::InvalidParams("get_tx is not implemented"))
+    }
+
+    pub async fn get_block(&self, _number: u64) -> Result<Option<Block>> {
+        Err(Error::InvalidParams("get_block is not implemented"))
+    }
+
+    pub async fn get_block_header_by(&self, _number: u64) -> Result<Option<BlockHeader>> {
+        Err(Error::InvalidParams(
+            "get_block_header_by is not implemented",
+        ))
+    }
+
+    pub async fn get_tx_receipt(&self, _tx_hash: [u8; 32]) -> Result<Option<TxReceipt>> {
+        Err(Error::InvalidParams("get_tx_receipt is not implemented"))
+    }
+
+    pub async fn get_block_receipts(&self, _number: u64) -> Result<Option<Vec<TxReceipt>>> {
+        Err(Error::InvalidParams(
+            "get_block_receipts is not implemented",
+        ))
     }
 
     pub async fn ingest_finalized_block(&self, block: FinalizedBlock) -> Result<IngestOutcome> {
