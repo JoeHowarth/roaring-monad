@@ -824,7 +824,7 @@ impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
             .get(block_num)
             .await?
             .map(|record| record.block_hash)
-            .unwrap_or([0; 32]);
+            .ok_or(Error::NotFound)?;
 
         frames
             .into_iter()

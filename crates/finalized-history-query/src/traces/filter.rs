@@ -74,13 +74,23 @@ impl TraceFilter {
         if !optional_clause_matches(item.to, &self.to) {
             return false;
         }
-        let selector = (item.input.len() >= 4)
-            .then(|| <[u8; 4]>::try_from(&item.input[..4]).expect("4-byte selector slice"));
+        let selector = selector_for_owned_trace(item);
         if !optional_clause_matches(selector, &self.selector) {
             return false;
         }
         true
     }
+}
+
+fn selector_for_owned_trace(item: &crate::traces::types::Trace) -> Option<Selector4> {
+    if !is_call_type(item.typ, item.flags) || item.input.len() < 4 {
+        return None;
+    }
+    Some(<[u8; 4]>::try_from(&item.input[..4]).expect("4-byte selector slice"))
+}
+
+fn is_call_type(typ: u8, flags: u64) -> bool {
+    matches!((typ, flags), (0, 0 | 1) | (1, _) | (2, _))
 }
 
 pub fn exact_match_frame(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
@@ -186,10 +196,10 @@ mod tests {
         out
     }
 
-    fn encode_frame(input: &[u8], depth: u64, value: &[u8]) -> Vec<u8> {
+    fn encode_frame(typ: u8, flags: u64, input: &[u8], depth: u64, value: &[u8]) -> Vec<u8> {
         let fields = vec![
-            encode_field(0u8),
-            encode_field(0u64),
+            encode_field(typ),
+            encode_field(flags),
             encode_bytes(&[1u8; 20]),
             encode_bytes(&[2u8; 20]),
             encode_bytes(value),
@@ -213,8 +223,12 @@ mod tests {
     }
 
     fn frame_view() -> CallFrameView<'static> {
+        frame_view_with_type(0, 0, &[1, 2, 3, 4, 5])
+    }
+
+    fn frame_view_with_type(typ: u8, flags: u64, input: &[u8]) -> CallFrameView<'static> {
         let block = {
-            let frame = encode_frame(&[1, 2, 3, 4, 5], 0, &[0, 7]);
+            let frame = encode_frame(typ, flags, input, 0, &[0, 7]);
             let mut tx = Vec::new();
             alloy_rlp::Header {
                 list: true,
@@ -259,5 +273,37 @@ mod tests {
             ..Default::default()
         };
         assert!(!filter.has_indexed_clause());
+    }
+
+    #[test]
+    fn selector_policy_matches_between_owned_and_view_for_non_call_frames() {
+        let filter = TraceFilter {
+            selector: Some(Clause::One([1, 2, 3, 4])),
+            ..Default::default()
+        };
+        let owned_trace = crate::traces::types::Trace {
+            block_num: 7,
+            block_hash: [9u8; 32],
+            tx_idx: 0,
+            trace_idx: 0,
+            typ: 3,
+            flags: 0,
+            from: [1u8; 20],
+            to: Some([2u8; 20]),
+            value: vec![0, 7],
+            gas: 10,
+            gas_used: 9,
+            input: vec![1, 2, 3, 4, 5],
+            output: Vec::new(),
+            status: 1,
+            depth: 0,
+        };
+        let view = frame_view_with_type(3, 0, &[1, 2, 3, 4, 5]);
+
+        assert_eq!(
+            filter.matches_trace(&owned_trace),
+            exact_match_frame(&view, &filter)
+        );
+        assert!(!exact_match_frame(&view, &filter));
     }
 }

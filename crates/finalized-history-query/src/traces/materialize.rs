@@ -405,4 +405,50 @@ mod tests {
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
         });
     }
+
+    #[test]
+    fn load_contiguous_run_requires_authoritative_block_hash() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
+
+            let frame = encode_frame([1u8; 20], Some([2u8; 20]), &[0xaa, 0xbb, 0xcc, 0xdd], 0);
+            let mut offsets = BucketedOffsets::new();
+            offsets.push(0).expect("offset");
+            offsets
+                .push(u64::try_from(frame.len()).expect("frame len"))
+                .expect("offset");
+            let header = BlockTraceHeader {
+                encoding_version: 1,
+                offsets,
+                tx_starts: vec![0],
+            };
+
+            let _ = meta
+                .put(
+                    BlockTraceHeaderSpec::TABLE,
+                    &BlockTraceHeaderSpec::key(7),
+                    header.encode(),
+                    PutCond::Any,
+                )
+                .await
+                .expect("trace header");
+            blob.put_blob(
+                BlockTraceBlobSpec::TABLE,
+                &BlockTraceBlobSpec::key(7),
+                Bytes::from(frame),
+            )
+            .await
+            .expect("trace blob");
+
+            let err = tables
+                .block_trace_blobs
+                .load_contiguous_run(7, 0, 0)
+                .await
+                .expect_err("missing block record should fail");
+
+            assert!(matches!(err, crate::error::Error::NotFound));
+        });
+    }
 }
