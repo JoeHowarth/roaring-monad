@@ -191,8 +191,15 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
             .await
     }
 
-    pub async fn get_tx(&self, _tx_hash: [u8; 32]) -> Result<Option<TxRef>> {
-        Err(Error::InvalidParams("get_tx is not implemented"))
+    pub async fn get_tx(&self, tx_hash: [u8; 32]) -> Result<Option<TxRef>> {
+        let Some(location) = self.runtime.tables.tx_hash_index.get(&tx_hash).await? else {
+            return Ok(None);
+        };
+        self.runtime
+            .tables
+            .block_tx_blobs
+            .load_tx_at(location.block_num, location.tx_idx)
+            .await
     }
 
     pub async fn get_block(&self, _number: u64) -> Result<Option<Block>> {

@@ -183,3 +183,44 @@ fn query_transactions_rejects_filter_without_indexed_clause() {
         assert!(matches!(err, Error::InvalidParams(_)));
     });
 }
+
+#[test]
+fn get_tx_uses_tx_hash_index() {
+    block_on(async {
+        let svc = FinalizedHistoryService::new_reader_writer(
+            lease_writer_config(),
+            InMemoryMetaStore::default(),
+            InMemoryBlobStore::default(),
+            1,
+        );
+
+        svc.ingest_finalized_block(mk_tx_block(
+            1,
+            [0; 32],
+            vec![
+                mk_ingest_tx(
+                    0,
+                    [1; 32],
+                    [7; 20],
+                    encode_legacy_tx(Some([9; 20]), &[0xaa, 0xbb, 0xcc, 0xdd, 1]),
+                ),
+                mk_ingest_tx(
+                    1,
+                    [2; 32],
+                    [8; 20],
+                    encode_legacy_tx(Some([9; 20]), &[0x10, 0x20, 0x30, 0x40, 2]),
+                ),
+            ],
+        ))
+        .await
+        .expect("ingest");
+
+        let tx = svc.get_tx([2; 32]).await.expect("get tx").expect("tx");
+        assert_eq!(tx.block_num(), 1);
+        assert_eq!(tx.tx_idx(), 1);
+        assert_eq!(tx.sender().expect("sender"), &[8; 20]);
+
+        let missing = svc.get_tx([9; 32]).await.expect("missing tx");
+        assert!(missing.is_none());
+    });
+}
