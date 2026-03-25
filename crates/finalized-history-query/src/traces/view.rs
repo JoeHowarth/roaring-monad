@@ -14,8 +14,7 @@ pub struct TraceRef {
     block_hash: Hash32,
     tx_idx: u32,
     trace_idx: u32,
-    frame_bytes: Bytes,
-    layout: TraceLayout,
+    call_frame: OwnedCallFrame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +32,30 @@ struct TraceLayout {
     depth_field_start: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnedCallFrame {
+    frame_bytes: Bytes,
+    layout: TraceLayout,
+}
+
+impl OwnedCallFrame {
+    fn new(frame_bytes: Bytes) -> Result<Self> {
+        let layout = parse_trace_layout(frame_bytes.as_ref())?;
+        Ok(Self {
+            frame_bytes,
+            layout,
+        })
+    }
+
+    fn frame_bytes(&self) -> &[u8] {
+        self.frame_bytes.as_ref()
+    }
+
+    fn view(&self) -> CallFrameView<'_> {
+        CallFrameView::from_parts(self.frame_bytes(), &self.layout)
+    }
+}
+
 impl TraceRef {
     pub fn new(
         block_num: u64,
@@ -41,14 +64,12 @@ impl TraceRef {
         trace_idx: u32,
         frame_bytes: Bytes,
     ) -> Result<Self> {
-        let layout = parse_trace_layout(frame_bytes.as_ref())?;
         Ok(Self {
             block_num,
             block_hash,
             tx_idx,
             trace_idx,
-            frame_bytes,
-            layout,
+            call_frame: OwnedCallFrame::new(frame_bytes)?,
         })
     }
 
@@ -69,11 +90,11 @@ impl TraceRef {
     }
 
     pub fn frame_bytes(&self) -> &[u8] {
-        self.frame_bytes.as_ref()
+        self.call_frame.frame_bytes()
     }
 
     pub fn call_frame(&self) -> CallFrameView<'_> {
-        CallFrameView::from_parts(self.frame_bytes(), &self.layout)
+        self.call_frame.view()
     }
 
     pub fn typ(&self) -> Result<u8> {
