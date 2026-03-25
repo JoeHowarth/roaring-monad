@@ -139,7 +139,7 @@ Stream pages span `STREAM_PAGE_LOCAL_ID_SPAN` (4,096) local IDs.
 
 The shared block query surface persists one full EVM header per block in the
 `block_header` table keyed by `<block_num>`. `query_blocks` and
-`get_block_header_by` return that header directly. `get_block` hydrates the
+`get_block_header` return that header directly. `get_block` hydrates the
 public `Block` object from the shared header plus the block-keyed tx payloads.
 
 `block_record` remains separate and compact. It stores only shared block

@@ -93,6 +93,9 @@ impl TraceRef {
         self.call_frame.frame_bytes()
     }
 
+    /// Returns a borrowed field-access view over this trace's frame bytes.
+    /// `TraceRef` owns identity and storage provenance; `CallFrameView` owns
+    /// decoded call-frame field access.
     pub fn call_frame(&self) -> CallFrameView<'_> {
         self.call_frame.view()
     }

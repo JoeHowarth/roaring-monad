@@ -222,7 +222,7 @@ impl<A: WriteAuthority, M: MetaStore, B: BlobStore> FinalizedHistoryService<A, M
         load_block(&self.runtime.tables, number).await
     }
 
-    pub async fn get_block_header_by(&self, number: u64) -> Result<Option<BlockHeader>> {
+    pub async fn get_block_header(&self, number: u64) -> Result<Option<BlockHeader>> {
         load_block_header(&self.runtime.tables, number).await
     }
 

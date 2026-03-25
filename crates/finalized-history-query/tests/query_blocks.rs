@@ -232,7 +232,7 @@ fn query_blocks_materializes_full_stored_header() {
 }
 
 #[test]
-fn get_block_header_by_returns_ingested_header() {
+fn get_block_header_returns_ingested_header() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -248,7 +248,7 @@ fn get_block_header_by_returns_ingested_header() {
             .expect("ingest block");
 
         let header = svc
-            .get_block_header_by(1)
+            .get_block_header(1)
             .await
             .expect("get header")
             .expect("header");
