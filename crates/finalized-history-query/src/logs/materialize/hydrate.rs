@@ -34,7 +34,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
         };
         Ok(self
             .tables
-            .point_log_payloads
+            .block_log_blobs
             .load_contiguous_run(
                 location.block_num,
                 location.local_ordinal,
@@ -55,7 +55,7 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for LogMaterializer<'_, M, B>
         let last = run.last().expect("run must be non-empty").1;
         let run_items = self
             .tables
-            .point_log_payloads
+            .block_log_blobs
             .load_contiguous_run(first.block_num, first.local_ordinal, last.local_ordinal)
             .await?;
         if run_items.len() != run.len() {

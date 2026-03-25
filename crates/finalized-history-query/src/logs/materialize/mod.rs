@@ -387,12 +387,12 @@ mod tests {
                 },
             );
             let first = tables
-                .point_log_payloads
+                .block_log_blobs
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("first contiguous load");
             let second = tables
-                .point_log_payloads
+                .block_log_blobs
                 .load_contiguous_run(block_num, 0, 2)
                 .await
                 .expect("second contiguous load");

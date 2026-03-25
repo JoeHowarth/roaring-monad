@@ -83,7 +83,7 @@ pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
     let block_blob = Bytes::from(out);
     let header = BlockLogHeader { offsets };
     tables
-        .point_log_payloads
+        .block_log_blobs
         .put_block(block_num, block_blob, &header)
         .await
 }

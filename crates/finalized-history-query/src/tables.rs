@@ -102,7 +102,7 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub log_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub tx_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub trace_streams: StreamTables<M, B, StreamBitmapMeta>,
-    pub point_log_payloads: PointLogPayloadTable<M, B>,
+    pub block_log_blobs: BlockLogBlobTable<M, B>,
     pub block_tx_blobs: BlockTxBlobTable<M, B>,
     pub block_trace_blobs: BlockTraceBlobTable<M, B>,
     pub log_open_bitmap_pages: OpenBitmapPageTable<M>,
@@ -230,7 +230,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                     TraceBitmapPageBlobSpec::key,
                 ),
             },
-            point_log_payloads: PointLogPayloadTable {
+            block_log_blobs: BlockLogBlobTable {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
                 cache: cache_for(config.point_log_payloads.max_bytes),
                 block_log_headers,
@@ -269,7 +269,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_log_header: self.block_log_headers.metrics(),
             log_dir_buckets: self.log_dir.buckets.metrics(),
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
-            point_log_payloads: self.point_log_payloads.cache.metrics_snapshot(),
+            point_log_payloads: self.block_log_blobs.cache.metrics_snapshot(),
             point_tx_payloads: self.block_tx_blobs.cache.metrics_snapshot(),
             point_trace_payloads: self.block_trace_blobs.cache.metrics_snapshot(),
             bitmap_page_meta: self.log_streams.page_meta.metrics(),
@@ -924,13 +924,13 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
     }
 }
 
-pub struct PointLogPayloadTable<M: MetaStore, B: BlobStore> {
+pub struct BlockLogBlobTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
     cache: HashMapTableBytesCache,
     block_log_headers: BlockLogHeaderTable<M>,
 }
 
-impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
+impl<M: MetaStore, B: BlobStore> BlockLogBlobTable<M, B> {
     pub async fn load_contiguous_run(
         &self,
         block_num: u64,
