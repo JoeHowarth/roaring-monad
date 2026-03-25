@@ -46,21 +46,24 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TxMaterializer<'_, M, B> 
         &mut self,
         run: &[(Self::Id, ResolvedPrimaryLocation)],
     ) -> Result<Vec<(Self::Id, Self::Item)>> {
-        let mut items = Vec::with_capacity(run.len());
-        for (id, location) in run.iter().copied() {
-            let tx_idx = u32::try_from(location.local_ordinal)
-                .map_err(|_| Error::Decode("tx local ordinal overflow"))?;
-            let Some(item) = self
-                .tables
-                .block_tx_blobs
-                .load_tx_at(location.block_num, tx_idx)
-                .await?
-            else {
-                continue;
-            };
-            items.push((id, item));
+        let Some((_, first)) = run.first().copied() else {
+            return Ok(Vec::new());
+        };
+        let last = run.last().expect("run must be non-empty").1;
+        let run_items = self
+            .tables
+            .block_tx_blobs
+            .load_contiguous_run(first.block_num, first.local_ordinal, last.local_ordinal)
+            .await?;
+        if run_items.len() != run.len() {
+            return Err(Error::NotFound);
         }
-        Ok(items)
+        Ok(run
+            .iter()
+            .copied()
+            .map(|(id, _)| id)
+            .zip(run_items)
+            .collect())
     }
 
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
@@ -94,12 +97,14 @@ mod tests {
     use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::core::state::{BlockRecord, PrimaryWindowRecord};
     use crate::kernel::codec::StorageCodec;
-    use crate::kernel::table_specs::{BlobTableSpec, ScannableTableSpec};
+    use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec, ScannableTableSpec};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
     use crate::store::traits::{BlobStore, BlobTableId, MetaStore, Page, PutCond};
-    use crate::tables::{BytesCacheConfig, Tables};
-    use crate::txs::table_specs::{BlockTxBlobSpec, TxDirByBlockSpec, TxDirSubBucketSpec};
+    use crate::tables::{BytesCacheConfig, TableCacheConfig, Tables};
+    use crate::txs::table_specs::{
+        BlockTxBlobSpec, BlockTxHeaderSpec, TxDirByBlockSpec, TxDirSubBucketSpec,
+    };
     use crate::txs::types::{BlockTxHeader, DirByBlock, StoredTxEnvelope};
 
     use super::*;
@@ -233,6 +238,114 @@ mod tests {
             assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[8, 9]);
             assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn load_contiguous_run_reads_one_range_and_then_hits_point_cache() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = CountingBlobStore {
+                inner: InMemoryBlobStore::default(),
+                get_blob_count: Arc::new(AtomicU64::new(0)),
+                read_range_count: Arc::new(AtomicU64::new(0)),
+            };
+            let blob_writer = blob.clone();
+            let get_blob_count = Arc::clone(&blob.get_blob_count);
+            let read_range_count = Arc::clone(&blob.read_range_count);
+            let tables = Tables::new(
+                meta.clone(),
+                blob,
+                BytesCacheConfig {
+                    point_tx_payloads: TableCacheConfig {
+                        max_bytes: 4 * 1024,
+                    },
+                    ..BytesCacheConfig::disabled()
+                },
+            );
+
+            tables
+                .block_records
+                .put(
+                    7,
+                    &BlockRecord {
+                        block_hash: [9u8; 32],
+                        parent_hash: [8u8; 32],
+                        logs: None,
+                        txs: Some(PrimaryWindowRecord {
+                            first_primary_id: 0,
+                            count: 2,
+                        }),
+                        traces: None,
+                    },
+                )
+                .await
+                .expect("block record");
+
+            let first = StoredTxEnvelope {
+                tx_hash: [1u8; 32],
+                sender: [2u8; 20],
+                signed_tx_bytes: vec![3, 4, 5],
+            }
+            .encode();
+            let second = StoredTxEnvelope {
+                tx_hash: [6u8; 32],
+                sender: [7u8; 20],
+                signed_tx_bytes: vec![8, 9],
+            }
+            .encode();
+            let mut blob_bytes = Vec::new();
+            blob_bytes.extend_from_slice(&first);
+            blob_bytes.extend_from_slice(&second);
+            let mut offsets = crate::core::offsets::BucketedOffsets::new();
+            offsets.push(0).expect("offset");
+            offsets
+                .push(u64::try_from(first.len()).expect("first len"))
+                .expect("offset");
+            offsets
+                .push(u64::try_from(blob_bytes.len()).expect("blob len"))
+                .expect("offset");
+            let header = BlockTxHeader { offsets };
+
+            let _ = meta
+                .put(
+                    BlockTxHeaderSpec::TABLE,
+                    &BlockTxHeaderSpec::key(7),
+                    header.encode(),
+                    PutCond::Any,
+                )
+                .await
+                .expect("tx header");
+            blob_writer
+                .put_blob(
+                    BlockTxBlobSpec::TABLE,
+                    &BlockTxBlobSpec::key(7),
+                    Bytes::from(blob_bytes),
+                )
+                .await
+                .expect("tx blob");
+
+            let first_run = tables
+                .block_tx_blobs
+                .load_contiguous_run(7, 0, 1)
+                .await
+                .expect("load first run");
+            assert_eq!(first_run.len(), 2);
+            assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
+            assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
+
+            let second_run = tables
+                .block_tx_blobs
+                .load_contiguous_run(7, 0, 1)
+                .await
+                .expect("load second run");
+            assert_eq!(second_run.len(), 2);
+            assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
+            assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
+
+            let metrics = tables.metrics_snapshot().point_tx_payloads;
+            assert_eq!(metrics.inserts, 2);
+            assert!(metrics.hits >= 2);
         });
     }
 

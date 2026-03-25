@@ -23,6 +23,8 @@ pub struct BytesCacheConfig {
     pub log_dir_buckets: TableCacheConfig,
     pub log_dir_sub_buckets: TableCacheConfig,
     pub point_log_payloads: TableCacheConfig,
+    pub point_tx_payloads: TableCacheConfig,
+    pub point_trace_payloads: TableCacheConfig,
     pub bitmap_page_meta: TableCacheConfig,
     pub bitmap_page_blobs: TableCacheConfig,
 }
@@ -35,6 +37,8 @@ impl BytesCacheConfig {
             log_dir_buckets: TableCacheConfig::disabled(),
             log_dir_sub_buckets: TableCacheConfig::disabled(),
             point_log_payloads: TableCacheConfig::disabled(),
+            point_tx_payloads: TableCacheConfig::disabled(),
+            point_trace_payloads: TableCacheConfig::disabled(),
             bitmap_page_meta: TableCacheConfig::disabled(),
             bitmap_page_blobs: TableCacheConfig::disabled(),
         }
@@ -63,6 +67,8 @@ pub struct BytesCacheMetrics {
     pub log_dir_buckets: TableCacheMetrics,
     pub log_dir_sub_buckets: TableCacheMetrics,
     pub point_log_payloads: TableCacheMetrics,
+    pub point_tx_payloads: TableCacheMetrics,
+    pub point_trace_payloads: TableCacheMetrics,
     pub bitmap_page_meta: TableCacheMetrics,
     pub bitmap_page_blobs: TableCacheMetrics,
 }

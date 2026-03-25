@@ -37,6 +37,18 @@ See [write-authority.md](write-authority.md) for the lease clock model.
 
 See [caching.md](caching.md) for cache design details.
 
+`BytesCacheConfig` currently includes independent byte budgets for:
+
+- `block_records`
+- `block_log_header`
+- `log_dir_buckets`
+- `log_dir_sub_buckets`
+- `point_log_payloads`
+- `point_tx_payloads`
+- `point_trace_payloads`
+- `bitmap_page_meta`
+- `bitmap_page_blobs`
+
 ## Stream Config
 
 | Field | Type | Default | Purpose |

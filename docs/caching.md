@@ -50,6 +50,8 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 | `DirBuckets`             | `log_dir_bucket` table, key `<bucket_start>` — 1M compacted directory buckets |
 | `LogDirSubBuckets`       | `log_dir_sub_bucket` table, key `<sub_bucket_start>` — 10K compacted sub-buckets |
 | `PointLogPayloads`       | Per-log byte slices derived from `block_log_blob` blob-table range reads keyed by `<block_num>` |
+| `PointTxPayloads`        | Per-tx envelope byte slices derived from `block_tx_blob` blob-table range reads keyed by `<block_num>` |
+| `PointTracePayloads`     | Per-trace frame byte slices derived from `block_trace_blob` blob-table range reads keyed by `<block_num>` |
 | `BitmapPageMeta`         | `bitmap_page_meta` table, key `<stream_id>/<page_start>` |
 | `BitmapPageBlobs`        | `bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
 
@@ -61,10 +63,16 @@ A `max_bytes = 0` budget disables that table's cache entirely. The typed table r
 Internal query execution uses zero-copy views to avoid allocation on the hot path:
 
 - `LogRef` — reference view over cached log payload bytes
+- `TxRef` — reference view over cached tx envelope bytes
+- `TraceRef` — reference view over cached trace frame bytes
 - `BlockLogHeaderRef` — reference view over cached block header bytes
 - `DirBucketRef` — reference view over cached directory bucket bytes
 
-The public query boundary remains `QueryPage<Log>` (owned). The `LogRef -> Log` conversion happens at the API boundary.
+The public query boundary is also zero-copy for indexed families:
+
+- `QueryPage<LogRef>`
+- `QueryPage<TxRef>`
+- `QueryPage<TraceRef>`
 
 ## Exclusions
 

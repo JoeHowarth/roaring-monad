@@ -238,11 +238,13 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             block_tx_blobs: BlockTxBlobTable {
                 blob_table: blob_store.table(BlockTxBlobSpec::TABLE),
+                cache: cache_for(config.point_tx_payloads.max_bytes),
                 block_tx_headers,
                 block_records,
             },
             block_trace_blobs: BlockTraceBlobTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
+                cache: cache_for(config.point_trace_payloads.max_bytes),
                 block_trace_headers: block_trace_headers.clone(),
             },
             log_open_bitmap_pages: OpenBitmapPageTable::new(
@@ -257,6 +259,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             ),
             trace_payloads: TracePayloadTable {
                 blob_table: blob_store.table(BlockTraceBlobSpec::TABLE),
+                cache: cache_for(config.point_trace_payloads.max_bytes),
                 block_trace_headers,
                 block_records: BlockRecordTable::new(
                     meta_store.table(BlockRecordSpec::TABLE),
@@ -273,6 +276,8 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             log_dir_buckets: self.log_dir.buckets.metrics(),
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
             point_log_payloads: self.point_log_payloads.cache.metrics_snapshot(),
+            point_tx_payloads: self.block_tx_blobs.cache.metrics_snapshot(),
+            point_trace_payloads: self.trace_payloads.cache.metrics_snapshot(),
             bitmap_page_meta: self.log_streams.page_meta.metrics(),
             bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
         }
@@ -735,6 +740,7 @@ impl<M: MetaStore> OpenBitmapPageTable<M> {
 
 pub struct TracePayloadTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
+    cache: HashMapTableBytesCache,
     block_trace_headers: BlockTraceHeaderTable<M>,
     block_records: BlockRecordTable<M>,
 }
@@ -745,40 +751,69 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
         block_num: u64,
         local_ordinal: usize,
     ) -> Result<Option<crate::traces::view::TraceRef>> {
-        let Some(header) = self.block_trace_headers.get(block_num).await? else {
-            return Ok(None);
-        };
-        let Some(frame) = load_offset_item_range(
-            &self.blob_table,
-            &BlockTraceBlobSpec::key(block_num),
-            &header.offsets,
-            local_ordinal,
-            "invalid block trace range",
-        )
-        .await?
+        let Some(item) = self
+            .load_contiguous_run(block_num, local_ordinal, local_ordinal)
+            .await?
+            .into_iter()
+            .next()
         else {
             return Ok(None);
         };
-        let tx_idx = header
-            .tx_idx_for_trace(local_ordinal)
-            .ok_or(Error::Decode("missing tx_idx for trace"))?;
-        let trace_idx = header
-            .trace_idx_in_tx(local_ordinal)
-            .ok_or(Error::Decode("missing trace_idx for trace"))?;
+        Ok(Some(item))
+    }
+
+    pub async fn load_contiguous_run(
+        &self,
+        block_num: u64,
+        start_local_ordinal: usize,
+        end_local_ordinal_inclusive: usize,
+    ) -> Result<Vec<crate::traces::view::TraceRef>> {
+        let Some(header) = self.block_trace_headers.get(block_num).await? else {
+            return Ok(Vec::new());
+        };
+        let frames = load_cached_offset_run(
+            &self.cache,
+            &self.blob_table,
+            &BlockTraceBlobSpec::key(block_num),
+            &header.offsets,
+            start_local_ordinal,
+            end_local_ordinal_inclusive,
+            "invalid block trace range",
+            b"point_trace_payload/",
+            block_num,
+        )
+        .await?;
+        if frames.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let block_hash = self
             .block_records
             .get(block_num)
             .await?
             .map(|record| record.block_hash)
             .unwrap_or([0; 32]);
-        Ok(Some(crate::traces::view::TraceRef::new(
-            block_num, block_hash, tx_idx, trace_idx, frame,
-        )?))
+
+        frames
+            .into_iter()
+            .enumerate()
+            .map(|(index, frame)| {
+                let local_ordinal = start_local_ordinal + index;
+                let tx_idx = header
+                    .tx_idx_for_trace(local_ordinal)
+                    .ok_or(Error::Decode("missing tx_idx for trace"))?;
+                let trace_idx = header
+                    .trace_idx_in_tx(local_ordinal)
+                    .ok_or(Error::Decode("missing trace_idx for trace"))?;
+                crate::traces::view::TraceRef::new(block_num, block_hash, tx_idx, trace_idx, frame)
+            })
+            .collect()
     }
 }
 
 pub struct BlockTraceBlobTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
+    cache: HashMapTableBytesCache,
     block_trace_headers: BlockTraceHeaderTable<M>,
 }
 
@@ -797,15 +832,24 @@ impl<M: MetaStore, B: BlobStore> BlockTraceBlobTable<M, B> {
     ) -> Result<()> {
         if !block_blob.is_empty() {
             self.blob_table
-                .put(&BlockTraceBlobSpec::key(block_num), block_blob)
+                .put(&BlockTraceBlobSpec::key(block_num), block_blob.clone())
                 .await?;
         }
+        seed_point_payload_cache(
+            &self.cache,
+            b"point_trace_payload/",
+            block_num,
+            &block_blob,
+            &header.offsets,
+            "invalid block trace cached range",
+        )?;
         self.block_trace_headers.put(block_num, header).await
     }
 }
 
 pub struct BlockTxBlobTable<M: MetaStore, B: BlobStore> {
     blob_table: BlobTable<B>,
+    cache: HashMapTableBytesCache,
     block_tx_headers: BlockTxHeaderTable<M>,
     block_records: BlockRecordTable<M>,
 }
@@ -816,27 +860,59 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
     }
 
     pub async fn load_tx_at(&self, block_num: u64, tx_idx: u32) -> Result<Option<TxRef>> {
-        let Some(header) = self.block_tx_headers.get(block_num).await? else {
-            return Ok(None);
-        };
-        let Some(envelope_bytes) = load_offset_item_range(
-            &self.blob_table,
-            &BlockTxBlobSpec::key(block_num),
-            &header.offsets,
-            tx_idx as usize,
-            "invalid block tx range",
-        )
-        .await?
+        let Some(item) = self
+            .load_contiguous_run(block_num, tx_idx as usize, tx_idx as usize)
+            .await?
+            .into_iter()
+            .next()
         else {
             return Ok(None);
         };
+        Ok(Some(item))
+    }
+
+    pub async fn load_contiguous_run(
+        &self,
+        block_num: u64,
+        start_tx_idx: usize,
+        end_tx_idx_inclusive: usize,
+    ) -> Result<Vec<TxRef>> {
+        let Some(header) = self.block_tx_headers.get(block_num).await? else {
+            return Ok(Vec::new());
+        };
+        let envelopes = load_cached_offset_run(
+            &self.cache,
+            &self.blob_table,
+            &BlockTxBlobSpec::key(block_num),
+            &header.offsets,
+            start_tx_idx,
+            end_tx_idx_inclusive,
+            "invalid block tx range",
+            b"point_tx_payload/",
+            block_num,
+        )
+        .await?;
+        if envelopes.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let block_hash = self
             .block_records
             .get(block_num)
             .await?
             .map(|record| record.block_hash)
             .ok_or(Error::NotFound)?;
-        TxRef::new(block_num, block_hash, tx_idx, envelope_bytes).map(Some)
+
+        envelopes
+            .into_iter()
+            .enumerate()
+            .map(|(index, envelope_bytes)| {
+                let tx_idx = start_tx_idx + index;
+                let tx_idx = u32::try_from(tx_idx)
+                    .map_err(|_| Error::Decode("tx local ordinal overflow"))?;
+                TxRef::new(block_num, block_hash, tx_idx, envelope_bytes)
+            })
+            .collect()
     }
 
     pub async fn put_block(
@@ -847,9 +923,17 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
     ) -> Result<()> {
         if !block_blob.is_empty() {
             self.blob_table
-                .put(&BlockTxBlobSpec::key(block_num), block_blob)
+                .put(&BlockTxBlobSpec::key(block_num), block_blob.clone())
                 .await?;
         }
+        seed_point_payload_cache(
+            &self.cache,
+            b"point_tx_payload/",
+            block_num,
+            &block_blob,
+            &header.offsets,
+            "invalid block tx cached range",
+        )?;
         self.block_tx_headers.put(block_num, header).await
     }
 }
@@ -867,87 +951,24 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
         start_local_ordinal: usize,
         end_local_ordinal_inclusive: usize,
     ) -> Result<Vec<LogRef>> {
-        if end_local_ordinal_inclusive < start_local_ordinal {
-            return Ok(Vec::new());
-        }
-
-        let mut cached = Vec::with_capacity(
-            end_local_ordinal_inclusive
-                .saturating_sub(start_local_ordinal)
-                .saturating_add(1),
-        );
-        let mut all_cached = true;
-        for local_ordinal in start_local_ordinal..=end_local_ordinal_inclusive {
-            let payload_key = point_log_payload_key(block_num, local_ordinal)?;
-            let maybe_cached = self.cache.get(&payload_key);
-            cached.push((payload_key, maybe_cached));
-            if cached
-                .last()
-                .and_then(|(_, value)| value.as_ref())
-                .is_none()
-            {
-                all_cached = false;
-            }
-        }
-        if all_cached {
-            return cached
-                .into_iter()
-                .map(|(_, bytes)| bytes.map(LogRef::new).transpose()?.ok_or(Error::NotFound))
-                .collect();
-        }
-
         let Some(header) = self.block_log_headers.get(block_num).await? else {
             return Ok(Vec::new());
         };
-        if end_local_ordinal_inclusive >= header.log_count() {
-            return Ok(Vec::new());
-        }
-
-        let Some((start, end)) = offset_window(
+        load_cached_offset_run(
+            &self.cache,
+            &self.blob_table,
+            &BlockLogBlobSpec::key(block_num),
             &header.offsets,
             start_local_ordinal,
-            end_local_ordinal_inclusive + 1,
+            end_local_ordinal_inclusive,
             "invalid block log range",
-        )?
-        else {
-            return Ok(Vec::new());
-        };
-        let Some(run_bytes) = self
-            .blob_table
-            .read_range(&BlockLogBlobSpec::key(block_num), start, end)
-            .await?
-        else {
-            return Ok(Vec::new());
-        };
-
-        let mut out = Vec::with_capacity(cached.len());
-        for (index, (payload_key, maybe_cached)) in cached.into_iter().enumerate() {
-            if let Some(bytes) = maybe_cached {
-                out.push(LogRef::new(bytes)?);
-                continue;
-            }
-
-            let local_ordinal = start_local_ordinal + index;
-            let relative_start = header
-                .offset(local_ordinal)?
-                .checked_sub(start)
-                .ok_or(Error::Decode("invalid block log range"))?;
-            let relative_end = header
-                .offset(local_ordinal + 1)?
-                .checked_sub(start)
-                .ok_or(Error::Decode("invalid block log range"))?;
-            let payload = slice_relative(
-                &run_bytes,
-                u32::try_from(relative_start)
-                    .map_err(|_| Error::Decode("invalid block log range"))?,
-                u32::try_from(relative_end)
-                    .map_err(|_| Error::Decode("invalid block log range"))?,
-            )?;
-            self.cache.put(&payload_key, payload.clone(), payload.len());
-            out.push(LogRef::new(payload)?);
-        }
-
-        Ok(out)
+            b"point_log_payload/",
+            block_num,
+        )
+        .await?
+        .into_iter()
+        .map(LogRef::new)
+        .collect()
     }
 
     pub async fn put_block(
@@ -960,39 +981,100 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
             .put(&BlockLogBlobSpec::key(block_num), block_blob.clone())
             .await?;
         self.block_log_headers.put(block_num, header).await?;
-
-        for local_ordinal in 0..header.offsets.len().saturating_sub(1) {
-            let start = u32::try_from(header.offset(local_ordinal)?)
-                .map_err(|_| Error::Decode("invalid block log cached range"))?;
-            let end = u32::try_from(header.offset(local_ordinal + 1)?)
-                .map_err(|_| Error::Decode("invalid block log cached range"))?;
-            let payload = slice_relative(&block_blob, start, end)?;
-            let payload_key = point_log_payload_cache_key(block_num, local_ordinal as u64);
-            self.cache.put(&payload_key, payload.clone(), payload.len());
-        }
-
+        seed_point_payload_cache(
+            &self.cache,
+            b"point_log_payload/",
+            block_num,
+            &block_blob,
+            &header.offsets,
+            "invalid block log cached range",
+        )?;
         Ok(())
     }
 }
 
-async fn load_offset_item_range<B: BlobStore>(
+async fn load_cached_offset_run<B: BlobStore>(
+    cache: &HashMapTableBytesCache,
     blob_table: &BlobTable<B>,
     key: &[u8],
     offsets: &crate::core::offsets::BucketedOffsets,
-    local_ordinal: usize,
+    start_local_ordinal: usize,
+    end_local_ordinal_inclusive: usize,
     invalid_range_message: &'static str,
-) -> Result<Option<Bytes>> {
-    let Some(window) = offset_window(
+    cache_prefix: &[u8],
+    block_num: u64,
+) -> Result<Vec<Bytes>> {
+    if end_local_ordinal_inclusive < start_local_ordinal {
+        return Ok(Vec::new());
+    }
+
+    let mut cached = Vec::with_capacity(
+        end_local_ordinal_inclusive
+            .saturating_sub(start_local_ordinal)
+            .saturating_add(1),
+    );
+    let mut all_cached = true;
+    for local_ordinal in start_local_ordinal..=end_local_ordinal_inclusive {
+        let cache_key = point_payload_cache_key(cache_prefix, block_num, local_ordinal)?;
+        let maybe_cached = cache.get(&cache_key);
+        cached.push((cache_key, maybe_cached));
+        if cached
+            .last()
+            .and_then(|(_, value)| value.as_ref())
+            .is_none()
+        {
+            all_cached = false;
+        }
+    }
+    if all_cached {
+        return cached
+            .into_iter()
+            .map(|(_, bytes)| bytes.ok_or(Error::NotFound))
+            .collect();
+    }
+
+    let Some((start, end)) = offset_window(
         offsets,
-        local_ordinal,
-        local_ordinal + 1,
+        start_local_ordinal,
+        end_local_ordinal_inclusive + 1,
         invalid_range_message,
     )?
     else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let (start, end) = window;
-    blob_table.read_range(key, start, end).await
+    let Some(run_bytes) = blob_table.read_range(key, start, end).await? else {
+        return Ok(Vec::new());
+    };
+
+    let mut out = Vec::with_capacity(cached.len());
+    for (index, (cache_key, maybe_cached)) in cached.into_iter().enumerate() {
+        if let Some(bytes) = maybe_cached {
+            out.push(bytes);
+            continue;
+        }
+
+        let local_ordinal = start_local_ordinal + index;
+        let relative_start = offsets
+            .get(local_ordinal)
+            .ok_or(Error::Decode(invalid_range_message))?
+            .checked_sub(start)
+            .ok_or(Error::Decode(invalid_range_message))?;
+        let relative_end = offsets
+            .get(local_ordinal + 1)
+            .ok_or(Error::Decode(invalid_range_message))?
+            .checked_sub(start)
+            .ok_or(Error::Decode(invalid_range_message))?;
+        let payload = slice_relative_u64(
+            &run_bytes,
+            relative_start,
+            relative_end,
+            invalid_range_message,
+        )?;
+        cache.put(&cache_key, payload.clone(), payload.len());
+        out.push(payload);
+    }
+
+    Ok(out)
 }
 
 fn offset_window(
@@ -1017,26 +1099,57 @@ fn offset_window(
     Ok(Some((start, end)))
 }
 
-fn point_log_payload_cache_key(block_num: u64, local_ordinal: u64) -> Vec<u8> {
-    let mut key = b"point_log_payload/".to_vec();
+fn point_payload_cache_key(prefix: &[u8], block_num: u64, local_ordinal: usize) -> Result<Vec<u8>> {
+    let local_ordinal =
+        u64::try_from(local_ordinal).map_err(|_| Error::Decode("local ordinal overflow"))?;
+    Ok(point_payload_cache_key_raw(
+        prefix,
+        block_num,
+        local_ordinal,
+    ))
+}
+
+fn point_payload_cache_key_raw(prefix: &[u8], block_num: u64, local_ordinal: u64) -> Vec<u8> {
+    let mut key = prefix.to_vec();
     key.extend_from_slice(&block_num.to_be_bytes());
     key.extend_from_slice(&local_ordinal.to_be_bytes());
     key
 }
 
-fn point_log_payload_key(block_num: u64, local_ordinal: usize) -> Result<Vec<u8>> {
-    let local_ordinal =
-        u64::try_from(local_ordinal).map_err(|_| Error::Decode("local ordinal overflow"))?;
-    Ok(point_log_payload_cache_key(block_num, local_ordinal))
-}
-
-fn slice_relative(bytes: &Bytes, start: u32, end: u32) -> Result<Bytes> {
-    let start = usize::try_from(start).map_err(|_| Error::Decode("block log range overflow"))?;
-    let end = usize::try_from(end).map_err(|_| Error::Decode("block log range overflow"))?;
+fn slice_relative_u64(
+    bytes: &Bytes,
+    start: u64,
+    end: u64,
+    invalid_range_message: &'static str,
+) -> Result<Bytes> {
+    let start = usize::try_from(start).map_err(|_| Error::Decode(invalid_range_message))?;
+    let end = usize::try_from(end).map_err(|_| Error::Decode(invalid_range_message))?;
     if start > end || end > bytes.len() {
-        return Err(Error::Decode("invalid block log range"));
+        return Err(Error::Decode(invalid_range_message));
     }
     Ok(bytes.slice(start..end))
+}
+
+fn seed_point_payload_cache(
+    cache: &HashMapTableBytesCache,
+    cache_prefix: &[u8],
+    block_num: u64,
+    block_blob: &Bytes,
+    offsets: &crate::core::offsets::BucketedOffsets,
+    invalid_range_message: &'static str,
+) -> Result<()> {
+    for local_ordinal in 0..offsets.len().saturating_sub(1) {
+        let start = offsets
+            .get(local_ordinal)
+            .ok_or(Error::Decode(invalid_range_message))?;
+        let end = offsets
+            .get(local_ordinal + 1)
+            .ok_or(Error::Decode(invalid_range_message))?;
+        let payload = slice_relative_u64(block_blob, start, end, invalid_range_message)?;
+        let cache_key = point_payload_cache_key(cache_prefix, block_num, local_ordinal)?;
+        cache.put(&cache_key, payload.clone(), payload.len());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
