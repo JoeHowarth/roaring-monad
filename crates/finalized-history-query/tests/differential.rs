@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_rlp::{Encodable, Header, PayloadView};
+use alloy_rlp::Encodable;
 use finalized_history_query::api::{
     ExecutionBudget, FinalizedHistoryService, QueryLogsRequest, QueryOrder, QueryTracesRequest,
 };
@@ -11,7 +11,6 @@ use finalized_history_query::logs::types::Log;
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
 use finalized_history_query::store::publication::MetaPublicationStore;
-use finalized_history_query::traces::view::CallFrameView;
 use finalized_history_query::{Clause, FinalizedBlock, LeaseAuthority, LogFilter, TraceFilter};
 use futures::executor::block_on;
 
@@ -122,56 +121,6 @@ fn mk_trace_block(block_num: u64, parent_hash: [u8; 32], trace_rlp: Vec<u8>) -> 
     }
 }
 
-fn iter_input_trace_frames(
-    trace_rlp: &[u8],
-) -> finalized_history_query::Result<Vec<(u32, u32, CallFrameView<'_>)>> {
-    if trace_rlp.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut buf = trace_rlp;
-    let PayloadView::List(txs) = Header::decode_raw(&mut buf)
-        .map_err(|_| finalized_history_query::Error::Decode("invalid block trace rlp"))?
-    else {
-        return Err(finalized_history_query::Error::Decode(
-            "block trace blob must be an rlp list",
-        ));
-    };
-    if !buf.is_empty() {
-        return Err(finalized_history_query::Error::Decode(
-            "block trace rlp has trailing bytes",
-        ));
-    }
-
-    let mut out = Vec::new();
-    for (tx_idx, tx_bytes) in txs.into_iter().enumerate() {
-        let mut tx_buf = tx_bytes;
-        let PayloadView::List(frames) = Header::decode_raw(&mut tx_buf).map_err(|_| {
-            finalized_history_query::Error::Decode("invalid transaction trace list")
-        })?
-        else {
-            return Err(finalized_history_query::Error::Decode(
-                "transaction traces must be an rlp list",
-            ));
-        };
-        if !tx_buf.is_empty() {
-            return Err(finalized_history_query::Error::Decode(
-                "transaction trace list has trailing bytes",
-            ));
-        }
-
-        for (trace_idx, frame_bytes) in frames.into_iter().enumerate() {
-            out.push((
-                u32::try_from(tx_idx).expect("tx_idx fits in u32"),
-                u32::try_from(trace_idx).expect("trace_idx fits in u32"),
-                CallFrameView::new(frame_bytes)?,
-            ));
-        }
-    }
-
-    Ok(out)
-}
-
 fn naive_trace_query(
     blocks: &[FinalizedBlock],
     from_block: u64,
@@ -186,9 +135,12 @@ fn naive_trace_query(
             continue;
         }
 
-        for (tx_idx, trace_idx, view) in
-            iter_input_trace_frames(&block.trace_rlp).expect("trace iter")
-        {
+        let iter =
+            finalized_history_query::traces::ingest_iter::BlockTraceIter::new(&block.trace_rlp)
+                .expect("trace iter");
+        for frame in iter {
+            let frame = frame.expect("frame");
+            let (tx_idx, trace_idx, view) = (frame.tx_idx, frame.trace_idx, frame.view);
             let from = *view.from_addr().expect("from");
             let to = view.to_addr().expect("to").copied();
             let selector = view.selector().expect("selector").copied();
