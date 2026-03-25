@@ -725,25 +725,21 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
         let Some(header) = self.block_trace_headers.get(block_num).await? else {
             return Ok(None);
         };
-        let Some(blob) = self
-            .blob_table
-            .get(&BlockTraceBlobSpec::key(block_num))
-            .await?
+        let Some(window) = load_offset_item_window(
+            &self.blob_table,
+            &BlockTraceBlobSpec::key(block_num),
+            &header.offsets,
+            local_ordinal,
+        )
+        .await?
         else {
             return Ok(None);
         };
-        let start = header.trace_start(local_ordinal)?;
-        let start =
-            usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
-        if start >= blob.len() {
-            return Err(Error::Decode("trace start offset past blob end"));
+        let frame_len = crate::traces::materialize::rlp_element_len(window.as_ref())?;
+        if frame_len > window.len() {
+            return Err(Error::Decode("trace frame extends past read window"));
         }
-        let frame_len = crate::traces::materialize::rlp_element_len(&blob[start..])?;
-        let end = start + frame_len;
-        if end > blob.len() {
-            return Err(Error::Decode("trace frame extends past blob end"));
-        }
-        let frame = blob.slice(start..end);
+        let frame = window.slice(..frame_len);
         let tx_idx = header
             .tx_idx_for_trace(local_ordinal)
             .ok_or(Error::Decode("missing tx_idx for trace"))?;
@@ -809,7 +805,7 @@ impl<M: MetaStore, B: BlobStore> BlockTxBlobTable<M, B> {
             &BlockTxBlobSpec::key(block_num),
             &header.offsets,
             tx_idx as usize,
-            "tx",
+            "invalid block tx range",
         )
         .await?
         else {
@@ -892,7 +888,7 @@ impl<M: MetaStore, B: BlobStore> PointLogPayloadTable<M, B> {
             &header.offsets,
             start_local_ordinal,
             end_local_ordinal_inclusive + 1,
-            "log",
+            "invalid block log range",
         )?
         else {
             return Ok(Vec::new());
@@ -965,20 +961,53 @@ async fn load_offset_item_range<B: BlobStore>(
     key: &[u8],
     offsets: &crate::core::offsets::BucketedOffsets,
     local_ordinal: usize,
-    item_kind: &'static str,
+    invalid_range_message: &'static str,
 ) -> Result<Option<Bytes>> {
-    let Some((start, end)) = offset_window(offsets, local_ordinal, local_ordinal + 1, item_kind)?
+    let Some(window) = offset_window(
+        offsets,
+        local_ordinal,
+        local_ordinal + 1,
+        invalid_range_message,
+    )?
     else {
         return Ok(None);
     };
+    let (start, end) = window;
     blob_table.read_range(key, start, end).await
+}
+
+async fn load_offset_item_window<B: BlobStore>(
+    blob_table: &BlobTable<B>,
+    key: &[u8],
+    offsets: &crate::core::offsets::BucketedOffsets,
+    local_ordinal: usize,
+) -> Result<Option<Bytes>> {
+    let Some(start) = offsets.get(local_ordinal) else {
+        return Ok(None);
+    };
+
+    if let Some(end) = offsets.get(local_ordinal + 1) {
+        if end < start {
+            return Err(Error::Decode("invalid block trace range"));
+        }
+        return blob_table.read_range(key, start, end).await;
+    }
+
+    let Some(blob) = blob_table.get(key).await? else {
+        return Ok(None);
+    };
+    let start = usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
+    if start > blob.len() {
+        return Err(Error::Decode("trace start offset past blob end"));
+    }
+    Ok(Some(blob.slice(start..)))
 }
 
 fn offset_window(
     offsets: &crate::core::offsets::BucketedOffsets,
     start_local_ordinal: usize,
     end_local_ordinal_exclusive: usize,
-    item_kind: &'static str,
+    invalid_range_message: &'static str,
 ) -> Result<Option<(u64, u64)>> {
     if start_local_ordinal >= end_local_ordinal_exclusive {
         return Ok(None);
@@ -991,11 +1020,7 @@ fn offset_window(
         return Ok(None);
     };
     if end < start {
-        return Err(Error::Decode(match item_kind {
-            "log" => "invalid block log range",
-            "tx" => "invalid block tx range",
-            _ => "invalid block blob range",
-        }));
+        return Err(Error::Decode(invalid_range_message));
     }
     Ok(Some((start, end)))
 }
