@@ -388,31 +388,34 @@ mod tests {
         out
     }
 
-    fn encode_frame(
+    #[derive(Clone, Copy)]
+    struct TraceFrameParts<'a> {
         typ: u8,
         flags: u64,
         from: [u8; 20],
         to: Option<[u8; 20]>,
-        value: &[u8],
+        value: &'a [u8],
         gas: u64,
         gas_used: u64,
-        input: &[u8],
-        output: &[u8],
+        input: &'a [u8],
+        output: &'a [u8],
         status: u8,
         depth: u64,
-    ) -> Vec<u8> {
+    }
+
+    fn encode_frame(parts: TraceFrameParts<'_>) -> Vec<u8> {
         let fields = vec![
-            encode_field(typ),
-            encode_field(flags),
-            encode_bytes(&from),
-            encode_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
-            encode_bytes(value),
-            encode_field(gas),
-            encode_field(gas_used),
-            encode_bytes(input),
-            encode_bytes(output),
-            encode_field(status),
-            encode_field(depth),
+            encode_field(parts.typ),
+            encode_field(parts.flags),
+            encode_bytes(&parts.from),
+            encode_bytes(parts.to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+            encode_bytes(parts.value),
+            encode_field(parts.gas),
+            encode_field(parts.gas_used),
+            encode_bytes(parts.input),
+            encode_bytes(parts.output),
+            encode_field(parts.status),
+            encode_field(parts.depth),
         ];
         let mut out = Vec::new();
         alloy_rlp::Header {
@@ -428,19 +431,19 @@ mod tests {
 
     #[test]
     fn call_frame_view_accessors_work() {
-        let frame = encode_frame(
-            0,
-            0,
-            [1; 20],
-            Some([2; 20]),
-            &[0, 5],
-            100,
-            80,
-            &[0xaa, 0xbb, 0xcc, 0xdd, 0xee],
-            &[9, 8],
-            1,
-            0,
-        );
+        let frame = encode_frame(TraceFrameParts {
+            typ: 0,
+            flags: 0,
+            from: [1; 20],
+            to: Some([2; 20]),
+            value: &[0, 5],
+            gas: 100,
+            gas_used: 80,
+            input: &[0xaa, 0xbb, 0xcc, 0xdd, 0xee],
+            output: &[9, 8],
+            status: 1,
+            depth: 0,
+        });
         let view = CallFrameView::new(&frame).expect("frame view");
 
         assert_eq!(view.typ().unwrap(), 0);

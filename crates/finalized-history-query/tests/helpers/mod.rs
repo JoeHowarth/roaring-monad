@@ -356,31 +356,34 @@ pub fn encode_trace_block(txs: Vec<Vec<Vec<u8>>>) -> Vec<u8> {
     out
 }
 
-pub fn encode_trace_frame(
-    typ: u8,
-    flags: u64,
-    from: [u8; 20],
-    to: Option<[u8; 20]>,
-    value: &[u8],
-    gas: u64,
-    gas_used: u64,
-    input: &[u8],
-    output: &[u8],
-    status: u8,
-    depth: u64,
-) -> Vec<u8> {
+#[derive(Clone, Copy)]
+pub struct TraceFrameParts<'a> {
+    pub typ: u8,
+    pub flags: u64,
+    pub from: [u8; 20],
+    pub to: Option<[u8; 20]>,
+    pub value: &'a [u8],
+    pub gas: u64,
+    pub gas_used: u64,
+    pub input: &'a [u8],
+    pub output: &'a [u8],
+    pub status: u8,
+    pub depth: u64,
+}
+
+pub fn encode_trace_frame(parts: TraceFrameParts<'_>) -> Vec<u8> {
     let fields = vec![
-        encode_trace_field(typ),
-        encode_trace_field(flags),
-        encode_trace_bytes(&from),
-        encode_trace_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
-        encode_trace_bytes(value),
-        encode_trace_field(gas),
-        encode_trace_field(gas_used),
-        encode_trace_bytes(input),
-        encode_trace_bytes(output),
-        encode_trace_field(status),
-        encode_trace_field(depth),
+        encode_trace_field(parts.typ),
+        encode_trace_field(parts.flags),
+        encode_trace_bytes(&parts.from),
+        encode_trace_bytes(parts.to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+        encode_trace_bytes(parts.value),
+        encode_trace_field(parts.gas),
+        encode_trace_field(parts.gas_used),
+        encode_trace_bytes(parts.input),
+        encode_trace_bytes(parts.output),
+        encode_trace_field(parts.status),
+        encode_trace_field(parts.depth),
     ];
     let mut out = Vec::new();
     alloy_rlp::Header {

@@ -113,31 +113,34 @@ mod tests {
         out
     }
 
-    fn encode_frame(
+    #[derive(Clone, Copy)]
+    struct TraceFrameParts<'a> {
         typ: u8,
         flags: u64,
         from: [u8; 20],
         to: Option<[u8; 20]>,
-        value: &[u8],
+        value: &'a [u8],
         gas: u64,
         gas_used: u64,
-        input: &[u8],
-        output: &[u8],
+        input: &'a [u8],
+        output: &'a [u8],
         status: u8,
         depth: u64,
-    ) -> Vec<u8> {
+    }
+
+    fn encode_frame(parts: TraceFrameParts<'_>) -> Vec<u8> {
         let fields = vec![
-            encode_field(typ),
-            encode_field(flags),
-            encode_bytes(&from),
-            encode_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
-            encode_bytes(value),
-            encode_field(gas),
-            encode_field(gas_used),
-            encode_bytes(input),
-            encode_bytes(output),
-            encode_field(status),
-            encode_field(depth),
+            encode_field(parts.typ),
+            encode_field(parts.flags),
+            encode_bytes(&parts.from),
+            encode_bytes(parts.to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+            encode_bytes(parts.value),
+            encode_field(parts.gas),
+            encode_field(parts.gas_used),
+            encode_bytes(parts.input),
+            encode_bytes(parts.output),
+            encode_field(parts.status),
+            encode_field(parts.depth),
         ];
         let mut out = Vec::new();
         alloy_rlp::Header {
@@ -184,22 +187,46 @@ mod tests {
     #[test]
     fn block_trace_iter_preserves_tx_and_trace_order() {
         let block = encode_block(vec![
-            vec![encode_frame(
-                0,
-                0,
-                [1; 20],
-                Some([2; 20]),
-                &[],
-                1,
-                1,
-                &[],
-                &[],
-                1,
-                0,
-            )],
+            vec![encode_frame(TraceFrameParts {
+                typ: 0,
+                flags: 0,
+                from: [1; 20],
+                to: Some([2; 20]),
+                value: &[],
+                gas: 1,
+                gas_used: 1,
+                input: &[],
+                output: &[],
+                status: 1,
+                depth: 0,
+            })],
             vec![
-                encode_frame(1, 0, [3; 20], None, &[7], 2, 2, &[], &[], 1, 1),
-                encode_frame(2, 0, [4; 20], Some([5; 20]), &[], 3, 3, &[], &[], 1, 2),
+                encode_frame(TraceFrameParts {
+                    typ: 1,
+                    flags: 0,
+                    from: [3; 20],
+                    to: None,
+                    value: &[7],
+                    gas: 2,
+                    gas_used: 2,
+                    input: &[],
+                    output: &[],
+                    status: 1,
+                    depth: 1,
+                }),
+                encode_frame(TraceFrameParts {
+                    typ: 2,
+                    flags: 0,
+                    from: [4; 20],
+                    to: Some([5; 20]),
+                    value: &[],
+                    gas: 3,
+                    gas_used: 3,
+                    input: &[],
+                    output: &[],
+                    status: 1,
+                    depth: 2,
+                }),
             ],
         ]);
 

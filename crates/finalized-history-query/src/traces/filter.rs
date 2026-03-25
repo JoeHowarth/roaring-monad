@@ -1,7 +1,7 @@
 use crate::core::clause::{Clause, clause_matches, has_indexed_value, optional_clause_matches};
 use crate::query::engine::IndexedFilter;
 use crate::query::planner::{IndexedClause, build_indexed_clause, single_selector_clause};
-use crate::traces::types::{Address20, Selector4};
+use crate::traces::types::{Address20, Selector4, Trace};
 use crate::traces::view::CallFrameView;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -56,33 +56,21 @@ impl IndexedFilter for TraceFilter {
 }
 
 impl TraceFilter {
-    pub fn matches_trace(&self, item: &crate::traces::types::Trace) -> bool {
-        if let Some(expected) = self.is_top_level
-            && (item.depth == 0) != expected
-        {
-            return false;
-        }
-        if let Some(expected) = self.has_value {
-            let has_value = item.value.iter().any(|byte| *byte != 0);
-            if has_value != expected {
-                return false;
-            }
-        }
-        if !clause_matches(&item.from, &self.from) {
-            return false;
-        }
-        if !optional_clause_matches(item.to, &self.to) {
-            return false;
-        }
-        let selector = selector_for_owned_trace(item);
-        if !optional_clause_matches(selector, &self.selector) {
-            return false;
-        }
-        true
+    pub fn matches_trace(&self, item: &Trace) -> bool {
+        matches_trace_fields(self, &trace_fields_for_owned_trace(item))
     }
 }
 
-fn selector_for_owned_trace(item: &crate::traces::types::Trace) -> Option<Selector4> {
+#[derive(Clone, Copy)]
+struct TraceMatchFields {
+    from: Address20,
+    to: Option<Address20>,
+    selector: Option<Selector4>,
+    is_top_level: bool,
+    has_value: bool,
+}
+
+fn selector_for_owned_trace(item: &Trace) -> Option<Selector4> {
     if !is_call_type(item.typ, item.flags) || item.input.len() < 4 {
         return None;
     }
@@ -93,46 +81,46 @@ fn is_call_type(typ: u8, flags: u64) -> bool {
     matches!((typ, flags), (0, 0 | 1) | (1, _) | (2, _))
 }
 
+fn trace_fields_for_owned_trace(item: &Trace) -> TraceMatchFields {
+    TraceMatchFields {
+        from: item.from,
+        to: item.to,
+        selector: selector_for_owned_trace(item),
+        is_top_level: item.depth == 0,
+        has_value: item.value.iter().any(|byte| *byte != 0),
+    }
+}
+
+fn trace_fields_for_view(trace: &CallFrameView<'_>) -> Option<TraceMatchFields> {
+    Some(TraceMatchFields {
+        from: *trace.from_addr().ok()?,
+        to: trace.to_addr().ok()?.copied(),
+        selector: trace.selector().ok()?.copied(),
+        is_top_level: trace.depth().ok()? == 0,
+        has_value: trace.has_value().ok()?,
+    })
+}
+
+fn matches_trace_fields(filter: &TraceFilter, fields: &TraceMatchFields) -> bool {
+    if let Some(expected) = filter.is_top_level
+        && fields.is_top_level != expected
+    {
+        return false;
+    }
+    if let Some(expected) = filter.has_value
+        && fields.has_value != expected
+    {
+        return false;
+    }
+    clause_matches(&fields.from, &filter.from)
+        && optional_clause_matches(fields.to, &filter.to)
+        && optional_clause_matches(fields.selector, &filter.selector)
+}
+
 pub fn exact_match_frame(trace: &CallFrameView<'_>, filter: &TraceFilter) -> bool {
-    let from = match trace.from_addr() {
-        Ok(from) => from,
-        Err(_) => return false,
-    };
-    if !clause_matches(from, &filter.from) {
-        return false;
-    }
-
-    let to = match trace.to_addr() {
-        Ok(to) => to,
-        Err(_) => return false,
-    };
-    if !optional_clause_matches(to.copied(), &filter.to) {
-        return false;
-    }
-
-    let selector = match trace.selector() {
-        Ok(selector) => selector,
-        Err(_) => return false,
-    };
-    if !optional_clause_matches(selector.copied(), &filter.selector) {
-        return false;
-    }
-
-    if let Some(expected) = filter.is_top_level {
-        match trace.depth() {
-            Ok(depth) if (depth == 0) == expected => {}
-            _ => return false,
-        }
-    }
-
-    if let Some(expected) = filter.has_value {
-        match trace.has_value() {
-            Ok(has_value) if has_value == expected => {}
-            _ => return false,
-        }
-    }
-
-    true
+    trace_fields_for_view(trace)
+        .map(|fields| matches_trace_fields(filter, &fields))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -154,19 +142,28 @@ mod tests {
         out
     }
 
-    fn encode_frame(typ: u8, flags: u64, input: &[u8], depth: u64, value: &[u8]) -> Vec<u8> {
+    #[derive(Clone, Copy, Default)]
+    struct TraceFrameParts<'a> {
+        typ: u8,
+        flags: u64,
+        input: &'a [u8],
+        depth: u64,
+        value: &'a [u8],
+    }
+
+    fn encode_frame(parts: TraceFrameParts<'_>) -> Vec<u8> {
         let fields = vec![
-            encode_field(typ),
-            encode_field(flags),
+            encode_field(parts.typ),
+            encode_field(parts.flags),
             encode_bytes(&[1u8; 20]),
             encode_bytes(&[2u8; 20]),
-            encode_bytes(value),
+            encode_bytes(parts.value),
             encode_field(10u64),
             encode_field(9u64),
-            encode_bytes(input),
+            encode_bytes(parts.input),
             encode_bytes(&[]),
             encode_field(1u8),
-            encode_field(depth),
+            encode_field(parts.depth),
         ];
         let mut out = Vec::new();
         alloy_rlp::Header {
@@ -181,12 +178,16 @@ mod tests {
     }
 
     fn frame_view() -> CallFrameView<'static> {
-        frame_view_with_type(0, 0, &[1, 2, 3, 4, 5])
+        frame_view_with_parts(TraceFrameParts {
+            input: &[1, 2, 3, 4, 5],
+            value: &[0, 7],
+            ..Default::default()
+        })
     }
 
-    fn frame_view_with_type(typ: u8, flags: u64, input: &[u8]) -> CallFrameView<'static> {
+    fn frame_view_with_parts(parts: TraceFrameParts<'_>) -> CallFrameView<'static> {
         let block = {
-            let frame = encode_frame(typ, flags, input, 0, &[0, 7]);
+            let frame = encode_frame(parts);
             let mut tx = Vec::new();
             alloy_rlp::Header {
                 list: true,
@@ -256,7 +257,12 @@ mod tests {
             status: 1,
             depth: 0,
         };
-        let view = frame_view_with_type(3, 0, &[1, 2, 3, 4, 5]);
+        let view = frame_view_with_parts(TraceFrameParts {
+            typ: 3,
+            input: &[1, 2, 3, 4, 5],
+            value: &[0, 7],
+            ..Default::default()
+        });
 
         assert_eq!(
             filter.matches_trace(&owned_trace),
