@@ -139,7 +139,7 @@ Traces are now a concrete family implementation rather than a placeholder.
 
 They currently have:
 
-- raw per-block `trace_rlp` blob storage plus compact trace headers
+- flattened per-block trace frame blob storage plus compact trace headers
 - trace-owned directory and bitmap index artifacts
 - trace query execution and exact-match materialization
 - shared pagination and publication behavior

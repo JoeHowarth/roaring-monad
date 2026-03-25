@@ -278,7 +278,7 @@ Trace stream pages use the same shared sharded-page mechanics as logs, but with 
 Each block with traces persists:
 
 - `block_trace_header`, keyed by `<block_num>`, containing trace offsets and transaction starts for the block
-- `block_trace_blob`, keyed by `<block_num>`, containing the raw per-block `trace_rlp`
+- `block_trace_blob`, keyed by `<block_num>`, containing the flattened concatenation of per-frame RLP bytes for that block
 
 Materialization resolves `trace_id -> block_num` through the trace directory, then slices the block trace payload with the trace header.
 

@@ -725,21 +725,17 @@ impl<M: MetaStore, B: BlobStore> TracePayloadTable<M, B> {
         let Some(header) = self.block_trace_headers.get(block_num).await? else {
             return Ok(None);
         };
-        let Some(window) = load_offset_item_window(
+        let Some(frame) = load_offset_item_range(
             &self.blob_table,
             &BlockTraceBlobSpec::key(block_num),
             &header.offsets,
             local_ordinal,
+            "invalid block trace range",
         )
         .await?
         else {
             return Ok(None);
         };
-        let frame_len = crate::traces::materialize::rlp_element_len(window.as_ref())?;
-        if frame_len > window.len() {
-            return Err(Error::Decode("trace frame extends past read window"));
-        }
-        let frame = window.slice(..frame_len);
         let tx_idx = header
             .tx_idx_for_trace(local_ordinal)
             .ok_or(Error::Decode("missing tx_idx for trace"))?;
@@ -974,33 +970,6 @@ async fn load_offset_item_range<B: BlobStore>(
     };
     let (start, end) = window;
     blob_table.read_range(key, start, end).await
-}
-
-async fn load_offset_item_window<B: BlobStore>(
-    blob_table: &BlobTable<B>,
-    key: &[u8],
-    offsets: &crate::core::offsets::BucketedOffsets,
-    local_ordinal: usize,
-) -> Result<Option<Bytes>> {
-    let Some(start) = offsets.get(local_ordinal) else {
-        return Ok(None);
-    };
-
-    if let Some(end) = offsets.get(local_ordinal + 1) {
-        if end < start {
-            return Err(Error::Decode("invalid block trace range"));
-        }
-        return blob_table.read_range(key, start, end).await;
-    }
-
-    let Some(blob) = blob_table.get(key).await? else {
-        return Ok(None);
-    };
-    let start = usize::try_from(start).map_err(|_| Error::Decode("trace blob range overflow"))?;
-    if start > blob.len() {
-        return Err(Error::Decode("trace start offset past blob end"));
-    }
-    Ok(Some(blob.slice(start..)))
 }
 
 fn offset_window(

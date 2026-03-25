@@ -1,9 +1,7 @@
-use alloy_rlp::Header;
-
 use crate::core::directory_resolver::{ResolvedPrimaryLocation, resolve_primary_id};
 use crate::core::ids::TraceId;
 use crate::core::refs::BlockRef;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::query::runner::{MaterializerCaches, QueryMaterializer, cached_parent_block_ref};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
@@ -79,14 +77,4 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
     fn into_output(item: Self::Item) -> Self::Output {
         item
     }
-}
-
-/// Compute the total encoded length of the RLP element starting at `buf`.
-pub(crate) fn rlp_element_len(buf: &[u8]) -> Result<usize> {
-    let mut remaining = buf;
-    let original_len = remaining.len();
-    let header =
-        Header::decode(&mut remaining).map_err(|_| Error::Decode("invalid trace frame header"))?;
-    let header_len = original_len - remaining.len();
-    Ok(header_len + header.payload_length)
 }

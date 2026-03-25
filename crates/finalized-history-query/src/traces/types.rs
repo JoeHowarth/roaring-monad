@@ -39,10 +39,10 @@ pub struct BlockTraceHeader {
 
 impl BlockTraceHeader {
     pub fn trace_count(&self) -> usize {
-        self.offsets.len()
+        self.offsets.len().saturating_sub(1)
     }
 
-    pub fn trace_start(&self, local_ordinal: usize) -> Result<u64> {
+    pub fn offset(&self, local_ordinal: usize) -> Result<u64> {
         self.offsets
             .get(local_ordinal)
             .ok_or(Error::Decode("trace ordinal out of bounds"))

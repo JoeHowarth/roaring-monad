@@ -138,12 +138,12 @@ The logs layer owns:
 The traces layer owns:
 
 - traces-owned schema, codecs, keys, and table specs
-- raw per-block `trace_rlp` blob storage plus compact per-block trace headers
+- flattened per-block trace frame blob storage plus compact per-block trace headers
 - trace block metadata reads and writes
 - trace block-window to trace-ID-window mapping
 - zero-copy `CallFrameView` access over stored RLP bytes
 - trace exact-match materialization from stored bytes
-- traces-specific stream fanout from `trace_rlp`
+- traces-specific stream fanout from the input `trace_rlp`
 - stream fanout for `from`, `to`, `selector`, and `has_value`
 - traces-specific sequencing state (`next_trace_id`) and per-block ingest behavior
 - public service-level `query_traces` execution over trace-owned indexes
@@ -346,7 +346,7 @@ Shared metadata:
 
 Trace metadata and blobs:
 
-- `block_trace_blob` blob table, key `<block_num>` -> raw per-block `trace_rlp`
+- `block_trace_blob` blob table, key `<block_num>` -> flat concatenation of per-frame RLP bytes
 - `trace_dir_bucket` table, key `<trace_bucket_start>` -> compact canonical directory summary
 - `trace_dir_sub_bucket` table, key `<trace_sub_bucket_start>` -> compact canonical sub-bucket summary
 - `trace_dir_by_block` scannable table, partition `<trace_sub_bucket_start>`, clustering `<block_num>` -> immutable frontier fragment

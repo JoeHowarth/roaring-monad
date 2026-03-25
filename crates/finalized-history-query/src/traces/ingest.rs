@@ -22,12 +22,7 @@ pub async fn persist_trace_artifacts<M: MetaStore, B: BlobStore>(
     block_num: u64,
     trace_rlp: &[u8],
 ) -> Result<usize> {
-    let (header, trace_count) = build_block_trace_header(trace_rlp)?;
-    let block_blob = if trace_count == 0 {
-        Bytes::new()
-    } else {
-        Bytes::copy_from_slice(trace_rlp)
-    };
+    let (header, block_blob, trace_count) = build_block_trace_artifacts(trace_rlp)?;
     tables
         .block_trace_blobs
         .put_block(block_num, block_blob, &header)
@@ -83,13 +78,14 @@ pub async fn persist_trace_stream_fragments<M: MetaStore, B: BlobStore>(
     .await
 }
 
-fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize)> {
+fn build_block_trace_artifacts(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, Bytes, usize)> {
     if trace_rlp.is_empty() {
-        return Ok((empty_trace_header(), 0));
+        return Ok((empty_trace_header(), Bytes::new(), 0));
     }
 
     let mut offsets = BucketedOffsets::new();
     let mut tx_starts = Vec::new();
+    let mut flat_blob = Vec::<u8>::new();
     let mut trace_count = 0usize;
     let mut buf = trace_rlp;
     let txs =
@@ -119,14 +115,22 @@ fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize
             return Err(Error::Decode("transaction trace list has trailing bytes"));
         }
         for frame in frames {
-            offsets.push(crate::core::offsets::byte_offset_in(trace_rlp, frame))?;
+            offsets.push(
+                u64::try_from(flat_blob.len())
+                    .map_err(|_| Error::Decode("trace blob offset overflow"))?,
+            )?;
+            flat_blob.extend_from_slice(frame);
             trace_count = trace_count.saturating_add(1);
         }
     }
 
     if trace_count == 0 {
-        return Ok((empty_trace_header(), 0));
+        return Ok((empty_trace_header(), Bytes::new(), 0));
     }
+
+    offsets.push(
+        u64::try_from(flat_blob.len()).map_err(|_| Error::Decode("trace blob size overflow"))?,
+    )?;
 
     Ok((
         BlockTraceHeader {
@@ -134,6 +138,7 @@ fn build_block_trace_header(trace_rlp: &[u8]) -> Result<(BlockTraceHeader, usize
             offsets,
             tx_starts,
         },
+        Bytes::from(flat_blob),
         trace_count,
     ))
 }
@@ -148,17 +153,89 @@ fn empty_trace_header() -> BlockTraceHeader {
 
 #[cfg(test)]
 mod tests {
+    use alloy_rlp::Encodable;
     use futures::executor::block_on;
 
     use crate::core::layout::DIRECTORY_SUB_BUCKET_SIZE;
     use crate::kernel::codec::StorageCodec;
     use crate::kernel::table_specs::ScannableTableSpec;
     use crate::kernel::table_specs::u64_key;
+    use crate::kernel::table_specs::{BlobTableSpec, PointTableSpec};
     use crate::store::blob::InMemoryBlobStore;
     use crate::store::meta::InMemoryMetaStore;
+    use crate::store::traits::BlobStore;
     use crate::traces::table_specs::TraceDirByBlockSpec;
-    use crate::traces::types::DirByBlock;
+    use crate::traces::table_specs::{BlockTraceBlobSpec, BlockTraceHeaderSpec};
+    use crate::traces::types::{BlockTraceHeader, DirByBlock};
     use crate::{store::traits::MetaStore, tables::Tables};
+
+    use super::persist_trace_artifacts;
+
+    fn encode_bytes(value: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_field<T: Encodable>(value: T) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_frame(input: &[u8], seed: u8) -> Vec<u8> {
+        let fields = vec![
+            encode_field(0u8),
+            encode_field(0u64),
+            encode_bytes(&[seed; 20]),
+            encode_bytes(&[seed + 1; 20]),
+            encode_bytes(&[seed]),
+            encode_field(100u64),
+            encode_field(90u64),
+            encode_bytes(input),
+            encode_bytes(&[]),
+            encode_field(1u8),
+            encode_field(0u64),
+        ];
+        let mut out = Vec::new();
+        alloy_rlp::Header {
+            list: true,
+            payload_length: fields.iter().map(Vec::len).sum(),
+        }
+        .encode(&mut out);
+        for field in fields {
+            out.extend_from_slice(&field);
+        }
+        out
+    }
+
+    fn encode_trace_block(txs: Vec<Vec<Vec<u8>>>) -> Vec<u8> {
+        let tx_blobs = txs
+            .into_iter()
+            .map(|frames| {
+                let mut tx = Vec::new();
+                alloy_rlp::Header {
+                    list: true,
+                    payload_length: frames.iter().map(Vec::len).sum(),
+                }
+                .encode(&mut tx);
+                for frame in frames {
+                    tx.extend_from_slice(&frame);
+                }
+                tx
+            })
+            .collect::<Vec<_>>();
+        let mut out = Vec::new();
+        alloy_rlp::Header {
+            list: true,
+            payload_length: tx_blobs.iter().map(Vec::len).sum(),
+        }
+        .encode(&mut out);
+        for tx in tx_blobs {
+            out.extend_from_slice(&tx);
+        }
+        out
+    }
 
     #[test]
     fn persist_trace_dir_fragments_write_each_spanned_sub_bucket() {
@@ -192,6 +269,53 @@ mod tests {
                     first_trace_id + u64::from(count)
                 );
             }
+        });
+    }
+
+    #[test]
+    fn persist_trace_artifacts_flattens_frames_and_writes_sentinel_offsets() {
+        block_on(async {
+            let meta = InMemoryMetaStore::default();
+            let blob = InMemoryBlobStore::default();
+            let tables = Tables::without_cache(meta.clone(), blob.clone());
+
+            let frame0 = encode_frame(&[1, 2, 3, 4], 7);
+            let frame1 = encode_frame(&[5, 6, 7, 8], 9);
+            let trace_rlp = encode_trace_block(vec![vec![frame0.clone()], vec![frame1.clone()]]);
+
+            let trace_count = persist_trace_artifacts(&tables, 700, &trace_rlp)
+                .await
+                .expect("persist trace artifacts");
+
+            assert_eq!(trace_count, 2);
+
+            let stored_blob = blob
+                .get_blob(BlockTraceBlobSpec::TABLE, &BlockTraceBlobSpec::key(700))
+                .await
+                .expect("load blob")
+                .expect("trace blob present");
+            let mut expected_blob = Vec::new();
+            expected_blob.extend_from_slice(&frame0);
+            expected_blob.extend_from_slice(&frame1);
+            assert_eq!(stored_blob.as_ref(), expected_blob.as_slice());
+
+            let header_bytes = meta
+                .get(BlockTraceHeaderSpec::TABLE, &BlockTraceHeaderSpec::key(700))
+                .await
+                .expect("load header")
+                .expect("trace header present");
+            let header = BlockTraceHeader::decode(&header_bytes.value).expect("decode header");
+            assert_eq!(header.trace_count(), 2);
+            assert_eq!(header.offset(0).expect("offset 0"), 0);
+            assert_eq!(
+                header.offset(1).expect("offset 1"),
+                u64::try_from(frame0.len()).expect("frame len"),
+            );
+            assert_eq!(
+                header.offset(2).expect("offset 2"),
+                u64::try_from(frame0.len() + frame1.len()).expect("blob len"),
+            );
+            assert_eq!(header.tx_starts, vec![0, 1]);
         });
     }
 }
