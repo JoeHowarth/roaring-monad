@@ -15,15 +15,22 @@ pub struct TraceRef {
     tx_idx: u32,
     trace_idx: u32,
     frame_bytes: Bytes,
-    offsets: TraceOffsets,
+    layout: TraceLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TraceOffsets {
+struct TraceLayout {
+    typ_field_start: u32,
+    flags_field_start: u32,
+    from_field_start: u32,
     to_field_start: u32,
     value_field_start: u32,
+    gas_field_start: u32,
+    gas_used_field_start: u32,
     input_field_start: u32,
     output_field_start: u32,
+    status_field_start: u32,
+    depth_field_start: u32,
 }
 
 impl TraceRef {
@@ -34,14 +41,14 @@ impl TraceRef {
         trace_idx: u32,
         frame_bytes: Bytes,
     ) -> Result<Self> {
-        let offsets = parse_trace_offsets(frame_bytes.as_ref())?;
+        let layout = parse_trace_layout(frame_bytes.as_ref())?;
         Ok(Self {
             block_num,
             block_hash,
             tx_idx,
             trace_idx,
             frame_bytes,
-            offsets,
+            layout,
         })
     }
 
@@ -66,83 +73,80 @@ impl TraceRef {
     }
 
     pub fn typ(&self) -> Result<u8> {
-        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
-        decode_u8(field_at(self.frame_bytes.as_ref(), payload_start)?)
+        decode_u8(field_at(
+            self.frame_bytes.as_ref(),
+            self.layout.typ_field_start as usize,
+        )?)
     }
 
     pub fn flags(&self) -> Result<u64> {
-        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
-        let flags_start = next_field_start(self.frame_bytes.as_ref(), payload_start)?;
-        decode_u64(field_at(self.frame_bytes.as_ref(), flags_start)?)
+        decode_u64(field_at(
+            self.frame_bytes.as_ref(),
+            self.layout.flags_field_start as usize,
+        )?)
     }
 
     pub fn from_addr(&self) -> Result<&Address20> {
-        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
-        let flags_start = next_field_start(self.frame_bytes.as_ref(), payload_start)?;
-        let from_start = next_field_start(self.frame_bytes.as_ref(), flags_start)?;
-        decode_address(field_at(self.frame_bytes.as_ref(), from_start)?)
+        decode_address(field_at(
+            self.frame_bytes.as_ref(),
+            self.layout.from_field_start as usize,
+        )?)
     }
 
     pub fn to_addr(&self) -> Result<Option<&Address20>> {
         decode_optional_address(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.to_field_start as usize,
+            self.layout.to_field_start as usize,
         )?)
     }
 
     pub fn value_bytes(&self) -> Result<&[u8]> {
         decode_payload_bytes(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.value_field_start as usize,
+            self.layout.value_field_start as usize,
         )?)
     }
 
     pub fn gas(&self) -> Result<u64> {
-        let gas_start = next_field_start(
+        decode_u64(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.value_field_start as usize,
-        )?;
-        decode_u64(field_at(self.frame_bytes.as_ref(), gas_start)?)
+            self.layout.gas_field_start as usize,
+        )?)
     }
 
     pub fn gas_used(&self) -> Result<u64> {
-        let gas_start = next_field_start(
+        decode_u64(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.value_field_start as usize,
-        )?;
-        let gas_used_start = next_field_start(self.frame_bytes.as_ref(), gas_start)?;
-        decode_u64(field_at(self.frame_bytes.as_ref(), gas_used_start)?)
+            self.layout.gas_used_field_start as usize,
+        )?)
     }
 
     pub fn input(&self) -> Result<&[u8]> {
         decode_payload_bytes(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.input_field_start as usize,
+            self.layout.input_field_start as usize,
         )?)
     }
 
     pub fn output(&self) -> Result<&[u8]> {
         decode_payload_bytes(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.output_field_start as usize,
+            self.layout.output_field_start as usize,
         )?)
     }
 
     pub fn status(&self) -> Result<u8> {
-        let status_start = next_field_start(
+        decode_u8(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.output_field_start as usize,
-        )?;
-        decode_u8(field_at(self.frame_bytes.as_ref(), status_start)?)
+            self.layout.status_field_start as usize,
+        )?)
     }
 
     pub fn depth(&self) -> Result<u64> {
-        let status_start = next_field_start(
+        decode_u64(field_at(
             self.frame_bytes.as_ref(),
-            self.offsets.output_field_start as usize,
-        )?;
-        let depth_start = next_field_start(self.frame_bytes.as_ref(), status_start)?;
-        decode_u64(field_at(self.frame_bytes.as_ref(), depth_start)?)
+            self.layout.depth_field_start as usize,
+        )?)
     }
 
     pub fn selector(&self) -> Result<Option<&Selector4>> {
@@ -177,71 +181,93 @@ impl std::fmt::Debug for TraceRef {
 #[derive(Debug, Clone)]
 pub struct CallFrameView<'a> {
     pub frame_bytes: &'a [u8],
-    fields: Vec<&'a [u8]>,
+    layout: TraceLayout,
 }
 
 impl<'a> CallFrameView<'a> {
     pub fn new(frame_bytes: &'a [u8]) -> Result<Self> {
-        let mut buf = frame_bytes;
-        let PayloadView::List(fields) = Header::decode_raw(&mut buf)
-            .map_err(|_| Error::Decode("invalid trace call frame rlp"))?
-        else {
-            return Err(Error::Decode("trace call frame must be an rlp list"));
-        };
-        if !buf.is_empty() {
-            return Err(Error::Decode("trace call frame has trailing bytes"));
-        }
-        if fields.len() != CALL_FRAME_FIELD_COUNT {
-            return Err(Error::Decode("unexpected trace call frame field count"));
-        }
+        let layout = parse_trace_layout(frame_bytes)?;
         Ok(Self {
             frame_bytes,
-            fields,
+            layout,
         })
     }
 
     pub fn typ(&self) -> Result<u8> {
-        decode_u8(self.field(0)?)
+        decode_u8(field_at(
+            self.frame_bytes,
+            self.layout.typ_field_start as usize,
+        )?)
     }
 
     pub fn flags(&self) -> Result<u64> {
-        decode_u64(self.field(1)?)
+        decode_u64(field_at(
+            self.frame_bytes,
+            self.layout.flags_field_start as usize,
+        )?)
     }
 
     pub fn from_addr(&self) -> Result<&'a Address20> {
-        decode_address(self.field(2)?)
+        decode_address(field_at(
+            self.frame_bytes,
+            self.layout.from_field_start as usize,
+        )?)
     }
 
     pub fn to_addr(&self) -> Result<Option<&'a Address20>> {
-        decode_optional_address(self.field(3)?)
+        decode_optional_address(field_at(
+            self.frame_bytes,
+            self.layout.to_field_start as usize,
+        )?)
     }
 
     pub fn value_bytes(&self) -> Result<&'a [u8]> {
-        decode_payload_bytes(self.field(4)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes,
+            self.layout.value_field_start as usize,
+        )?)
     }
 
     pub fn gas(&self) -> Result<u64> {
-        decode_u64(self.field(5)?)
+        decode_u64(field_at(
+            self.frame_bytes,
+            self.layout.gas_field_start as usize,
+        )?)
     }
 
     pub fn gas_used(&self) -> Result<u64> {
-        decode_u64(self.field(6)?)
+        decode_u64(field_at(
+            self.frame_bytes,
+            self.layout.gas_used_field_start as usize,
+        )?)
     }
 
     pub fn input(&self) -> Result<&'a [u8]> {
-        decode_payload_bytes(self.field(7)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes,
+            self.layout.input_field_start as usize,
+        )?)
     }
 
     pub fn output(&self) -> Result<&'a [u8]> {
-        decode_payload_bytes(self.field(8)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes,
+            self.layout.output_field_start as usize,
+        )?)
     }
 
     pub fn status(&self) -> Result<u8> {
-        decode_u8(self.field(9)?)
+        decode_u8(field_at(
+            self.frame_bytes,
+            self.layout.status_field_start as usize,
+        )?)
     }
 
     pub fn depth(&self) -> Result<u64> {
-        decode_u64(self.field(10)?)
+        decode_u64(field_at(
+            self.frame_bytes,
+            self.layout.depth_field_start as usize,
+        )?)
     }
 
     pub fn selector(&self) -> Result<Option<&'a Selector4>> {
@@ -261,18 +287,11 @@ impl<'a> CallFrameView<'a> {
         let flags = self.flags()?;
         Ok(matches!((typ, flags), (0, 0 | 1) | (1, _) | (2, _)))
     }
-
-    fn field(&self, index: usize) -> Result<&'a [u8]> {
-        self.fields
-            .get(index)
-            .copied()
-            .ok_or(Error::Decode("trace call frame field out of bounds"))
-    }
 }
 
-fn parse_trace_offsets(frame_bytes: &[u8]) -> Result<TraceOffsets> {
-    let payload_start = trace_payload_start(frame_bytes)?;
-    let flags_start = next_field_start(frame_bytes, payload_start)?;
+fn parse_trace_layout(frame_bytes: &[u8]) -> Result<TraceLayout> {
+    let typ_start = trace_payload_start(frame_bytes)?;
+    let flags_start = next_field_start(frame_bytes, typ_start)?;
     let from_start = next_field_start(frame_bytes, flags_start)?;
     let to_start = next_field_start(frame_bytes, from_start)?;
     let value_start = next_field_start(frame_bytes, to_start)?;
@@ -281,17 +300,32 @@ fn parse_trace_offsets(frame_bytes: &[u8]) -> Result<TraceOffsets> {
     let input_start = next_field_start(frame_bytes, gas_used_start)?;
     let output_start = next_field_start(frame_bytes, input_start)?;
     let status_start = next_field_start(frame_bytes, output_start)?;
-    let _depth_start = next_field_start(frame_bytes, status_start)?;
+    let depth_start = next_field_start(frame_bytes, status_start)?;
+    let _end = next_field_start(frame_bytes, depth_start)?;
 
-    Ok(TraceOffsets {
+    Ok(TraceLayout {
+        typ_field_start: u32::try_from(typ_start)
+            .map_err(|_| Error::Decode("trace typ field start overflow"))?,
+        flags_field_start: u32::try_from(flags_start)
+            .map_err(|_| Error::Decode("trace flags field start overflow"))?,
+        from_field_start: u32::try_from(from_start)
+            .map_err(|_| Error::Decode("trace from field start overflow"))?,
         to_field_start: u32::try_from(to_start)
             .map_err(|_| Error::Decode("trace to field start overflow"))?,
         value_field_start: u32::try_from(value_start)
             .map_err(|_| Error::Decode("trace value field start overflow"))?,
+        gas_field_start: u32::try_from(gas_start)
+            .map_err(|_| Error::Decode("trace gas field start overflow"))?,
+        gas_used_field_start: u32::try_from(gas_used_start)
+            .map_err(|_| Error::Decode("trace gas_used field start overflow"))?,
         input_field_start: u32::try_from(input_start)
             .map_err(|_| Error::Decode("trace input field start overflow"))?,
         output_field_start: u32::try_from(output_start)
             .map_err(|_| Error::Decode("trace output field start overflow"))?,
+        status_field_start: u32::try_from(status_start)
+            .map_err(|_| Error::Decode("trace status field start overflow"))?,
+        depth_field_start: u32::try_from(depth_start)
+            .map_err(|_| Error::Decode("trace depth field start overflow"))?,
     })
 }
 

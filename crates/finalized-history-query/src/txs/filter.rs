@@ -58,22 +58,17 @@ pub fn exact_match(tx: &TxRef, filter: &TxFilter) -> bool {
         return false;
     }
 
-    let signed_tx = match tx.signed_tx() {
-        Ok(signed_tx) => signed_tx,
+    let to = match tx.to_addr() {
+        Ok(to) => to,
         Err(_) => {
             return filter.to.is_none() && filter.selector.is_none();
         }
-    };
-
-    let to = match signed_tx.to_addr() {
-        Ok(to) => to,
-        Err(_) => return false,
     };
     if !optional_clause_matches(to, &filter.to) {
         return false;
     }
 
-    let selector = match signed_tx.selector() {
+    let selector = match tx.selector() {
         Ok(selector) => selector,
         Err(_) => return false,
     };
