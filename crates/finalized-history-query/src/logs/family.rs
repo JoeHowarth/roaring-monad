@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
 use crate::ingest::indexed_family::finalize_indexed_family_ingest;
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
-use crate::logs::ingest::{persist_log_artifacts, persist_stream_fragments};
+use crate::logs::ingest::{persist_log_artifacts, persist_log_stream_fragments, plan_log_ingest};
 use crate::logs::types::{LogSequencingState, StreamBitmapMeta};
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -36,24 +36,29 @@ impl LogsFamily {
     /// and seals any directories or bitmap pages that became complete in the process.
     pub async fn ingest_block<M: MetaStore, B: BlobStore>(
         &self,
-        config: &Config,
+        _config: &Config,
         runtime: &Runtime<M, B>,
         state: &mut LogSequencingState,
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_log_id = state.next_log_id.get();
+        let plan = plan_log_ingest(block, from_next_log_id)?;
 
-        persist_log_artifacts(config, &runtime.tables, block, from_next_log_id).await?;
+        let written_count = persist_log_artifacts(&runtime.tables, block.block_num, &plan).await?;
 
-        let touched_pages =
-            persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;
+        let touched_pages = persist_log_stream_fragments(
+            &runtime.tables,
+            block.block_num,
+            &plan.grouped_stream_values,
+        )
+        .await?;
         let next_log_id = finalize_indexed_family_ingest(
             &runtime.tables.log_dir,
             &runtime.tables.log_streams,
             &runtime.tables.log_open_bitmap_pages,
             block.block_num,
             from_next_log_id,
-            block.logs.len() as u32,
+            written_count as u32,
             touched_pages,
             STREAM_PAGE_LOCAL_ID_SPAN,
             |count, min_local, max_local| StreamBitmapMeta {
@@ -65,6 +70,6 @@ impl LogsFamily {
         .await?;
 
         state.next_log_id = LogId::new(next_log_id);
-        Ok(block.logs.len())
+        Ok(written_count)
     }
 }

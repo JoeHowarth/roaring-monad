@@ -283,7 +283,7 @@ mod tests {
                 meta,
                 blob,
                 BytesCacheConfig {
-                    block_log_blobs: TableCacheConfig {
+                    log_block_blobs: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -303,7 +303,7 @@ mod tests {
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
             assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
 
-            let metrics = tables.metrics_snapshot().block_log_blobs;
+            let metrics = tables.metrics_snapshot().log_block_blobs;
             assert_eq!(metrics.misses, 1);
             assert_eq!(metrics.hits, 1);
             assert_eq!(metrics.inserts, 1);
@@ -380,7 +380,7 @@ mod tests {
                 meta,
                 blob,
                 BytesCacheConfig {
-                    block_log_blobs: TableCacheConfig {
+                    log_block_blobs: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -401,7 +401,7 @@ mod tests {
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
             assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
 
-            let metrics = tables.metrics_snapshot().block_log_blobs;
+            let metrics = tables.metrics_snapshot().log_block_blobs;
             assert_eq!(metrics.misses, 3);
             assert_eq!(metrics.hits, 3);
             assert_eq!(metrics.inserts, 3);

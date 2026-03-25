@@ -173,7 +173,7 @@ This means:
 - local log `1` lives at bytes `[41, 97)`
 - local log `2` lives at bytes `[97, 124)`
 
-Empty blocks do not need `block_log_header` or `block_log_blob` entries. They are represented by equal adjacent `first_log_ids` in the directory bucket and by `count == 0` in `BlockRecord.logs`.
+Empty log blocks still persist `block_log_header` and `block_log_blob` with a zero-count sentinel offset table and an empty blob. Visibility and sequencing still come from `BlockRecord.logs.count == 0`.
 
 ## Logs Block Payload Objects
 

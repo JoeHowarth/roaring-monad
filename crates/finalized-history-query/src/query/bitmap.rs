@@ -441,10 +441,10 @@ mod tests {
                 meta,
                 blob,
                 BytesCacheConfig {
-                    bitmap_page_meta: TableCacheConfig {
+                    log_bitmap_page_meta: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
-                    bitmap_page_blobs: TableCacheConfig {
+                    log_bitmap_page_blobs: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()
@@ -524,7 +524,7 @@ mod tests {
                 meta,
                 blob,
                 BytesCacheConfig {
-                    bitmap_page_meta: TableCacheConfig {
+                    log_bitmap_page_meta: TableCacheConfig {
                         max_bytes: 4 * 1024,
                     },
                     ..BytesCacheConfig::disabled()

@@ -19,28 +19,28 @@ impl TableCacheConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BytesCacheConfig {
     pub block_records: TableCacheConfig,
-    pub block_log_header: TableCacheConfig,
+    pub log_block_headers: TableCacheConfig,
     pub log_dir_buckets: TableCacheConfig,
     pub log_dir_sub_buckets: TableCacheConfig,
-    pub block_log_blobs: TableCacheConfig,
+    pub log_block_blobs: TableCacheConfig,
     pub block_tx_blobs: TableCacheConfig,
     pub block_trace_blobs: TableCacheConfig,
-    pub bitmap_page_meta: TableCacheConfig,
-    pub bitmap_page_blobs: TableCacheConfig,
+    pub log_bitmap_page_meta: TableCacheConfig,
+    pub log_bitmap_page_blobs: TableCacheConfig,
 }
 
 impl BytesCacheConfig {
     pub const fn disabled() -> Self {
         Self {
             block_records: TableCacheConfig::disabled(),
-            block_log_header: TableCacheConfig::disabled(),
+            log_block_headers: TableCacheConfig::disabled(),
             log_dir_buckets: TableCacheConfig::disabled(),
             log_dir_sub_buckets: TableCacheConfig::disabled(),
-            block_log_blobs: TableCacheConfig::disabled(),
+            log_block_blobs: TableCacheConfig::disabled(),
             block_tx_blobs: TableCacheConfig::disabled(),
             block_trace_blobs: TableCacheConfig::disabled(),
-            bitmap_page_meta: TableCacheConfig::disabled(),
-            bitmap_page_blobs: TableCacheConfig::disabled(),
+            log_bitmap_page_meta: TableCacheConfig::disabled(),
+            log_bitmap_page_blobs: TableCacheConfig::disabled(),
         }
     }
 }
@@ -63,14 +63,14 @@ pub struct TableCacheMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BytesCacheMetrics {
     pub block_records: TableCacheMetrics,
-    pub block_log_header: TableCacheMetrics,
+    pub log_block_headers: TableCacheMetrics,
     pub log_dir_buckets: TableCacheMetrics,
     pub log_dir_sub_buckets: TableCacheMetrics,
-    pub block_log_blobs: TableCacheMetrics,
+    pub log_block_blobs: TableCacheMetrics,
     pub block_tx_blobs: TableCacheMetrics,
     pub block_trace_blobs: TableCacheMetrics,
-    pub bitmap_page_meta: TableCacheMetrics,
-    pub bitmap_page_blobs: TableCacheMetrics,
+    pub log_bitmap_page_meta: TableCacheMetrics,
+    pub log_bitmap_page_blobs: TableCacheMetrics,
 }
 
 #[derive(Clone, Debug)]

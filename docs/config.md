@@ -40,14 +40,14 @@ See [caching.md](caching.md) for cache design details.
 `BytesCacheConfig` currently includes independent byte budgets for:
 
 - `block_records`
-- `block_log_header`
+- `log_block_headers`
 - `log_dir_buckets`
 - `log_dir_sub_buckets`
-- `block_log_blobs`
+- `log_block_blobs`
 - `block_tx_blobs`
 - `block_trace_blobs`
-- `bitmap_page_meta`
-- `bitmap_page_blobs`
+- `log_bitmap_page_meta`
+- `log_bitmap_page_blobs`
 
 ## Stream Config
 

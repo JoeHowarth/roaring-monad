@@ -35,7 +35,7 @@ pub struct Tables<M, B> {
 
 Hot-path callers do not manually select a cache table or backend. They call
 the typed table reader for the artifact they need, such as
-`tables.block_log_headers().get(block_num)`. See [config.md](config.md) for
+`tables.block_log_headers.get(block_num)`. See [config.md](config.md) for
 `BytesCacheConfig`.
 
 ## Per-Table Byte Budgets

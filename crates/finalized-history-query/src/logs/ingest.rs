@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 
-use crate::config::Config;
 use crate::core::ids::LogId;
 use crate::core::offsets::BucketedOffsets;
 use crate::error::{Error, Result};
@@ -17,47 +16,54 @@ use crate::logs::types::BlockLogHeader;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 
-pub fn collect_stream_appends(
-    block: &FinalizedBlock,
-    first_log_id: u64,
-) -> BTreeMap<String, Vec<u32>> {
-    group_stream_values(block.logs.iter().enumerate().flat_map(|(index, log)| {
-        let global_log_id = LogId::new(primary_id_at_offset(first_log_id, index));
-        let shard = global_log_id.shard().get();
-        let local = global_log_id.local().get();
-
-        let mut entries = Vec::with_capacity(5);
-        entries.push((sharded_stream_id("addr", &log.address, shard), local));
-
-        if let Some(topic0) = log.topics.first() {
-            entries.push((sharded_stream_id("topic0", topic0, shard), local));
-        }
-
-        for (topic_index, topic) in log.topics.iter().enumerate().skip(1).take(3) {
-            let kind = match topic_index {
-                1 => "topic1",
-                2 => "topic2",
-                3 => "topic3",
-                _ => continue,
-            };
-            entries.push((sharded_stream_id(kind, topic, shard), local));
-        }
-
-        entries
-    }))
+#[derive(Debug, Clone)]
+pub struct LogIngestPlan {
+    pub header: BlockLogHeader,
+    pub block_blob: Bytes,
+    pub log_count: usize,
+    pub grouped_stream_values: BTreeMap<String, Vec<u32>>,
 }
 
-pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
+pub fn plan_log_ingest(block: &FinalizedBlock, first_log_id: u64) -> Result<LogIngestPlan> {
+    validate_logs(block)?;
+
+    let mut offsets = BucketedOffsets::new();
+    let mut out = Vec::<u8>::new();
+    let mut stream_values = Vec::new();
+
+    for (index, log) in block.logs.iter().enumerate() {
+        offsets.push(
+            u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
+        )?;
+        out.extend_from_slice(&log.encode());
+
+        let global_log_id = LogId::new(primary_id_at_offset(first_log_id, index));
+        stream_values.extend(stream_entries_for_log(log, global_log_id));
+    }
+
+    offsets
+        .push(u64::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?)?;
+
+    Ok(LogIngestPlan {
+        header: BlockLogHeader { offsets },
+        block_blob: Bytes::from(out),
+        log_count: block.logs.len(),
+        grouped_stream_values: group_stream_values(stream_values),
+    })
+}
+
+pub async fn persist_log_stream_fragments<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    first_log_id: u64,
+    block_num: u64,
+    grouped_values: &BTreeMap<String, Vec<u32>>,
 ) -> Result<Vec<(String, u32)>> {
-    let grouped_values = collect_stream_appends(block, first_log_id)
+    let grouped_values = grouped_values
+        .clone()
         .into_iter()
         .flat_map(|(stream, values)| values.into_iter().map(move |value| (stream.clone(), value)));
     bitmap_pages::persist_stream_fragments(
         &tables.log_streams,
-        block.block_num,
+        block_num,
         grouped_values,
         STREAM_PAGE_LOCAL_ID_SPAN,
     )
@@ -65,29 +71,15 @@ pub async fn persist_stream_fragments<M: MetaStore, B: BlobStore>(
 }
 
 pub async fn persist_log_artifacts<M: MetaStore, B: BlobStore>(
-    _config: &Config,
     tables: &Tables<M, B>,
-    block: &FinalizedBlock,
-    _first_log_id: u64,
-) -> Result<()> {
-    validate_logs(block)?;
-
-    let mut out = Vec::<u8>::new();
-    let mut offsets = BucketedOffsets::new();
-    for log in &block.logs {
-        offsets.push(
-            u64::try_from(out.len()).map_err(|_| Error::Decode("block log offset overflow"))?,
-        )?;
-        out.extend_from_slice(&log.encode());
-    }
-    offsets
-        .push(u64::try_from(out.len()).map_err(|_| Error::Decode("block log size overflow"))?)?;
-    let block_blob = Bytes::from(out);
-    let header = BlockLogHeader { offsets };
+    block_num: u64,
+    plan: &LogIngestPlan,
+) -> Result<usize> {
     tables
         .block_log_blobs
-        .put_block(block.block_num, block_blob, &header)
-        .await
+        .put_block(block_num, plan.block_blob.clone(), &plan.header)
+        .await?;
+    Ok(plan.log_count)
 }
 
 fn validate_logs(block: &FinalizedBlock) -> Result<()> {
@@ -128,9 +120,45 @@ fn validate_logs(block: &FinalizedBlock) -> Result<()> {
     Ok(())
 }
 
+fn stream_entries_for_log(
+    log: &crate::logs::types::Log,
+    global_log_id: LogId,
+) -> Vec<(String, u32)> {
+    let shard = global_log_id.shard().get();
+    let local = global_log_id.local().get();
+
+    let mut entries = Vec::with_capacity(5);
+    entries.push((sharded_stream_id("addr", &log.address, shard), local));
+
+    if let Some(topic0) = log.topics.first() {
+        entries.push((sharded_stream_id("topic0", topic0, shard), local));
+    }
+
+    for (topic_index, topic) in log.topics.iter().enumerate().skip(1).take(3) {
+        let kind = match topic_index {
+            1 => "topic1",
+            2 => "topic2",
+            3 => "topic3",
+            _ => continue,
+        };
+        entries.push((sharded_stream_id(kind, topic, shard), local));
+    }
+
+    entries
+}
+
+#[cfg(test)]
+pub fn collect_stream_appends(
+    block: &FinalizedBlock,
+    first_log_id: u64,
+) -> BTreeMap<String, Vec<u32>> {
+    plan_log_ingest(block, first_log_id)
+        .expect("valid log ingest plan")
+        .grouped_stream_values
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
     use crate::core::ids::LogId;
     use crate::core::layout::{DIRECTORY_BUCKET_SIZE, DIRECTORY_SUB_BUCKET_SIZE};
     use crate::error::Error;
@@ -150,7 +178,10 @@ mod tests {
     use crate::tables::Tables;
     use futures::executor::block_on;
 
-    use super::{collect_stream_appends, persist_log_artifacts, persist_stream_fragments};
+    use super::{
+        collect_stream_appends, persist_log_artifacts, persist_log_stream_fragments,
+        plan_log_ingest,
+    };
     use crate::ingest::bitmap_pages;
     use crate::ingest::primary_dir::compact_sealed_primary_directory;
     use crate::kernel::sharded_streams::page_start_local;
@@ -197,11 +228,11 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             let tables = Tables::without_cache(meta.clone(), blob.clone());
-            let config = Config::default();
             let logs = vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 1, 2)];
             let block = sample_block(7, 9, logs.clone());
+            let plan = plan_log_ingest(&block, 11).expect("plan log ingest");
 
-            persist_log_artifacts(&config, &tables, &block, 11)
+            persist_log_artifacts(&tables, block.block_num, &plan)
                 .await
                 .expect("persist artifacts");
 
@@ -235,14 +266,11 @@ mod tests {
         block_on(async {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
-            let tables = Tables::without_cache(meta.clone(), blob.clone());
-            let config = Config::default();
+            let _tables = Tables::without_cache(meta.clone(), blob.clone());
             let mut block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1)]);
             block.logs[0].topics = vec![[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
 
-            let err = persist_log_artifacts(&config, &tables, &block, 11)
-                .await
-                .expect_err("invalid log should fail");
+            let err = plan_log_ingest(&block, 11).expect_err("invalid log should fail");
 
             assert!(matches!(err, Error::InvalidParams("log topics exceed 4")));
             assert!(
@@ -263,15 +291,12 @@ mod tests {
     #[test]
     fn persist_log_artifacts_rejects_block_num_mismatch() {
         block_on(async {
-            let tables =
+            let _tables =
                 Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let mut block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1)]);
             block.logs[0].block_num = 8;
 
-            let err = persist_log_artifacts(&config, &tables, &block, 11)
-                .await
-                .expect_err("invalid log should fail");
+            let err = plan_log_ingest(&block, 11).expect_err("invalid log should fail");
 
             assert!(matches!(
                 err,
@@ -283,14 +308,11 @@ mod tests {
     #[test]
     fn persist_log_artifacts_rejects_non_canonical_log_order() {
         block_on(async {
-            let tables =
+            let _tables =
                 Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let block = sample_block(7, 9, vec![sample_log(7, 1, 0, 1), sample_log(7, 0, 1, 2)]);
 
-            let err = persist_log_artifacts(&config, &tables, &block, 11)
-                .await
-                .expect_err("invalid log order should fail");
+            let err = plan_log_ingest(&block, 11).expect_err("invalid log order should fail");
 
             assert!(matches!(
                 err,
@@ -302,14 +324,11 @@ mod tests {
     #[test]
     fn persist_log_artifacts_rejects_non_canonical_log_idx() {
         block_on(async {
-            let tables =
+            let _tables =
                 Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let block = sample_block(7, 9, vec![sample_log(7, 0, 0, 1), sample_log(7, 0, 2, 2)]);
 
-            let err = persist_log_artifacts(&config, &tables, &block, 11)
-                .await
-                .expect_err("invalid log index should fail");
+            let err = plan_log_ingest(&block, 11).expect_err("invalid log index should fail");
 
             assert!(matches!(
                 err,
@@ -321,9 +340,8 @@ mod tests {
     #[test]
     fn persist_log_artifacts_rejects_block_hash_mismatch() {
         block_on(async {
-            let tables =
+            let _tables =
                 Tables::without_cache(InMemoryMetaStore::default(), InMemoryBlobStore::default());
-            let config = Config::default();
             let mut invalid = sample_log(7, 0, 0, 1);
             invalid.block_hash = [0xaa; 32];
             let block = FinalizedBlock {
@@ -336,9 +354,7 @@ mod tests {
                 trace_rlp: Vec::new(),
             };
 
-            let err = persist_log_artifacts(&config, &tables, &block, 11)
-                .await
-                .expect_err("invalid block hash should fail");
+            let err = plan_log_ingest(&block, 11).expect_err("invalid block hash should fail");
 
             assert!(matches!(
                 err,
@@ -353,10 +369,10 @@ mod tests {
             let meta = InMemoryMetaStore::default();
             let blob = InMemoryBlobStore::default();
             let tables = Tables::without_cache(meta.clone(), blob.clone());
-            let config = Config::default();
             let block = sample_block(7, 9, Vec::new());
+            let plan = plan_log_ingest(&block, 11).expect("plan log ingest");
 
-            persist_log_artifacts(&config, &tables, &block, 11)
+            persist_log_artifacts(&tables, block.block_num, &plan)
                 .await
                 .expect("persist empty artifacts");
 
@@ -473,9 +489,11 @@ mod tests {
                 ],
             );
             let first_log_id = u64::from(STREAM_PAGE_LOCAL_ID_SPAN - 2);
-            let touched_pages = persist_stream_fragments(&tables, &block, first_log_id)
-                .await
-                .expect("persist stream fragments");
+            let plan = plan_log_ingest(&block, first_log_id).expect("plan log ingest");
+            let touched_pages =
+                persist_log_stream_fragments(&tables, block.block_num, &plan.grouped_stream_values)
+                    .await
+                    .expect("persist stream fragments");
             for (stream_id, page_start) in &touched_pages {
                 let _ = bitmap_pages::compact_stream_page(
                     &tables.log_streams,

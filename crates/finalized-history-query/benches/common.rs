@@ -271,10 +271,10 @@ pub fn build_counting_service() -> (CountingBenchService, Arc<BlobAccessCounters
             observe_upstream_finalized_block: Arc::new(static_observed_finalized_block),
             planner_max_or_terms: 256,
             bytes_cache: BytesCacheConfig {
-                block_log_header: TableCacheConfig { max_bytes: 1 << 20 },
+                log_block_headers: TableCacheConfig { max_bytes: 1 << 20 },
                 log_dir_buckets: TableCacheConfig { max_bytes: 1 << 20 },
                 log_dir_sub_buckets: TableCacheConfig { max_bytes: 1 << 20 },
-                block_log_blobs: TableCacheConfig { max_bytes: 4 << 20 },
+                log_block_blobs: TableCacheConfig { max_bytes: 4 << 20 },
                 ..BytesCacheConfig::disabled()
             },
             ..Config::default()

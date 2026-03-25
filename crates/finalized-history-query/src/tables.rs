@@ -127,7 +127,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             BlockHeaderTable::new(meta_store.table(BlockHeaderSpec::TABLE), no_cache());
         let block_log_headers = BlockLogHeaderTable::new(
             meta_store.table(BlockLogHeaderSpec::TABLE),
-            cache_for(config.block_log_header.max_bytes),
+            cache_for(config.log_block_headers.max_bytes),
         );
         let block_tx_headers =
             BlockTxHeaderTable::new(meta_store.table(BlockTxHeaderSpec::TABLE), no_cache());
@@ -193,12 +193,12 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
                 page_meta: StreamPageMetaTable::new(
                     meta_store.table(LogBitmapPageMetaSpec::TABLE),
-                    cache_for(config.bitmap_page_meta.max_bytes),
+                    cache_for(config.log_bitmap_page_meta.max_bytes),
                     LogBitmapPageMetaSpec::key,
                 ),
                 page_blobs: StreamPageBlobTable::new(
                     blob_store.table(LogBitmapPageBlobSpec::TABLE),
-                    cache_for(config.bitmap_page_blobs.max_bytes),
+                    cache_for(config.log_bitmap_page_blobs.max_bytes),
                     LogBitmapPageBlobSpec::key,
                 ),
             },
@@ -238,7 +238,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             block_log_blobs: BlockLogBlobTable {
                 blob_table: blob_store.table(BlockLogBlobSpec::TABLE),
-                cache: cache_for(config.block_log_blobs.max_bytes),
+                cache: cache_for(config.log_block_blobs.max_bytes),
                 block_log_headers,
             },
             block_tx_blobs: BlockTxBlobTable {
@@ -272,14 +272,14 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
     pub fn metrics_snapshot(&self) -> BytesCacheMetrics {
         BytesCacheMetrics {
             block_records: self.block_records.metrics(),
-            block_log_header: self.block_log_headers.metrics(),
+            log_block_headers: self.block_log_headers.metrics(),
             log_dir_buckets: self.log_dir.buckets.metrics(),
             log_dir_sub_buckets: self.log_dir.sub_buckets.metrics(),
-            block_log_blobs: self.block_log_blobs.cache.metrics_snapshot(),
+            log_block_blobs: self.block_log_blobs.cache.metrics_snapshot(),
             block_tx_blobs: self.block_tx_blobs.cache.metrics_snapshot(),
             block_trace_blobs: self.block_trace_blobs.cache.metrics_snapshot(),
-            bitmap_page_meta: self.log_streams.page_meta.metrics(),
-            bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
+            log_bitmap_page_meta: self.log_streams.page_meta.metrics(),
+            log_bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
         }
     }
 }
