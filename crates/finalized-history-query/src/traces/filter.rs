@@ -136,7 +136,7 @@ pub fn exact_match(trace: &TraceRef, filter: &TraceFilter) -> bool {
 mod tests {
     use super::*;
     use crate::query::engine::IndexedFilter;
-    use crate::traces::view::BlockTraceIter;
+    use crate::traces::ingest_iter::BlockTraceIter;
     use alloy_rlp::Encodable;
 
     fn encode_field<T: alloy_rlp::Encodable>(value: T) -> Vec<u8> {

@@ -10,8 +10,8 @@ use crate::kernel::sharded_streams::{group_stream_values, sharded_stream_id};
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::Tables;
 use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::traces::ingest_iter::BlockTraceIter;
 use crate::traces::types::BlockTraceHeader;
-use crate::traces::view::BlockTraceIter;
 
 pub const TRACE_ENCODING_VERSION: u32 = 1;
 

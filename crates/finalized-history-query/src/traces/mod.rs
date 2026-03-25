@@ -1,6 +1,7 @@
 pub(crate) mod codec;
 pub mod filter;
 pub(crate) mod ingest;
+pub(crate) mod ingest_iter;
 pub(crate) mod materialize;
 pub(crate) mod query;
 pub mod table_specs;
