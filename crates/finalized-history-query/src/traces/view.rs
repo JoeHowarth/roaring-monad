@@ -1,6 +1,5 @@
 use alloy_rlp::{Decodable, Header, PayloadView};
 use bytes::Bytes;
-use std::ops::Range;
 
 use crate::core::offsets::byte_offset_in;
 use crate::error::{Error, Result};
@@ -16,7 +15,15 @@ pub struct TraceRef {
     tx_idx: u32,
     trace_idx: u32,
     frame_bytes: Bytes,
-    fields: Vec<Range<usize>>,
+    offsets: TraceOffsets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TraceOffsets {
+    to_field_start: u32,
+    value_field_start: u32,
+    input_field_start: u32,
+    output_field_start: u32,
 }
 
 impl TraceRef {
@@ -27,14 +34,14 @@ impl TraceRef {
         trace_idx: u32,
         frame_bytes: Bytes,
     ) -> Result<Self> {
-        let fields = parse_field_ranges(frame_bytes.as_ref())?;
+        let offsets = parse_trace_offsets(frame_bytes.as_ref())?;
         Ok(Self {
             block_num,
             block_hash,
             tx_idx,
             trace_idx,
             frame_bytes,
-            fields,
+            offsets,
         })
     }
 
@@ -59,47 +66,83 @@ impl TraceRef {
     }
 
     pub fn typ(&self) -> Result<u8> {
-        decode_u8(self.field(0)?)
+        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
+        decode_u8(field_at(self.frame_bytes.as_ref(), payload_start)?)
     }
 
     pub fn flags(&self) -> Result<u64> {
-        decode_u64(self.field(1)?)
+        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
+        let flags_start = next_field_start(self.frame_bytes.as_ref(), payload_start)?;
+        decode_u64(field_at(self.frame_bytes.as_ref(), flags_start)?)
     }
 
     pub fn from_addr(&self) -> Result<&Address20> {
-        decode_address(self.field(2)?)
+        let payload_start = trace_payload_start(self.frame_bytes.as_ref())?;
+        let flags_start = next_field_start(self.frame_bytes.as_ref(), payload_start)?;
+        let from_start = next_field_start(self.frame_bytes.as_ref(), flags_start)?;
+        decode_address(field_at(self.frame_bytes.as_ref(), from_start)?)
     }
 
     pub fn to_addr(&self) -> Result<Option<&Address20>> {
-        decode_optional_address(self.field(3)?)
+        decode_optional_address(field_at(
+            self.frame_bytes.as_ref(),
+            self.offsets.to_field_start as usize,
+        )?)
     }
 
     pub fn value_bytes(&self) -> Result<&[u8]> {
-        decode_payload_bytes(self.field(4)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes.as_ref(),
+            self.offsets.value_field_start as usize,
+        )?)
     }
 
     pub fn gas(&self) -> Result<u64> {
-        decode_u64(self.field(5)?)
+        let gas_start = next_field_start(
+            self.frame_bytes.as_ref(),
+            self.offsets.value_field_start as usize,
+        )?;
+        decode_u64(field_at(self.frame_bytes.as_ref(), gas_start)?)
     }
 
     pub fn gas_used(&self) -> Result<u64> {
-        decode_u64(self.field(6)?)
+        let gas_start = next_field_start(
+            self.frame_bytes.as_ref(),
+            self.offsets.value_field_start as usize,
+        )?;
+        let gas_used_start = next_field_start(self.frame_bytes.as_ref(), gas_start)?;
+        decode_u64(field_at(self.frame_bytes.as_ref(), gas_used_start)?)
     }
 
     pub fn input(&self) -> Result<&[u8]> {
-        decode_payload_bytes(self.field(7)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes.as_ref(),
+            self.offsets.input_field_start as usize,
+        )?)
     }
 
     pub fn output(&self) -> Result<&[u8]> {
-        decode_payload_bytes(self.field(8)?)
+        decode_payload_bytes(field_at(
+            self.frame_bytes.as_ref(),
+            self.offsets.output_field_start as usize,
+        )?)
     }
 
     pub fn status(&self) -> Result<u8> {
-        decode_u8(self.field(9)?)
+        let status_start = next_field_start(
+            self.frame_bytes.as_ref(),
+            self.offsets.output_field_start as usize,
+        )?;
+        decode_u8(field_at(self.frame_bytes.as_ref(), status_start)?)
     }
 
     pub fn depth(&self) -> Result<u64> {
-        decode_u64(self.field(10)?)
+        let status_start = next_field_start(
+            self.frame_bytes.as_ref(),
+            self.offsets.output_field_start as usize,
+        )?;
+        let depth_start = next_field_start(self.frame_bytes.as_ref(), status_start)?;
+        decode_u64(field_at(self.frame_bytes.as_ref(), depth_start)?)
     }
 
     pub fn selector(&self) -> Result<Option<&Selector4>> {
@@ -118,14 +161,6 @@ impl TraceRef {
         let typ = self.typ()?;
         let flags = self.flags()?;
         Ok(matches!((typ, flags), (0, 0 | 1) | (1, _) | (2, _)))
-    }
-
-    fn field(&self, index: usize) -> Result<&[u8]> {
-        let range = self
-            .fields
-            .get(index)
-            .ok_or(Error::Decode("trace call frame field out of bounds"))?;
-        Ok(&self.frame_bytes[range.clone()])
     }
 }
 
@@ -235,7 +270,32 @@ impl<'a> CallFrameView<'a> {
     }
 }
 
-fn parse_field_ranges(frame_bytes: &[u8]) -> Result<Vec<Range<usize>>> {
+fn parse_trace_offsets(frame_bytes: &[u8]) -> Result<TraceOffsets> {
+    let payload_start = trace_payload_start(frame_bytes)?;
+    let flags_start = next_field_start(frame_bytes, payload_start)?;
+    let from_start = next_field_start(frame_bytes, flags_start)?;
+    let to_start = next_field_start(frame_bytes, from_start)?;
+    let value_start = next_field_start(frame_bytes, to_start)?;
+    let gas_start = next_field_start(frame_bytes, value_start)?;
+    let gas_used_start = next_field_start(frame_bytes, gas_start)?;
+    let input_start = next_field_start(frame_bytes, gas_used_start)?;
+    let output_start = next_field_start(frame_bytes, input_start)?;
+    let status_start = next_field_start(frame_bytes, output_start)?;
+    let _depth_start = next_field_start(frame_bytes, status_start)?;
+
+    Ok(TraceOffsets {
+        to_field_start: u32::try_from(to_start)
+            .map_err(|_| Error::Decode("trace to field start overflow"))?,
+        value_field_start: u32::try_from(value_start)
+            .map_err(|_| Error::Decode("trace value field start overflow"))?,
+        input_field_start: u32::try_from(input_start)
+            .map_err(|_| Error::Decode("trace input field start overflow"))?,
+        output_field_start: u32::try_from(output_start)
+            .map_err(|_| Error::Decode("trace output field start overflow"))?,
+    })
+}
+
+fn trace_payload_start(frame_bytes: &[u8]) -> Result<usize> {
     let mut buf = frame_bytes;
     let PayloadView::List(fields) =
         Header::decode_raw(&mut buf).map_err(|_| Error::Decode("invalid trace call frame rlp"))?
@@ -248,16 +308,30 @@ fn parse_field_ranges(frame_bytes: &[u8]) -> Result<Vec<Range<usize>>> {
     if fields.len() != CALL_FRAME_FIELD_COUNT {
         return Err(Error::Decode("unexpected trace call frame field count"));
     }
+    let first_field = fields
+        .first()
+        .ok_or(Error::Decode("unexpected trace call frame field count"))?;
+    usize::try_from(byte_offset_in(frame_bytes, first_field))
+        .map_err(|_| Error::Decode("trace field offset overflow"))
+}
 
-    Ok(fields
-        .into_iter()
-        .map(|field| {
-            let start = usize::try_from(byte_offset_in(frame_bytes, field))
-                .expect("field offset fits in usize");
-            let end = start + field.len();
-            start..end
-        })
-        .collect())
+fn field_at(bytes: &[u8], start: usize) -> Result<&[u8]> {
+    let mut buf = bytes
+        .get(start..)
+        .ok_or(Error::Decode("trace field start out of bounds"))?;
+    Header::decode_raw(&mut buf).map_err(|_| Error::Decode("invalid trace field"))?;
+    let end = bytes.len().saturating_sub(buf.len());
+    bytes
+        .get(start..end)
+        .ok_or(Error::Decode("invalid trace field"))
+}
+
+fn next_field_start(bytes: &[u8], start: usize) -> Result<usize> {
+    let mut buf = bytes
+        .get(start..)
+        .ok_or(Error::Decode("trace field start out of bounds"))?;
+    Header::decode_raw(&mut buf).map_err(|_| Error::Decode("invalid trace field"))?;
+    Ok(bytes.len().saturating_sub(buf.len()))
 }
 
 fn decode_u8(field: &[u8]) -> Result<u8> {
