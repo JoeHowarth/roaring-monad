@@ -126,10 +126,45 @@ pub fn exact_match_frame(trace: &CallFrameView<'_>, filter: &TraceFilter) -> boo
 }
 
 pub fn exact_match(trace: &TraceRef, filter: &TraceFilter) -> bool {
-    let Ok(frame) = trace.call_frame() else {
-        return false;
+    let from = match trace.from_addr() {
+        Ok(from) => from,
+        Err(_) => return false,
     };
-    exact_match_frame(&frame, filter)
+    if !clause_matches(from, &filter.from) {
+        return false;
+    }
+
+    let to = match trace.to_addr() {
+        Ok(to) => to,
+        Err(_) => return false,
+    };
+    if !optional_clause_matches(to.copied(), &filter.to) {
+        return false;
+    }
+
+    let selector = match trace.selector() {
+        Ok(selector) => selector,
+        Err(_) => return false,
+    };
+    if !optional_clause_matches(selector.copied(), &filter.selector) {
+        return false;
+    }
+
+    if let Some(expected) = filter.is_top_level {
+        match trace.depth() {
+            Ok(depth) if (depth == 0) == expected => {}
+            _ => return false,
+        }
+    }
+
+    if let Some(expected) = filter.has_value {
+        match trace.has_value() {
+            Ok(has_value) if has_value == expected => {}
+            _ => return false,
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]

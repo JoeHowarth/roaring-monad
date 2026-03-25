@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use alloy_rlp::{Header, PayloadView};
 use bytes::Bytes;
 
@@ -16,20 +18,18 @@ const EIP4844_TYPE: u8 = 0x03;
 const TX_HASH_FIELD_ENCODED_LEN: u32 = 1 + 32;
 const SENDER_FIELD_ENCODED_LEN: u32 = 1 + 20;
 
-#[derive(Clone, PartialEq, Eq)]
 pub struct TxRef {
     block_num: u64,
     block_hash: Hash32,
     tx_idx: u32,
     envelope_bytes: Bytes,
     offsets: TxRefOffsets,
+    signed_tx_offsets: Cell<Option<SignedTxOffsets>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TxRefOffsets {
     payload_start: u32,
-    sender_field_start: u32,
-    signed_tx_field_start: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,7 @@ impl TxRef {
             tx_idx,
             envelope_bytes,
             offsets,
+            signed_tx_offsets: Cell::new(None),
         })
     }
 
@@ -76,29 +77,29 @@ impl TxRef {
     }
 
     pub fn tx_hash(&self) -> Result<&Hash32> {
-        decode_hash(field_at(
+        decode_fixed_hash(
             self.envelope_bytes.as_ref(),
             self.offsets.payload_start as usize,
-        )?)
+        )
     }
 
     pub fn sender(&self) -> Result<&Address20> {
-        decode_sender(field_at(
+        decode_fixed_sender(
             self.envelope_bytes.as_ref(),
-            self.offsets.sender_field_start as usize,
-        )?)
+            sender_field_start(self.offsets),
+        )
     }
 
     pub fn signed_tx_bytes(&self) -> Result<&[u8]> {
         decode_payload_bytes(field_at(
             self.envelope_bytes.as_ref(),
-            self.offsets.signed_tx_field_start as usize,
+            signed_tx_field_start(self.offsets),
         )?)
     }
 
     pub fn to_addr(&self) -> Result<Option<Address20>> {
         let signed_tx_bytes = self.signed_tx_bytes()?;
-        let offsets = parse_signed_tx_offsets(signed_tx_bytes)?;
+        let offsets = self.signed_tx_offsets(signed_tx_bytes)?;
         decode_optional_address(field_at(signed_tx_bytes, offsets.to_field_start as usize)?)
     }
 
@@ -112,11 +113,20 @@ impl TxRef {
 
     pub fn input(&self) -> Result<&[u8]> {
         let signed_tx_bytes = self.signed_tx_bytes()?;
-        let offsets = parse_signed_tx_offsets(signed_tx_bytes)?;
+        let offsets = self.signed_tx_offsets(signed_tx_bytes)?;
         decode_payload_bytes(field_at(
             signed_tx_bytes,
             offsets.input_field_start as usize,
         )?)
+    }
+
+    fn signed_tx_offsets(&self, signed_tx_bytes: &[u8]) -> Result<SignedTxOffsets> {
+        if let Some(offsets) = self.signed_tx_offsets.get() {
+            return Ok(offsets);
+        }
+        let offsets = parse_signed_tx_offsets(signed_tx_bytes)?;
+        self.signed_tx_offsets.set(Some(offsets));
+        Ok(offsets)
     }
 }
 
@@ -129,27 +139,46 @@ impl std::fmt::Debug for TxRef {
     }
 }
 
+impl Clone for TxRef {
+    fn clone(&self) -> Self {
+        Self {
+            block_num: self.block_num,
+            block_hash: self.block_hash,
+            tx_idx: self.tx_idx,
+            envelope_bytes: self.envelope_bytes.clone(),
+            offsets: self.offsets,
+            signed_tx_offsets: Cell::new(self.signed_tx_offsets.get()),
+        }
+    }
+}
+
+impl PartialEq for TxRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.block_num == other.block_num
+            && self.block_hash == other.block_hash
+            && self.tx_idx == other.tx_idx
+            && self.envelope_bytes == other.envelope_bytes
+            && self.offsets == other.offsets
+    }
+}
+
+impl Eq for TxRef {}
+
 fn parse_tx_ref_offsets(envelope_bytes: &[u8]) -> Result<TxRefOffsets> {
-    let payload_start = envelope_payload_start(envelope_bytes)?;
-    let sender_field_start = payload_start
-        .checked_add(TX_HASH_FIELD_ENCODED_LEN as usize)
-        .ok_or(Error::Decode("sender field start overflow"))?;
-    let signed_tx_field_start = sender_field_start
-        .checked_add(SENDER_FIELD_ENCODED_LEN as usize)
-        .ok_or(Error::Decode("signed tx field start overflow"))?;
-    decode_hash(field_at(envelope_bytes, payload_start)?)?;
-    decode_sender(field_at(envelope_bytes, sender_field_start)?)?;
-    decode_payload_bytes(field_at(envelope_bytes, signed_tx_field_start)?)?;
+    let payload_start = tx_envelope_payload_start(envelope_bytes)?;
+    decode_fixed_hash(envelope_bytes, payload_start)?;
+    decode_fixed_sender(
+        envelope_bytes,
+        sender_field_start_from_payload_start(payload_start)?,
+    )?;
+    decode_payload_bytes(field_at(
+        envelope_bytes,
+        signed_tx_field_start_from_payload_start(payload_start)?,
+    )?)?;
     Ok(TxRefOffsets {
         payload_start: payload_start
             .try_into()
             .map_err(|_| Error::Decode("tx payload start overflow"))?,
-        sender_field_start: sender_field_start
-            .try_into()
-            .map_err(|_| Error::Decode("sender field start overflow"))?,
-        signed_tx_field_start: signed_tx_field_start
-            .try_into()
-            .map_err(|_| Error::Decode("signed tx field start overflow"))?,
     })
 }
 
@@ -381,12 +410,24 @@ fn parse_tx_fields<'a, const N: usize>(
         .map_err(|_| Error::Decode("unexpected signed tx field count"))
 }
 
-fn envelope_payload_start(envelope_bytes: &[u8]) -> Result<usize> {
-    first_list_field_start(
-        envelope_bytes,
-        "invalid tx envelope rlp",
-        "tx envelope must be an rlp list",
-    )
+fn tx_envelope_payload_start(envelope_bytes: &[u8]) -> Result<usize> {
+    let mut buf = envelope_bytes;
+    let PayloadView::List(fields) =
+        Header::decode_raw(&mut buf).map_err(|_| Error::Decode("invalid tx envelope rlp"))?
+    else {
+        return Err(Error::Decode("tx envelope must be an rlp list"));
+    };
+    if !buf.is_empty() {
+        return Err(Error::Decode("tx envelope has trailing bytes"));
+    }
+    if fields.len() != 3 {
+        return Err(Error::Decode("unexpected tx envelope field count"));
+    }
+    let first_field = fields
+        .first()
+        .ok_or(Error::Decode("unexpected tx envelope field count"))?;
+    usize::try_from(byte_offset_in(envelope_bytes, first_field))
+        .map_err(|_| Error::Decode("tx field offset overflow"))
 }
 
 fn first_list_field_start(
@@ -429,18 +470,56 @@ fn next_field_start(bytes: &[u8], start: usize) -> Result<usize> {
     Ok(bytes.len().saturating_sub(buf.len()))
 }
 
-fn decode_hash(field: &[u8]) -> Result<&Hash32> {
-    let payload = decode_payload_bytes(field)?;
-    payload
+fn sender_field_start(offsets: TxRefOffsets) -> usize {
+    sender_field_start_from_payload_start(offsets.payload_start as usize)
+        .expect("validated tx sender field start")
+}
+
+fn signed_tx_field_start(offsets: TxRefOffsets) -> usize {
+    signed_tx_field_start_from_payload_start(offsets.payload_start as usize)
+        .expect("validated signed tx field start")
+}
+
+fn sender_field_start_from_payload_start(payload_start: usize) -> Result<usize> {
+    payload_start
+        .checked_add(TX_HASH_FIELD_ENCODED_LEN as usize)
+        .ok_or(Error::Decode("sender field start overflow"))
+}
+
+fn signed_tx_field_start_from_payload_start(payload_start: usize) -> Result<usize> {
+    sender_field_start_from_payload_start(payload_start)?
+        .checked_add(SENDER_FIELD_ENCODED_LEN as usize)
+        .ok_or(Error::Decode("signed tx field start overflow"))
+}
+
+fn decode_fixed_hash(bytes: &[u8], field_start: usize) -> Result<&Hash32> {
+    fixed_payload_at(bytes, field_start, 32, "invalid tx envelope hash")?
         .try_into()
         .map_err(|_| Error::Decode("invalid tx envelope hash"))
 }
 
-fn decode_sender(field: &[u8]) -> Result<&Address20> {
-    let payload = decode_payload_bytes(field)?;
-    payload
+fn decode_fixed_sender(bytes: &[u8], field_start: usize) -> Result<&Address20> {
+    fixed_payload_at(bytes, field_start, 20, "invalid tx envelope sender")?
         .try_into()
         .map_err(|_| Error::Decode("invalid tx envelope sender"))
+}
+
+fn fixed_payload_at<'a>(
+    bytes: &'a [u8],
+    field_start: usize,
+    payload_len: usize,
+    invalid_message: &'static str,
+) -> Result<&'a [u8]> {
+    let field_end = field_start
+        .checked_add(1 + payload_len)
+        .ok_or(Error::Decode(invalid_message))?;
+    let field = bytes
+        .get(field_start..field_end)
+        .ok_or(Error::Decode(invalid_message))?;
+    if field.first().copied() != Some(0x80u8.saturating_add(payload_len as u8)) {
+        return Err(Error::Decode(invalid_message));
+    }
+    Ok(&field[1..])
 }
 
 fn decode_optional_address(field: &[u8]) -> Result<Option<Address20>> {
@@ -567,6 +646,22 @@ mod tests {
         assert_eq!(tx.tx_hash().expect("tx_hash"), &[1u8; 32]);
         assert_eq!(tx.sender().expect("sender"), &[2u8; 20]);
         assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[3, 4, 5]);
+    }
+
+    #[test]
+    fn tx_ref_rejects_envelope_with_extra_field() {
+        let encoded = encode_tx_list(vec![
+            encode_bytes(&[1u8; 32]),
+            encode_bytes(&[2u8; 20]),
+            encode_bytes(&[3, 4, 5]),
+            encode_bytes(&[6]),
+        ]);
+
+        let err = TxRef::new(7, [9u8; 32], 4, encoded.into()).expect_err("invalid envelope");
+        assert!(matches!(
+            err,
+            Error::Decode("unexpected tx envelope field count")
+        ));
     }
 
     #[test]

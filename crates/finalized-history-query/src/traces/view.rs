@@ -68,103 +68,68 @@ impl TraceRef {
         self.trace_idx
     }
 
-    pub fn call_frame(&self) -> Result<CallFrameView<'_>> {
-        CallFrameView::new(self.frame_bytes.as_ref())
+    pub fn frame_bytes(&self) -> &[u8] {
+        self.frame_bytes.as_ref()
+    }
+
+    pub fn call_frame(&self) -> CallFrameView<'_> {
+        CallFrameView::from_parts(self.frame_bytes(), self.layout)
     }
 
     pub fn typ(&self) -> Result<u8> {
-        decode_u8(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.typ_field_start as usize,
-        )?)
+        self.call_frame().typ()
     }
 
     pub fn flags(&self) -> Result<u64> {
-        decode_u64(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.flags_field_start as usize,
-        )?)
+        self.call_frame().flags()
     }
 
     pub fn from_addr(&self) -> Result<&Address20> {
-        decode_address(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.from_field_start as usize,
-        )?)
+        self.call_frame().from_addr()
     }
 
     pub fn to_addr(&self) -> Result<Option<&Address20>> {
-        decode_optional_address(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.to_field_start as usize,
-        )?)
+        self.call_frame().to_addr()
     }
 
     pub fn value_bytes(&self) -> Result<&[u8]> {
-        decode_payload_bytes(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.value_field_start as usize,
-        )?)
+        self.call_frame().value_bytes()
     }
 
     pub fn gas(&self) -> Result<u64> {
-        decode_u64(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.gas_field_start as usize,
-        )?)
+        self.call_frame().gas()
     }
 
     pub fn gas_used(&self) -> Result<u64> {
-        decode_u64(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.gas_used_field_start as usize,
-        )?)
+        self.call_frame().gas_used()
     }
 
     pub fn input(&self) -> Result<&[u8]> {
-        decode_payload_bytes(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.input_field_start as usize,
-        )?)
+        self.call_frame().input()
     }
 
     pub fn output(&self) -> Result<&[u8]> {
-        decode_payload_bytes(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.output_field_start as usize,
-        )?)
+        self.call_frame().output()
     }
 
     pub fn status(&self) -> Result<u8> {
-        decode_u8(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.status_field_start as usize,
-        )?)
+        self.call_frame().status()
     }
 
     pub fn depth(&self) -> Result<u64> {
-        decode_u64(field_at(
-            self.frame_bytes.as_ref(),
-            self.layout.depth_field_start as usize,
-        )?)
+        self.call_frame().depth()
     }
 
     pub fn selector(&self) -> Result<Option<&Selector4>> {
-        if !self.is_call_type()? {
-            return Ok(None);
-        }
-        let input = self.input()?;
-        Ok((input.len() >= 4).then(|| input[..4].try_into().expect("4-byte selector")))
+        self.call_frame().selector()
     }
 
     pub fn has_value(&self) -> Result<bool> {
-        Ok(self.value_bytes()?.iter().any(|byte| *byte != 0))
+        self.call_frame().has_value()
     }
 
     pub fn is_call_type(&self) -> Result<bool> {
-        let typ = self.typ()?;
-        let flags = self.flags()?;
-        Ok(matches!((typ, flags), (0, 0 | 1) | (1, _) | (2, _)))
+        self.call_frame().is_call_type()
     }
 }
 
@@ -187,10 +152,14 @@ pub struct CallFrameView<'a> {
 impl<'a> CallFrameView<'a> {
     pub fn new(frame_bytes: &'a [u8]) -> Result<Self> {
         let layout = parse_trace_layout(frame_bytes)?;
-        Ok(Self {
+        Ok(Self::from_parts(frame_bytes, layout))
+    }
+
+    fn from_parts(frame_bytes: &'a [u8], layout: TraceLayout) -> Self {
+        Self {
             frame_bytes,
             layout,
-        })
+        }
     }
 
     pub fn typ(&self) -> Result<u8> {
