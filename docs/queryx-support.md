@@ -31,6 +31,11 @@ The RPC crate remains responsible for transport concerns such as JSON-RPC
 request parsing, tag resolution policy, field selection syntax, joins and
 response envelopes, and error mapping.
 
+That includes resolving RPC-layer block tags such as `"latest"` and
+`"finalized"` before calling into `finalized-history-query`. The transport-free
+API in this crate intentionally accepts only concrete block numbers or block
+hashes.
+
 ## Where We Are Today
 
 The current crate already has much of the core substrate shape that the
@@ -61,7 +66,6 @@ The current public surface is still narrower than the reference:
 - no descending traversal
 - no field selection
 - no relation joins
-- no tag-based range inputs on the transport-free surface
 
 The current `query_blocks` substrate is intentionally narrow: it materializes
 shared block identity (`number`, `hash`, `parent_hash`) from `block_record`

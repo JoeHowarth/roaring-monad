@@ -292,7 +292,7 @@ fn query_traces_supports_compound_filters_and_blocks_without_traces() {
 }
 
 #[test]
-fn query_traces_rejects_is_top_level_only_filter() {
+fn query_traces_support_is_top_level_only_filter() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -320,7 +320,7 @@ fn query_traces_rejects_is_top_level_only_filter() {
         .await
         .expect("ingest trace block");
 
-        let err = svc
+        let page = svc
             .query_traces(
                 QueryTracesRequest {
                     from_block: Some(1),
@@ -338,8 +338,10 @@ fn query_traces_rejects_is_top_level_only_filter() {
                 ExecutionBudget::default(),
             )
             .await
-            .expect_err("is_top_level-only query should fail");
-        assert!(matches!(err, Error::InvalidParams(_)));
+            .expect("is_top_level-only query");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].block_num(), 1);
+        assert_eq!(page.items[0].trace_idx(), 0);
     });
 }
 

@@ -180,6 +180,7 @@ pub trait QueryMaterializer {
         &mut self,
         run: &[(Self::Id, ResolvedPrimaryLocation)],
     ) -> Result<Vec<(Self::Id, Self::Item)>>;
+    async fn load_block(&mut self, block_num: u64) -> Result<Vec<(Self::Id, Self::Item)>>;
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef>;
     fn exact_match(&self, item: &Self::Item, filter: &Self::Filter) -> bool;
     fn into_output(item: Self::Item) -> Self::Output;
@@ -306,6 +307,42 @@ pub(crate) fn build_page<M: QueryMaterializer>(
             next_resume_id,
         },
     }
+}
+
+pub(crate) async fn execute_unfiltered_block_query<M: QueryMaterializer>(
+    block_range: ResolvedBlockRange,
+    filter: &M::Filter,
+    effective_limit: usize,
+    resume_after: Option<M::Id>,
+    materializer: &mut M,
+) -> Result<QueryPage<M::Output>> {
+    let take = effective_limit.saturating_add(1);
+    let mut matched = Vec::with_capacity(take);
+
+    for block_num in block_range.from_block..=block_range.to_block {
+        for (id, item) in materializer.load_block(block_num).await? {
+            if let Some(resume_after) = resume_after
+                && id <= resume_after
+            {
+                continue;
+            }
+            if !materializer.exact_match(&item, filter) {
+                continue;
+            }
+
+            let block_ref = materializer.block_ref_for(&item).await?;
+            matched.push(MatchedQueryItem {
+                id,
+                item,
+                block_ref,
+            });
+            if matched.len() >= take {
+                return Ok(build_page::<M>(block_range, effective_limit, matched));
+            }
+        }
+    }
+
+    Ok(build_page::<M>(block_range, effective_limit, matched))
 }
 
 pub async fn cached_block_ref_with_fallback<M, B, Fut>(
@@ -611,6 +648,10 @@ mod tests {
             &mut self,
             _run: &[(Self::Id, ResolvedPrimaryLocation)],
         ) -> Result<Vec<(Self::Id, Self::Item)>> {
+            unreachable!("not used in these tests")
+        }
+
+        async fn load_block(&mut self, _block_num: u64) -> Result<Vec<(Self::Id, Self::Item)>> {
             unreachable!("not used in these tests")
         }
 

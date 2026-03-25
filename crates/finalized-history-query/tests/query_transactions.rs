@@ -6,7 +6,7 @@ use finalized_history_query::api::{
 };
 use finalized_history_query::store::blob::InMemoryBlobStore;
 use finalized_history_query::store::meta::InMemoryMetaStore;
-use finalized_history_query::{Clause, Error, TxFilter};
+use finalized_history_query::{Clause, TxFilter};
 use futures::executor::block_on;
 
 use helpers::*;
@@ -152,7 +152,7 @@ fn query_transactions_support_to_only_and_selector_only_filters() {
 }
 
 #[test]
-fn query_transactions_rejects_filter_without_indexed_clause() {
+fn query_transactions_support_unfiltered_scan() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -160,11 +160,28 @@ fn query_transactions_rejects_filter_without_indexed_clause() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.ingest_finalized_block(mk_tx_block(1, [0; 32], Vec::new()))
-            .await
-            .expect("ingest");
+        svc.ingest_finalized_block(mk_tx_block(
+            1,
+            [0; 32],
+            vec![
+                mk_ingest_tx(
+                    0,
+                    [1; 32],
+                    [7; 20],
+                    encode_legacy_tx(Some([9; 20]), &[0xaa, 0xbb, 0xcc, 0xdd, 1]),
+                ),
+                mk_ingest_tx(
+                    1,
+                    [2; 32],
+                    [8; 20],
+                    encode_legacy_tx(Some([9; 20]), &[0x10, 0x20, 0x30, 0x40, 2]),
+                ),
+            ],
+        ))
+        .await
+        .expect("ingest");
 
-        let err = svc
+        let page = svc
             .query_transactions(
                 QueryTransactionsRequest {
                     from_block: Some(1),
@@ -179,8 +196,10 @@ fn query_transactions_rejects_filter_without_indexed_clause() {
                 ExecutionBudget::default(),
             )
             .await
-            .expect_err("unindexed tx query should fail");
-        assert!(matches!(err, Error::InvalidParams(_)));
+            .expect("unfiltered tx query");
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].tx_idx(), 0);
+        assert_eq!(page.items[1].tx_idx(), 1);
     });
 }
 

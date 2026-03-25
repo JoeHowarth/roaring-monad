@@ -327,10 +327,10 @@ fn execution_budget_zero_is_rejected() {
     });
 }
 
-// --- Filter rejects at query level ---
+// --- Unfiltered direct block scan ---
 
 #[test]
-fn query_rejects_filter_without_indexed_clause() {
+fn query_logs_supports_unfiltered_scan_with_resume() {
     block_on(async {
         let svc = FinalizedHistoryService::new_reader_writer(
             lease_writer_config(),
@@ -338,20 +338,27 @@ fn query_rejects_filter_without_indexed_clause() {
             InMemoryBlobStore::default(),
             1,
         );
-        svc.ingest_finalized_block(mk_block(1, [0; 32], vec![mk_log(1, 10, 20, 1, 0, 0)]))
+        svc.ingest_finalized_block(mk_block(
+            1,
+            [0; 32],
+            vec![mk_log(1, 10, 20, 1, 0, 0), mk_log(2, 11, 21, 1, 0, 1)],
+        ))
+        .await
+        .expect("ingest block 1");
+        svc.ingest_finalized_block(mk_block(2, [1; 32], vec![mk_log(3, 12, 22, 2, 0, 0)]))
             .await
-            .expect("ingest");
+            .expect("ingest block 2");
 
-        let err = svc
+        let first = svc
             .query_logs(
                 QueryLogsRequest {
                     from_block: Some(1),
-                    to_block: Some(1),
+                    to_block: Some(2),
                     from_block_hash: None,
                     to_block_hash: None,
                     order: QueryOrder::Ascending,
                     resume_id: None,
-                    limit: 10,
+                    limit: 2,
                     filter: LogFilter {
                         address: Some(Clause::Any),
                         ..Default::default()
@@ -360,8 +367,35 @@ fn query_rejects_filter_without_indexed_clause() {
                 ExecutionBudget::default(),
             )
             .await
-            .expect_err("no indexed clause");
-        assert!(matches!(err, Error::InvalidParams(_)));
+            .expect("first unfiltered page");
+        assert_eq!(first.items.len(), 2);
+        assert!(first.meta.has_more);
+        assert_eq!(first.meta.next_resume_id, Some(1));
+        assert_eq!(first.items[0].block_num(), 1);
+        assert_eq!(first.items[1].block_num(), 1);
+
+        let second = svc
+            .query_logs(
+                QueryLogsRequest {
+                    from_block: Some(1),
+                    to_block: Some(2),
+                    from_block_hash: None,
+                    to_block_hash: None,
+                    order: QueryOrder::Ascending,
+                    resume_id: first.meta.next_resume_id,
+                    limit: 2,
+                    filter: LogFilter {
+                        address: Some(Clause::Any),
+                        ..Default::default()
+                    },
+                },
+                ExecutionBudget::default(),
+            )
+            .await
+            .expect("second unfiltered page");
+        assert_eq!(second.items.len(), 1);
+        assert!(!second.meta.has_more);
+        assert_eq!(second.items[0].block_num(), 2);
     });
 }
 

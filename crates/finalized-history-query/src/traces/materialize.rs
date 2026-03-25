@@ -65,6 +65,43 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TraceMaterializer<'_, M, 
             .collect())
     }
 
+    async fn load_block(&mut self, block_num: u64) -> Result<Vec<(Self::Id, Self::Item)>> {
+        let Some(window) = self
+            .tables
+            .block_records
+            .get(block_num)
+            .await?
+            .and_then(|record| record.traces)
+        else {
+            return Ok(Vec::new());
+        };
+        let count = usize::try_from(window.count)
+            .map_err(|_| crate::error::Error::Decode("trace block window count overflow"))?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let run_items = self
+            .tables
+            .block_trace_blobs
+            .load_contiguous_run(block_num, 0, count - 1)
+            .await?;
+        if run_items.len() != count {
+            return Err(crate::error::Error::NotFound);
+        }
+        run_items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let id = u64::try_from(index)
+                    .ok()
+                    .and_then(|offset| window.first_primary_id.checked_add(offset))
+                    .map(crate::core::ids::TraceId::new)
+                    .ok_or(crate::error::Error::Decode("trace id overflow"))?;
+                Ok((id, item))
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
         cached_parent_block_ref(
             &mut self.caches.block_ref_cache,

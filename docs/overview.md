@@ -166,6 +166,11 @@ The txs layer owns:
 
 The public indexed-family query items are zero-copy view types: logs return `LogRef`, txs return `TxRef`, and traces return `TraceRef`.
 
+The request types below are transport-free substrate types, not JSON-RPC
+request shapes. The RPC layer resolves tags such as `"latest"` and
+`"finalized"` before calling this crate, so the substrate accepts only
+concrete block numbers or block hashes.
+
 ## Main Types
 
 ```python

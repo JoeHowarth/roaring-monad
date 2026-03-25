@@ -66,6 +66,43 @@ impl<M: MetaStore, B: BlobStore> QueryMaterializer for TxMaterializer<'_, M, B> 
             .collect())
     }
 
+    async fn load_block(&mut self, block_num: u64) -> Result<Vec<(Self::Id, Self::Item)>> {
+        let Some(window) = self
+            .tables
+            .block_records
+            .get(block_num)
+            .await?
+            .and_then(|record| record.txs)
+        else {
+            return Ok(Vec::new());
+        };
+        let count = usize::try_from(window.count)
+            .map_err(|_| Error::Decode("tx block window count overflow"))?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let run_items = self
+            .tables
+            .block_tx_blobs
+            .load_contiguous_run(block_num, 0, count - 1)
+            .await?;
+        if run_items.len() != count {
+            return Err(Error::NotFound);
+        }
+        run_items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let id = u64::try_from(index)
+                    .ok()
+                    .and_then(|offset| window.first_primary_id.checked_add(offset))
+                    .map(crate::core::ids::TxId::new)
+                    .ok_or(Error::Decode("tx id overflow"))?;
+                Ok((id, item))
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
         cached_parent_block_ref(
             &mut self.caches.block_ref_cache,

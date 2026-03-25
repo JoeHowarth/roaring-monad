@@ -5,7 +5,10 @@ use crate::error::{Error, Result};
 use crate::query::bounds::resolve_request_block_bounds;
 use crate::query::normalized::{effective_limit, plan_page};
 use crate::query::planner::IndexedClause;
-use crate::query::runner::{QueryMaterializer, build_page, empty_page, execute_indexed_query};
+use crate::query::runner::{
+    QueryMaterializer, build_page, empty_page, execute_indexed_query,
+    execute_unfiltered_block_query,
+};
 use crate::query::window::resolve_primary_window;
 use crate::store::publication::PublicationStore;
 use crate::store::traits::{BlobStore, MetaStore};
@@ -49,12 +52,8 @@ where
 {
     let tables = family_tables.tables;
 
-    if !request.filter.has_indexed_clause() {
-        return Err(Error::InvalidParams(
-            "query must include at least one indexed clause",
-        ));
-    }
-    if request.filter.max_or_terms() > limits.max_or_terms {
+    let has_indexed_clause = request.filter.has_indexed_clause();
+    if has_indexed_clause && request.filter.max_or_terms() > limits.max_or_terms {
         return Err(Error::QueryTooBroad {
             actual: request.filter.max_or_terms(),
             max: limits.max_or_terms,
@@ -80,6 +79,31 @@ where
     .await?;
     if block_range.is_empty() {
         return Ok(empty_page(&block_range));
+    }
+
+    if !has_indexed_clause {
+        if let Some(resume_id) = request.resume_id {
+            let Some(id_window) =
+                resolve_primary_window::<_, _, Q::Id, _>(tables, &block_range, select_window)
+                    .await?
+            else {
+                return Ok(empty_page(&block_range));
+            };
+            if !id_window.contains(Q::Id::new(resume_id)) {
+                return Err(Error::InvalidParams(
+                    "resume_id outside resolved block window",
+                ));
+            }
+        }
+
+        return execute_unfiltered_block_query(
+            block_range,
+            &request.filter,
+            effective_limit,
+            request.resume_id.map(Q::Id::new),
+            materializer,
+        )
+        .await;
     }
 
     let Some(id_window) =

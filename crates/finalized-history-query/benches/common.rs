@@ -216,6 +216,26 @@ impl QueryMaterializer for PassThroughMaterializer {
             .collect())
     }
 
+    async fn load_block(&mut self, block_num: u64) -> Result<Vec<(Self::Id, Self::Item)>> {
+        let start = block_num.saturating_sub(1).saturating_mul(self.block_span);
+        Ok((0..self.block_span)
+            .map(|offset| {
+                let id = LogId::new(start.saturating_add(offset));
+                (
+                    id,
+                    StubPrimary {
+                        id,
+                        block_ref: BlockRef {
+                            number: block_num,
+                            hash: bench_hash(block_num),
+                            parent_hash: bench_hash(block_num.saturating_sub(1)),
+                        },
+                    },
+                )
+            })
+            .collect())
+    }
+
     async fn block_ref_for(&mut self, item: &Self::Item) -> Result<BlockRef> {
         Ok(item.block_ref)
     }
