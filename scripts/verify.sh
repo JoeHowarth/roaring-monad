@@ -24,17 +24,6 @@ cd "$ROOT"
 
 echo "==> autofix"
 cargo fix --allow-dirty --allow-staged -q 2>/dev/null || true
-for crate in "$@"; do
-  cargo clippy --fix --allow-dirty --allow-staged -p "$crate" --all-targets --all-features -- \
-    -A clippy::type_complexity \
-    -A clippy::int_plus_one \
-    -A clippy::uninlined-format-args \
-    -A clippy::enum-variant-names \
-    -A clippy::mutable_key_type \
-    -A clippy::large_enum_variant \
-    -A clippy::doc-overindented-list-items \
-    2>/dev/null || true
-done
 
 echo "==> fmt"
 cargo +nightly-2025-12-09 fmt --all
