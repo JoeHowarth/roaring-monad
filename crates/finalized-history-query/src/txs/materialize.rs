@@ -127,6 +127,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use alloy_rlp::{Encodable, Header};
     use bytes::Bytes;
     use futures::executor::block_on;
 
@@ -145,6 +146,43 @@ mod tests {
     use crate::txs::types::{BlockTxHeader, DirByBlock, StoredTxEnvelope};
 
     use super::*;
+
+    fn encode_field<T: Encodable>(value: T) -> Vec<u8> {
+        let mut out = Vec::new();
+        value.encode(&mut out);
+        out
+    }
+
+    fn encode_bytes(value: &[u8]) -> Vec<u8> {
+        encode_field(value)
+    }
+
+    fn encode_tx_list(fields: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut out = Vec::new();
+        Header {
+            list: true,
+            payload_length: fields.iter().map(Vec::len).sum(),
+        }
+        .encode(&mut out);
+        for field in fields {
+            out.extend_from_slice(&field);
+        }
+        out
+    }
+
+    fn encode_legacy_tx(to: Option<[u8; 20]>, input: &[u8]) -> Vec<u8> {
+        encode_tx_list(vec![
+            encode_field(1u64),
+            encode_field(2u64),
+            encode_field(21_000u64),
+            encode_bytes(to.as_ref().map(<[u8; 20]>::as_slice).unwrap_or(&[])),
+            encode_field(3u64),
+            encode_bytes(input),
+            encode_field(27u8),
+            encode_field(1u8),
+            encode_field(2u8),
+        ])
+    }
 
     #[derive(Clone)]
     struct CountingBlobStore {
@@ -234,13 +272,13 @@ mod tests {
             let first = StoredTxEnvelope {
                 tx_hash: [1u8; 32],
                 sender: [2u8; 20],
-                signed_tx_bytes: vec![3, 4, 5],
+                signed_tx_bytes: encode_legacy_tx(Some([3u8; 20]), &[0xaa]),
             }
             .encode();
             let second = StoredTxEnvelope {
                 tx_hash: [6u8; 32],
                 sender: [7u8; 20],
-                signed_tx_bytes: vec![8, 9],
+                signed_tx_bytes: encode_legacy_tx(None, &[0xbb, 0xcc]),
             }
             .encode();
             let mut blob_bytes = Vec::new();
@@ -272,7 +310,10 @@ mod tests {
             assert_eq!(tx.tx_idx(), 1);
             assert_eq!(tx.tx_hash().expect("tx hash"), &[6u8; 32]);
             assert_eq!(tx.sender().expect("sender"), &[7u8; 20]);
-            assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[8, 9]);
+            assert_eq!(
+                tx.signed_tx_bytes().expect("signed bytes"),
+                encode_legacy_tx(None, &[0xbb, 0xcc])
+            );
             assert_eq!(read_range_count.load(Ordering::Relaxed), 1);
             assert_eq!(get_blob_count.load(Ordering::Relaxed), 0);
         });
@@ -322,13 +363,13 @@ mod tests {
             let first = StoredTxEnvelope {
                 tx_hash: [1u8; 32],
                 sender: [2u8; 20],
-                signed_tx_bytes: vec![3, 4, 5],
+                signed_tx_bytes: encode_legacy_tx(Some([3u8; 20]), &[0xaa]),
             }
             .encode();
             let second = StoredTxEnvelope {
                 tx_hash: [6u8; 32],
                 sender: [7u8; 20],
-                signed_tx_bytes: vec![8, 9],
+                signed_tx_bytes: encode_legacy_tx(None, &[0xbb, 0xcc]),
             }
             .encode();
             let mut blob_bytes = Vec::new();
@@ -432,19 +473,19 @@ mod tests {
                 StoredTxEnvelope {
                     tx_hash: [1u8; 32],
                     sender: [2u8; 20],
-                    signed_tx_bytes: vec![3],
+                    signed_tx_bytes: encode_legacy_tx(Some([3u8; 20]), &[0xaa]),
                 }
                 .encode(),
                 StoredTxEnvelope {
                     tx_hash: [6u8; 32],
                     sender: [7u8; 20],
-                    signed_tx_bytes: vec![8, 9],
+                    signed_tx_bytes: encode_legacy_tx(None, &[0xbb, 0xcc]),
                 }
                 .encode(),
                 StoredTxEnvelope {
                     tx_hash: [10u8; 32],
                     sender: [11u8; 20],
-                    signed_tx_bytes: vec![12],
+                    signed_tx_bytes: encode_legacy_tx(Some([4u8; 20]), &[0xdd]),
                 }
                 .encode(),
             ];

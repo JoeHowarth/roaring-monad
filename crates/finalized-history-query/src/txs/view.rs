@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use alloy_rlp::{Header, PayloadView};
 use bytes::Bytes;
 
@@ -18,18 +16,19 @@ const EIP4844_TYPE: u8 = 0x03;
 const TX_HASH_FIELD_ENCODED_LEN: u32 = 1 + 32;
 const SENDER_FIELD_ENCODED_LEN: u32 = 1 + 20;
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct TxRef {
     block_num: u64,
     block_hash: Hash32,
     tx_idx: u32,
     envelope_bytes: Bytes,
     offsets: TxRefOffsets,
-    signed_tx_offsets: Cell<Option<SignedTxOffsets>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TxRefOffsets {
     payload_start: u32,
+    signed_tx: SignedTxOffsets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +59,6 @@ impl TxRef {
             tx_idx,
             envelope_bytes,
             offsets,
-            signed_tx_offsets: Cell::new(None),
         })
     }
 
@@ -99,8 +97,10 @@ impl TxRef {
 
     pub fn to_addr(&self) -> Result<Option<Address20>> {
         let signed_tx_bytes = self.signed_tx_bytes()?;
-        let offsets = self.signed_tx_offsets(signed_tx_bytes)?;
-        decode_optional_address(field_at(signed_tx_bytes, offsets.to_field_start as usize)?)
+        decode_optional_address(field_at(
+            signed_tx_bytes,
+            self.offsets.signed_tx.to_field_start as usize,
+        )?)
     }
 
     pub fn selector(&self) -> Result<Option<Selector4>> {
@@ -113,20 +113,10 @@ impl TxRef {
 
     pub fn input(&self) -> Result<&[u8]> {
         let signed_tx_bytes = self.signed_tx_bytes()?;
-        let offsets = self.signed_tx_offsets(signed_tx_bytes)?;
         decode_payload_bytes(field_at(
             signed_tx_bytes,
-            offsets.input_field_start as usize,
+            self.offsets.signed_tx.input_field_start as usize,
         )?)
-    }
-
-    fn signed_tx_offsets(&self, signed_tx_bytes: &[u8]) -> Result<SignedTxOffsets> {
-        if let Some(offsets) = self.signed_tx_offsets.get() {
-            return Ok(offsets);
-        }
-        let offsets = parse_signed_tx_offsets(signed_tx_bytes)?;
-        self.signed_tx_offsets.set(Some(offsets));
-        Ok(offsets)
     }
 }
 
@@ -139,31 +129,6 @@ impl std::fmt::Debug for TxRef {
     }
 }
 
-impl Clone for TxRef {
-    fn clone(&self) -> Self {
-        Self {
-            block_num: self.block_num,
-            block_hash: self.block_hash,
-            tx_idx: self.tx_idx,
-            envelope_bytes: self.envelope_bytes.clone(),
-            offsets: self.offsets,
-            signed_tx_offsets: Cell::new(self.signed_tx_offsets.get()),
-        }
-    }
-}
-
-impl PartialEq for TxRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.block_num == other.block_num
-            && self.block_hash == other.block_hash
-            && self.tx_idx == other.tx_idx
-            && self.envelope_bytes == other.envelope_bytes
-            && self.offsets == other.offsets
-    }
-}
-
-impl Eq for TxRef {}
-
 fn parse_tx_ref_offsets(envelope_bytes: &[u8]) -> Result<TxRefOffsets> {
     let payload_start = tx_envelope_payload_start(envelope_bytes)?;
     decode_fixed_hash(envelope_bytes, payload_start)?;
@@ -171,14 +136,16 @@ fn parse_tx_ref_offsets(envelope_bytes: &[u8]) -> Result<TxRefOffsets> {
         envelope_bytes,
         sender_field_start_from_payload_start(payload_start)?,
     )?;
-    decode_payload_bytes(field_at(
+    let signed_tx_bytes = decode_payload_bytes(field_at(
         envelope_bytes,
         signed_tx_field_start_from_payload_start(payload_start)?,
     )?)?;
+    let signed_tx = parse_signed_tx_offsets(signed_tx_bytes)?;
     Ok(TxRefOffsets {
         payload_start: payload_start
             .try_into()
             .map_err(|_| Error::Decode("tx payload start overflow"))?,
+        signed_tx,
     })
 }
 
@@ -616,19 +583,26 @@ mod tests {
         tx
     }
 
+    fn valid_signed_tx_bytes() -> Vec<u8> {
+        encode_legacy_tx(Some([9u8; 20]), &[0xaa, 0xbb, 0xcc, 0xdd, 1])
+    }
+
     #[test]
     fn tx_ref_decodes_outer_fields_without_envelope_view() {
         let envelope = StoredTxEnvelope {
             tx_hash: [1u8; 32],
             sender: [2u8; 20],
-            signed_tx_bytes: vec![3, 4, 5],
+            signed_tx_bytes: valid_signed_tx_bytes(),
         };
         let encoded = envelope.encode();
         let tx = TxRef::new(7, [9u8; 32], 4, encoded).expect("tx");
 
         assert_eq!(tx.tx_hash().expect("tx_hash"), &[1u8; 32]);
         assert_eq!(tx.sender().expect("sender"), &[2u8; 20]);
-        assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[3, 4, 5]);
+        assert_eq!(
+            tx.signed_tx_bytes().expect("signed bytes"),
+            valid_signed_tx_bytes()
+        );
     }
 
     #[test]
@@ -636,7 +610,7 @@ mod tests {
         let envelope = StoredTxEnvelope {
             tx_hash: [1u8; 32],
             sender: [2u8; 20],
-            signed_tx_bytes: vec![3, 4, 5],
+            signed_tx_bytes: valid_signed_tx_bytes(),
         };
         let tx = TxRef::new(7, [9u8; 32], 4, envelope.encode()).expect("tx");
 
@@ -645,7 +619,10 @@ mod tests {
         assert_eq!(tx.tx_idx(), 4);
         assert_eq!(tx.tx_hash().expect("tx_hash"), &[1u8; 32]);
         assert_eq!(tx.sender().expect("sender"), &[2u8; 20]);
-        assert_eq!(tx.signed_tx_bytes().expect("signed bytes"), &[3, 4, 5]);
+        assert_eq!(
+            tx.signed_tx_bytes().expect("signed bytes"),
+            valid_signed_tx_bytes()
+        );
     }
 
     #[test]
