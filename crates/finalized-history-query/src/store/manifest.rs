@@ -14,11 +14,12 @@ use crate::traces::table_specs::{
     TraceOpenBitmapPageSpec,
 };
 use crate::txs::table_specs::{
-    BlockTxBlobSpec, BlockTxHeaderSpec, TxDirBucketSpec, TxDirByBlockSpec, TxDirSubBucketSpec,
-    TxHashIndexSpec,
+    BlockTxBlobSpec, BlockTxHeaderSpec, TxBitmapByBlockSpec, TxBitmapPageBlobSpec,
+    TxBitmapPageMetaSpec, TxDirBucketSpec, TxDirByBlockSpec, TxDirSubBucketSpec, TxHashIndexSpec,
+    TxOpenBitmapPageSpec,
 };
 
-pub const RUNTIME_POINT_TABLES: [TableId; 14] = [
+pub const RUNTIME_POINT_TABLES: [TableId; 15] = [
     BlockRecordSpec::TABLE,
     BlockLogHeaderSpec::TABLE,
     BlockHashIndexSpec::TABLE,
@@ -29,13 +30,14 @@ pub const RUNTIME_POINT_TABLES: [TableId; 14] = [
     TxHashIndexSpec::TABLE,
     TxDirBucketSpec::TABLE,
     TxDirSubBucketSpec::TABLE,
+    TxBitmapPageMetaSpec::TABLE,
     BlockTraceHeaderSpec::TABLE,
     TraceDirBucketSpec::TABLE,
     TraceDirSubBucketSpec::TABLE,
     TraceBitmapPageMetaSpec::TABLE,
 ];
 
-pub const REQUIRED_POINT_TABLES: [TableId; 15] = [
+pub const REQUIRED_POINT_TABLES: [TableId; 16] = [
     PUBLICATION_STATE_TABLE,
     RUNTIME_POINT_TABLES[0],
     RUNTIME_POINT_TABLES[1],
@@ -51,19 +53,22 @@ pub const REQUIRED_POINT_TABLES: [TableId; 15] = [
     RUNTIME_POINT_TABLES[11],
     RUNTIME_POINT_TABLES[12],
     RUNTIME_POINT_TABLES[13],
+    RUNTIME_POINT_TABLES[14],
 ];
 
-pub const RUNTIME_SCANNABLE_TABLES: [ScannableTableId; 7] = [
+pub const RUNTIME_SCANNABLE_TABLES: [ScannableTableId; 9] = [
     LogDirByBlockSpec::TABLE,
     BitmapByBlockSpec::TABLE,
     OpenBitmapPageSpec::TABLE,
     TxDirByBlockSpec::TABLE,
+    TxBitmapByBlockSpec::TABLE,
+    TxOpenBitmapPageSpec::TABLE,
     TraceDirByBlockSpec::TABLE,
     TraceBitmapByBlockSpec::TABLE,
     TraceOpenBitmapPageSpec::TABLE,
 ];
 
-pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 7] = [
+pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 9] = [
     RUNTIME_SCANNABLE_TABLES[0],
     RUNTIME_SCANNABLE_TABLES[1],
     RUNTIME_SCANNABLE_TABLES[2],
@@ -71,22 +76,26 @@ pub const REQUIRED_SCANNABLE_TABLES: [ScannableTableId; 7] = [
     RUNTIME_SCANNABLE_TABLES[4],
     RUNTIME_SCANNABLE_TABLES[5],
     RUNTIME_SCANNABLE_TABLES[6],
+    RUNTIME_SCANNABLE_TABLES[7],
+    RUNTIME_SCANNABLE_TABLES[8],
 ];
 
-pub const RUNTIME_BLOB_TABLES: [BlobTableId; 5] = [
+pub const RUNTIME_BLOB_TABLES: [BlobTableId; 6] = [
     BlockLogBlobSpec::TABLE,
     BitmapPageBlobSpec::TABLE,
     BlockTxBlobSpec::TABLE,
+    TxBitmapPageBlobSpec::TABLE,
     BlockTraceBlobSpec::TABLE,
     TraceBitmapPageBlobSpec::TABLE,
 ];
 
-pub const REQUIRED_BLOB_TABLES: [BlobTableId; 5] = [
+pub const REQUIRED_BLOB_TABLES: [BlobTableId; 6] = [
     RUNTIME_BLOB_TABLES[0],
     RUNTIME_BLOB_TABLES[1],
     RUNTIME_BLOB_TABLES[2],
     RUNTIME_BLOB_TABLES[3],
     RUNTIME_BLOB_TABLES[4],
+    RUNTIME_BLOB_TABLES[5],
 ];
 
 #[cfg(test)]

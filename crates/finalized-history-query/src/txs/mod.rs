@@ -13,3 +13,5 @@ pub use filter::TxFilter;
 pub(crate) use query::TxsQueryEngine;
 pub use types::{IngestTx, TxFamilyState};
 pub use view::TxRef;
+
+pub(crate) const TX_STREAM_PAGE_LOCAL_ID_SPAN: u32 = 4_096;

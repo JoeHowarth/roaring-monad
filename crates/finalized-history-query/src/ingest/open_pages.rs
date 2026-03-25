@@ -9,6 +9,7 @@ use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::tables::{OpenBitmapPageTable, Tables};
 use crate::traces::TRACE_STREAM_PAGE_LOCAL_ID_SPAN;
+use crate::txs::TX_STREAM_PAGE_LOCAL_ID_SPAN;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OpenBitmapPage {
@@ -155,6 +156,7 @@ pub async fn collect_all_sealed_open_bitmap_pages<M: MetaStore>(
 pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
     tables: &Tables<M, B>,
     next_log_id: u64,
+    next_tx_id: u64,
     next_trace_id: u64,
 ) -> Result<()> {
     for page in collect_all_sealed_open_bitmap_pages(
@@ -176,6 +178,27 @@ pub async fn repair_sealed_open_bitmap_pages<M: MetaStore, B: BlobStore>(
         )
         .await?;
         tables.log_open_bitmap_pages.delete(&page).await?;
+    }
+
+    for page in collect_all_sealed_open_bitmap_pages(
+        &tables.tx_open_bitmap_pages,
+        next_tx_id,
+        TX_STREAM_PAGE_LOCAL_ID_SPAN,
+    )
+    .await?
+    {
+        let _ = bitmap_pages::compact_stream_page(
+            &tables.tx_streams,
+            &page.stream_id,
+            page.page_start_local,
+            |count, min_local, max_local| crate::txs::types::StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
+        )
+        .await?;
+        tables.tx_open_bitmap_pages.delete(&page).await?;
     }
 
     for page in collect_all_sealed_open_bitmap_pages(

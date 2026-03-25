@@ -19,6 +19,7 @@ pub async fn preflight_recovery<M: MetaStore, B: BlobStore>(
             repair_sealed_open_bitmap_pages(
                 tables,
                 family_states.logs.next_log_id.get(),
+                family_states.txs.next_tx_id.get(),
                 family_states.traces.next_trace_id.get(),
             )
             .await?
@@ -27,6 +28,7 @@ pub async fn preflight_recovery<M: MetaStore, B: BlobStore>(
             repair_sealed_open_bitmap_pages(
                 tables,
                 family_states.logs.next_log_id.get(),
+                family_states.txs.next_tx_id.get(),
                 family_states.traces.next_trace_id.get(),
             )
             .await?

@@ -3,10 +3,7 @@ use crate::core::ids::LogId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
-use crate::ingest::bitmap_pages;
-use crate::ingest::open_pages::{OpenBitmapPage, collect_newly_sealed_open_bitmap_pages};
-use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
-use crate::kernel::sharded_streams::parse_stream_shard;
+use crate::ingest::indexed_family::finalize_indexed_family_ingest;
 use crate::logs::STREAM_PAGE_LOCAL_ID_SPAN;
 use crate::logs::ingest::{persist_log_artifacts, persist_stream_fragments};
 use crate::logs::types::{LogSequencingState, StreamBitmapMeta};
@@ -45,7 +42,6 @@ impl LogsFamily {
         block: &FinalizedBlock,
     ) -> Result<usize> {
         let from_next_log_id = state.next_log_id.get();
-        let mut opened_during = Vec::<OpenBitmapPage>::new();
 
         persist_log_artifacts(
             config,
@@ -56,67 +52,24 @@ impl LogsFamily {
         )
         .await?;
 
-        runtime
-            .tables
-            .log_dir
-            .persist_block_fragment(block.block_num, from_next_log_id, block.logs.len() as u32)
-            .await?;
-
         let touched_pages =
             persist_stream_fragments(&runtime.tables, block, from_next_log_id).await?;
-        opened_during.extend(
-            touched_pages
-                .into_iter()
-                .filter_map(|(stream_id, page_start)| {
-                    parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
-                        shard,
-                        page_start_local: page_start,
-                        stream_id,
-                    })
-                }),
-        );
-
-        let next_log_id = from_next_log_id.saturating_add(block.logs.len() as u64);
-        for page in opened_during
-            .iter()
-            .filter(|page| !page.is_sealed_at(next_log_id, STREAM_PAGE_LOCAL_ID_SPAN))
-        {
-            runtime
-                .tables
-                .log_open_bitmap_pages
-                .mark_if_absent(page)
-                .await?;
-        }
-
-        compact_newly_sealed_primary_directory(
+        let next_log_id = finalize_indexed_family_ingest(
             &runtime.tables.log_dir,
+            &runtime.tables.log_streams,
+            &runtime.tables.log_open_bitmap_pages,
+            block.block_num,
             from_next_log_id,
-            next_log_id,
+            block.logs.len() as u32,
+            touched_pages,
+            STREAM_PAGE_LOCAL_ID_SPAN,
+            |count, min_local, max_local| StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
         )
         .await?;
-
-        for page in collect_newly_sealed_open_bitmap_pages(
-            &runtime.tables.log_open_bitmap_pages,
-            &opened_during,
-            from_next_log_id,
-            next_log_id,
-            STREAM_PAGE_LOCAL_ID_SPAN,
-        )
-        .await?
-        {
-            let _ = bitmap_pages::compact_stream_page(
-                &runtime.tables.log_streams,
-                &page.stream_id,
-                page.page_start_local,
-                |count, min_local, max_local| StreamBitmapMeta {
-                    count,
-                    min_local,
-                    max_local,
-                },
-            )
-            .await?;
-            runtime.tables.log_open_bitmap_pages.delete(&page).await?;
-        }
 
         state.next_log_id = LogId::new(next_log_id);
         Ok(block.logs.len())

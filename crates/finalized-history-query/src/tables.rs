@@ -28,8 +28,9 @@ use crate::traces::table_specs::{
 };
 use crate::traces::types::BlockTraceHeader;
 use crate::txs::table_specs::{
-    BlockTxBlobSpec, BlockTxHeaderSpec, TxDirBucketSpec, TxDirByBlockSpec, TxDirSubBucketSpec,
-    TxHashIndexSpec,
+    BlockTxBlobSpec, BlockTxHeaderSpec, TxBitmapByBlockSpec, TxBitmapPageBlobSpec,
+    TxBitmapPageMetaSpec, TxDirBucketSpec, TxDirByBlockSpec, TxDirSubBucketSpec, TxHashIndexSpec,
+    TxOpenBitmapPageSpec,
 };
 use crate::txs::types::{BlockTxHeader, TxLocation};
 use crate::txs::view::TxRef;
@@ -99,11 +100,13 @@ pub struct Tables<M: MetaStore, B: BlobStore> {
     pub tx_dir: PrimaryDirTables<M>,
     pub trace_dir: PrimaryDirTables<M>,
     pub log_streams: StreamTables<M, B, StreamBitmapMeta>,
+    pub tx_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub trace_streams: StreamTables<M, B, StreamBitmapMeta>,
     pub point_log_payloads: PointLogPayloadTable<M, B>,
     pub block_tx_blobs: BlockTxBlobTable<M, B>,
     pub block_trace_blobs: BlockTraceBlobTable<M, B>,
     pub log_open_bitmap_pages: OpenBitmapPageTable<M>,
+    pub tx_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub trace_open_bitmap_pages: OpenBitmapPageTable<M>,
     pub trace_payloads: TracePayloadTable<M, B>,
 }
@@ -194,6 +197,23 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                     BitmapPageBlobSpec::key,
                 ),
             },
+            tx_streams: StreamTables {
+                fragments: StreamFragmentsTable::new(
+                    meta_store.scannable_table(TxBitmapByBlockSpec::TABLE),
+                    TxBitmapByBlockSpec::partition,
+                    TxBitmapByBlockSpec::clustering,
+                ),
+                page_meta: StreamPageMetaTable::new(
+                    meta_store.table(TxBitmapPageMetaSpec::TABLE),
+                    no_cache(),
+                    TxBitmapPageMetaSpec::key,
+                ),
+                page_blobs: StreamPageBlobTable::new(
+                    blob_store.table(TxBitmapPageBlobSpec::TABLE),
+                    no_cache(),
+                    TxBitmapPageBlobSpec::key,
+                ),
+            },
             trace_streams: StreamTables {
                 fragments: StreamFragmentsTable::new(
                     meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
@@ -227,6 +247,9 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             },
             log_open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store.scannable_table(crate::logs::table_specs::OpenBitmapPageSpec::TABLE),
+            ),
+            tx_open_bitmap_pages: OpenBitmapPageTable::new(
+                meta_store.scannable_table(TxOpenBitmapPageSpec::TABLE),
             ),
             trace_open_bitmap_pages: OpenBitmapPageTable::new(
                 meta_store

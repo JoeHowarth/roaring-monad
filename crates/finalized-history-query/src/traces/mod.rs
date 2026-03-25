@@ -12,10 +12,7 @@ use crate::core::ids::TraceId;
 use crate::core::state::BlockRecord;
 use crate::error::{Error, Result};
 use crate::family::FinalizedBlock;
-use crate::ingest::bitmap_pages;
-use crate::ingest::open_pages::{OpenBitmapPage, collect_newly_sealed_open_bitmap_pages};
-use crate::ingest::primary_dir::compact_newly_sealed_primary_directory;
-use crate::kernel::sharded_streams::parse_stream_shard;
+use crate::ingest::indexed_family::finalize_indexed_family_ingest;
 use crate::runtime::Runtime;
 use crate::store::traits::{BlobStore, MetaStore};
 use crate::traces::ingest::{
@@ -67,74 +64,28 @@ impl TracesFamily {
         let trace_count_u32 =
             u32::try_from(trace_count).map_err(|_| Error::Decode("trace count overflow"))?;
 
-        runtime
-            .tables
-            .trace_dir
-            .persist_block_fragment(block.block_num, from_next_trace_id, trace_count_u32)
-            .await?;
-
-        let next_trace_id = from_next_trace_id + trace_count as u64;
-
         let touched_pages = persist_trace_stream_fragments(
             &runtime.tables,
             block.block_num,
             &ingest_plan.grouped_stream_values,
         )
         .await?;
-
-        let mut opened_during = Vec::<OpenBitmapPage>::new();
-        opened_during.extend(
-            touched_pages
-                .into_iter()
-                .filter_map(|(stream_id, page_start)| {
-                    parse_stream_shard(&stream_id).map(|shard| OpenBitmapPage {
-                        shard,
-                        page_start_local: page_start,
-                        stream_id,
-                    })
-                }),
-        );
-
-        for page in opened_during
-            .iter()
-            .filter(|page| !page.is_sealed_at(next_trace_id, TRACE_STREAM_PAGE_LOCAL_ID_SPAN))
-        {
-            runtime
-                .tables
-                .trace_open_bitmap_pages
-                .mark_if_absent(page)
-                .await?;
-        }
-
-        compact_newly_sealed_primary_directory(
+        let next_trace_id = finalize_indexed_family_ingest(
             &runtime.tables.trace_dir,
+            &runtime.tables.trace_streams,
+            &runtime.tables.trace_open_bitmap_pages,
+            block.block_num,
             from_next_trace_id,
-            next_trace_id,
+            trace_count_u32,
+            touched_pages,
+            TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
+            |count, min_local, max_local| StreamBitmapMeta {
+                count,
+                min_local,
+                max_local,
+            },
         )
         .await?;
-
-        for page in collect_newly_sealed_open_bitmap_pages(
-            &runtime.tables.trace_open_bitmap_pages,
-            &opened_during,
-            from_next_trace_id,
-            next_trace_id,
-            TRACE_STREAM_PAGE_LOCAL_ID_SPAN,
-        )
-        .await?
-        {
-            let _ = bitmap_pages::compact_stream_page(
-                &runtime.tables.trace_streams,
-                &page.stream_id,
-                page.page_start_local,
-                |count, min_local, max_local| StreamBitmapMeta {
-                    count,
-                    min_local,
-                    max_local,
-                },
-            )
-            .await?;
-            runtime.tables.trace_open_bitmap_pages.delete(&page).await?;
-        }
 
         state.next_trace_id = TraceId::new(next_trace_id);
         Ok(trace_count)
