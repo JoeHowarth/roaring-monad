@@ -27,6 +27,12 @@ pub struct BytesCacheConfig {
     pub block_trace_blobs: TableCacheConfig,
     pub log_bitmap_page_meta: TableCacheConfig,
     pub log_bitmap_page_blobs: TableCacheConfig,
+    pub log_bitmap_fragments: TableCacheConfig,
+    pub tx_bitmap_fragments: TableCacheConfig,
+    pub trace_bitmap_fragments: TableCacheConfig,
+    pub log_dir_fragments: TableCacheConfig,
+    pub tx_dir_fragments: TableCacheConfig,
+    pub trace_dir_fragments: TableCacheConfig,
 }
 
 impl BytesCacheConfig {
@@ -41,6 +47,12 @@ impl BytesCacheConfig {
             block_trace_blobs: TableCacheConfig::disabled(),
             log_bitmap_page_meta: TableCacheConfig::disabled(),
             log_bitmap_page_blobs: TableCacheConfig::disabled(),
+            log_bitmap_fragments: TableCacheConfig::disabled(),
+            tx_bitmap_fragments: TableCacheConfig::disabled(),
+            trace_bitmap_fragments: TableCacheConfig::disabled(),
+            log_dir_fragments: TableCacheConfig::disabled(),
+            tx_dir_fragments: TableCacheConfig::disabled(),
+            trace_dir_fragments: TableCacheConfig::disabled(),
         }
     }
 }
@@ -71,6 +83,12 @@ pub struct BytesCacheMetrics {
     pub block_trace_blobs: TableCacheMetrics,
     pub log_bitmap_page_meta: TableCacheMetrics,
     pub log_bitmap_page_blobs: TableCacheMetrics,
+    pub log_bitmap_fragments: TableCacheMetrics,
+    pub tx_bitmap_fragments: TableCacheMetrics,
+    pub trace_bitmap_fragments: TableCacheMetrics,
+    pub log_dir_fragments: TableCacheMetrics,
+    pub tx_dir_fragments: TableCacheMetrics,
+    pub trace_dir_fragments: TableCacheMetrics,
 }
 
 #[derive(Clone, Debug)]

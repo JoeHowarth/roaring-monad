@@ -48,6 +48,12 @@ See [caching.md](caching.md) for cache design details.
 - `block_trace_blobs`
 - `log_bitmap_page_meta`
 - `log_bitmap_page_blobs`
+- `log_bitmap_fragments`
+- `tx_bitmap_fragments`
+- `trace_bitmap_fragments`
+- `log_dir_fragments`
+- `tx_dir_fragments`
+- `trace_dir_fragments`
 
 ## Stream Config
 

@@ -157,6 +157,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(LogDirByBlockSpec::TABLE),
+                    cache_for(config.log_dir_fragments.max_bytes),
                 ),
             },
             tx_dir: PrimaryDirTables {
@@ -170,6 +171,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(TxDirByBlockSpec::TABLE),
+                    cache_for(config.tx_dir_fragments.max_bytes),
                 ),
             },
             trace_dir: PrimaryDirTables {
@@ -183,11 +185,13 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
                 ),
                 fragments: PrimaryDirFragmentTable::new(
                     meta_store.scannable_table(TraceDirByBlockSpec::TABLE),
+                    cache_for(config.trace_dir_fragments.max_bytes),
                 ),
             },
             log_streams: StreamTables {
                 fragments: StreamFragmentsTable::new(
                     meta_store.scannable_table(LogBitmapByBlockSpec::TABLE),
+                    cache_for(config.log_bitmap_fragments.max_bytes),
                     LogBitmapByBlockSpec::partition,
                     LogBitmapByBlockSpec::clustering,
                 ),
@@ -205,6 +209,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             tx_streams: StreamTables {
                 fragments: StreamFragmentsTable::new(
                     meta_store.scannable_table(TxBitmapByBlockSpec::TABLE),
+                    cache_for(config.tx_bitmap_fragments.max_bytes),
                     TxBitmapByBlockSpec::partition,
                     TxBitmapByBlockSpec::clustering,
                 ),
@@ -222,6 +227,7 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             trace_streams: StreamTables {
                 fragments: StreamFragmentsTable::new(
                     meta_store.scannable_table(TraceBitmapByBlockSpec::TABLE),
+                    cache_for(config.trace_bitmap_fragments.max_bytes),
                     TraceBitmapByBlockSpec::partition,
                     TraceBitmapByBlockSpec::clustering,
                 ),
@@ -280,6 +286,12 @@ impl<M: MetaStore, B: BlobStore> Tables<M, B> {
             block_trace_blobs: self.block_trace_blobs.cache.metrics_snapshot(),
             log_bitmap_page_meta: self.log_streams.page_meta.metrics(),
             log_bitmap_page_blobs: self.log_streams.page_blobs.metrics(),
+            log_bitmap_fragments: self.log_streams.fragments.metrics(),
+            tx_bitmap_fragments: self.tx_streams.fragments.metrics(),
+            trace_bitmap_fragments: self.trace_streams.fragments.metrics(),
+            log_dir_fragments: self.log_dir.fragments.metrics(),
+            tx_dir_fragments: self.tx_dir.fragments.metrics(),
+            trace_dir_fragments: self.trace_dir.fragments.metrics(),
         }
     }
 }
@@ -503,9 +515,9 @@ pub struct PrimaryDirFragmentTable<M: MetaStore> {
 }
 
 impl<M: MetaStore> PrimaryDirFragmentTable<M> {
-    fn new(table: ScannableKvTable<M>) -> Self {
+    fn new(table: ScannableKvTable<M>, cache: HashMapTableBytesCache) -> Self {
         Self {
-            inner: ScannableFragmentTable::new(table),
+            inner: ScannableFragmentTable::new(table, cache),
         }
     }
 
@@ -534,6 +546,10 @@ impl<M: MetaStore> PrimaryDirFragmentTable<M> {
             .put_value(&u64_key(sub_bucket_start), &clustering, fragment.encode())
             .await
     }
+
+    fn metrics(&self) -> TableCacheMetrics {
+        self.inner.metrics()
+    }
 }
 
 pub struct StreamFragmentsTable<M: MetaStore> {
@@ -545,11 +561,12 @@ pub struct StreamFragmentsTable<M: MetaStore> {
 impl<M: MetaStore> StreamFragmentsTable<M> {
     fn new(
         table: ScannableKvTable<M>,
+        cache: HashMapTableBytesCache,
         partition: fn(&str, u32) -> Vec<u8>,
         clustering: fn(u64) -> Vec<u8>,
     ) -> Self {
         Self {
-            inner: ScannableFragmentTable::new(table),
+            inner: ScannableFragmentTable::new(table, cache),
             partition,
             clustering,
         }
@@ -571,6 +588,10 @@ impl<M: MetaStore> StreamFragmentsTable<M> {
         let partition = (self.partition)(stream, page_start);
         let clustering = (self.clustering)(block_num);
         self.inner.put_value(&partition, &clustering, bytes).await
+    }
+
+    fn metrics(&self) -> TableCacheMetrics {
+        self.inner.metrics()
     }
 }
 

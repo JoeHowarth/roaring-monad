@@ -54,6 +54,12 @@ Each typed table has an independent byte budget configured via `BytesCacheConfig
 | `BlockTraceBlobs`        | Per-trace frame byte slices derived from `block_trace_blob` blob-table range reads keyed by `<block_num>` |
 | `BitmapPageMeta`         | `log_bitmap_page_meta` table, key `<stream_id>/<page_start>` |
 | `BitmapPageBlobs`        | `log_bitmap_page_blob` blob table, key `<stream_id>/<page_start>` |
+| `LogBitmapFragments`     | `log_bitmap_by_block` scannable table, per-partition+clustering point reads |
+| `TxBitmapFragments`      | `tx_bitmap_by_block` scannable table, per-partition+clustering point reads |
+| `TraceBitmapFragments`   | `trace_bitmap_by_block` scannable table, per-partition+clustering point reads |
+| `LogDirFragments`        | `log_dir_by_block` scannable table, per-partition+clustering point reads |
+| `TxDirFragments`         | `tx_dir_by_block` scannable table, per-partition+clustering point reads |
+| `TraceDirFragments`      | `trace_dir_by_block` scannable table, per-partition+clustering point reads |
 
 
 A `max_bytes = 0` budget disables that table's cache entirely. The typed table reader still works, but it reads directly from the backing store with no cache lookup/insert overhead. See [storage-model.md](storage-model.md) for the artifact key layout.
@@ -78,6 +84,10 @@ The public query boundary is also zero-copy for indexed families:
 ### `publication_state`
 
 Mutable, correctness-critical, tiny. Not part of the immutable artifact cache. Loaded directly on each query to determine the visible finalized head.
+
+### Scannable fragment tables
+
+Scannable tables (`*_bitmap_by_block`, `*_dir_by_block`) use a composite cache key of `[4-byte partition length (LE)][partition][clustering]` so that cache lookups are unambiguous across partitions. The `list_prefix` call still hits the store (returns just keys, lightweight); only the per-key `get` calls inside `load_partition_values` benefit from the cache. Writes via `put_value` are write-through: the store write happens first, then the cache is populated.
 
 ### `log_open_bitmap_page`
 
