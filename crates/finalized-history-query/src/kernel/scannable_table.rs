@@ -46,12 +46,13 @@ impl<M: MetaStore> ScannableFragmentTable<M> {
     }
 
     pub async fn put_value(&self, partition: &[u8], clustering: &[u8], value: Bytes) -> Result<()> {
+        let cache_key = composite_cache_key(partition, clustering);
+        let len = value.len();
         let _ = self
             .table
             .put(partition, clustering, value.clone(), PutCond::Any)
             .await?;
-        let cache_key = composite_cache_key(partition, clustering);
-        self.cache.put(&cache_key, value.clone(), value.len());
+        self.cache.put(&cache_key, value, len);
         Ok(())
     }
 
